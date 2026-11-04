@@ -7,6 +7,8 @@
 
 #if defined(__3DS__)
 #include <3ds.h>
+#elif defined(__vita__)
+#include <psp2/kernel/rng.h>
 #elif defined(_WIN32)
 #include <windows.h>
 #include <bcrypt.h>
@@ -308,6 +310,15 @@ bool randomBytes(uint8_t* out, size_t n) {
     static bool inited = false;
     if (!inited) inited = R_SUCCEEDED(psInit());
     return inited && R_SUCCEEDED(PS_GenerateRandomBytes(out, n));
+#elif defined(__vita__)
+    // The kernel RNG hands out at most 64 bytes per call.
+    while (n > 0) {
+        size_t k = n < 64 ? n : 64;
+        if (sceKernelGetRandomNumber(out, (SceSize)k) < 0) return false;
+        out += k;
+        n -= k;
+    }
+    return true;
 #elif defined(_WIN32)
     return BCryptGenRandom(nullptr, out, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) == 0;
 #else

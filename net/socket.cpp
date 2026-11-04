@@ -29,6 +29,15 @@ static int lastErr() { return errno; }
 #if defined(__3DS__)
 #include <3ds.h>
 #include <malloc.h>
+#elif defined(__vita__)
+// PS Vita (VitaSDK): newlib maps the BSD socket calls onto SceNet and initialises SceNet / SceNetCtl itself on the
+// first socket call (_vita_net_init). We only make sure the NET system module is loaded and ask NetCtl whether the
+// Wi-Fi is actually connected, so a missing connection gives a clear error instead of a resolver failure.
+#include <psp2/kernel/processmgr.h>
+#include <psp2/kernel/threadmgr.h>
+#include <psp2/net/net.h>
+#include <psp2/net/netctl.h>
+#include <psp2/sysmodule.h>
 #endif
 
 namespace w3n {
@@ -69,6 +78,15 @@ bool netInit() {
         }
         g_ndmSuspended = R_SUCCEEDED(NDMU_SuspendDaemons(NDM_DAEMON_MASK_ALL));
     }
+#elif defined(__vita__)
+    if (sceSysmoduleIsLoaded(SCE_SYSMODULE_NET) != SCE_SYSMODULE_LOADED &&
+        sceSysmoduleLoadModule(SCE_SYSMODULE_NET) < 0)
+        return false;
+    // A throwaway socket runs newlib's lazy SceNet / SceNetCtl initialisation now rather than inside connect().
+    int probe = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (probe >= 0) ::close(probe);
+    int state = 0;
+    g_netUp = probe >= 0 && sceNetCtlInetGetState(&state) >= 0 && state == SCE_NETCTL_STATE_CONNECTED;
 #else
     g_netUp = true;
 #endif
@@ -132,6 +150,9 @@ bool TcpSocket::connect(const std::string& host, uint16_t port, std::string& err
 #if defined(_WIN32)
     u_long nb = 1;
     ioctlsocket(s, FIONBIO, &nb);
+#elif defined(__vita__)
+    // newlib's fcntl() does not reach SceNet sockets; SO_NONBLOCK maps onto SCE_NET_SO_NBIO.
+    setsockopt(s, SOL_SOCKET, SO_NONBLOCK, (const char*)&one, sizeof one);
 #else
     fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
 #endif
@@ -184,6 +205,8 @@ bool splitHostPort(const std::string& in, uint16_t defPort, std::string& host, u
 uint64_t nowMs() {
 #if defined(__3DS__)
     return osGetTime();
+#elif defined(__vita__)
+    return (uint64_t)sceKernelGetProcessTimeWide() / 1000;   // microseconds since process start
 #elif defined(_WIN32)
     return GetTickCount64();
 #else
@@ -196,6 +219,8 @@ uint64_t nowMs() {
 void sleepMs(int ms) {
 #if defined(__3DS__)
     svcSleepThread((s64)ms * 1000000);
+#elif defined(__vita__)
+    sceKernelDelayThread((SceUInt)ms * 1000);
 #elif defined(_WIN32)
     Sleep(ms);
 #else

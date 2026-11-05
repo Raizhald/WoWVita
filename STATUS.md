@@ -13,6 +13,11 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - Název **WoWVita**, Title ID `WOWV00001` (síťový test `WOWV00002`), výstup `WoWVita.vpk`.
 - Data na Vitě v `ux0:data/wowvita/` (hra si myslí, že je to `sdmc:/3ds/w3dproto/`).
 
+## Ověřeno na PS Vitě (5. 11. 2026, první build z GitHub Actions)
+- VPK se nainstaluje a spustí; login obrazovka v rozvržení „jedna obrazovka“ s náhledem panelu.
+- Offline svět: terén, stromy, obloha; ladicí panel. **59,9 FPS**, CPU 16,7 ms, GPU 3,3 ms (velká rezerva GPU).
+- Zbývá ověřit: páčky, dotyk, zvuk, mlha (na fotce možná chybí), IME, přihlášení na server, paměť.
+
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.
 - Všechna 3 rozvržení obrazovek včetně klepnutí přes rozvržení (`W3D_DTOUCH`).
@@ -25,8 +30,8 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
   vlákna/zámky/paměť; `platform_vita.cpp` (vitaGL, SceCtrl, SceTouch, SceAudioOut, IME) – **zatím nepřeložené VitaSDK**.
 
 ## Plán – z 3DS klienta na čistě Vita klienta
-1. **Přeložit s VitaSDK a spustit na konzoli.** Opravit API odchylky v `platform_vita.cpp`, vyladit heap
-   (`-DW3D_VITA_HEAP_MB`), změřit FPS a paměť.
+1. ✅ **Přeložit s VitaSDK a spustit na konzoli** (GitHub Actions, `.github/workflows/vita.yml`; hotové VPK na větvi
+   `builds`). Dál: ověřit ovládání, zvuk, IME, online přihlášení, paměť.
 2. **Jedna obrazovka.**
    - ✅ Krok 1 (vrstva `platform/layout.cpp`): rozvržení „jedna obrazovka“, výchozí na Vitě – svět 906×544, dotyková
      obrazovka jako náhled v rohu, klepnutí ji otevře jako panel ×1,5 (480×360), klepnutí mimo zavře. Dva prsty

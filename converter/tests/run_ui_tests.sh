@@ -12,9 +12,9 @@ rm -rf "$OUT" && mkdir -p "$OUT/out"
 python3 "$T/gen_ui_data.py" "$OUT/data" "$LATIN"
 "$CONV" --data "$OUT/data" --ui -o "$OUT/out/ui.w3dp" | tail -8
 "$CONV" --info "$OUT/out/ui.w3dp" | tail -2
-g++ -std=c++20 -O1 -g -fsanitize=address,undefined -I"$W/proto3ds/source" -I"$W/proto3ds/tests" -I"$W/common" -I"$W/converter/extern/stb" \
-    -I"$D/rgetc1" "$W/proto3ds/tests/ui_pack_test.cpp" "$W/proto3ds/tests/ui_raster.cpp" "$W/proto3ds/source/hud.cpp" \
-    "$W/proto3ds/source/ui_assets.cpp" "$D/rgetc1/rg_etc1.cpp" -w -o "$OUT/ui_pack_test"
+g++ -std=c++20 -O1 -g -fsanitize=address,undefined -I"$W/game/source" -I"$W/game/tests" -I"$W/common" -I"$W/converter/extern/stb" \
+    -I"$D/rgetc1" "$W/game/tests/ui_pack_test.cpp" "$W/game/tests/ui_raster.cpp" "$W/game/source/hud.cpp" \
+    "$W/game/source/ui_assets.cpp" "$D/rgetc1/rg_etc1.cpp" -w -o "$OUT/ui_pack_test"
 "$OUT/ui_pack_test" "$OUT/out/ui.w3dp" "$OUT/ui_pack.png"
 grep -q "^B" "$OUT/out/talents.txt" && grep -q "^N" "$OUT/out/taxi.txt" && echo "TEXTS (talents.txt, taxi.txt): PASS"
 grep -q "^A	2173	369	-4.000	5.000	6.000	3.500	0.000	0.000	0.000	0.00000$" "$OUT/out/areatriggers.txt" && \

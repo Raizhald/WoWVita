@@ -1,7 +1,7 @@
-# Generates proto3ds/source/ui_font_builtin.h: the 3DS client's own fonts (the stub skin of UI stage 7, used when
+# Generates game/source/ui_font_builtin.h: the 3DS client's own fonts (the stub skin of UI stage 7, used when
 # ui.w3dp has no fonts): DejaVu Sans Bold at 9, 12 and 16 px (Bitstream Vera licence: free to embed), Latin +
 # Cyrillic + the arrows and signs the UI draws, hinted by FreeType (PIL), one 4-bit alpha atlas 256 px wide.
-#   python3 tools/gen_ui_font.py proto3ds/source/ui_font_builtin.h [font.ttf]
+#   python3 tools/gen_ui_font.py game/source/ui_font_builtin.h [font.ttf]
 import sys
 from PIL import Image, ImageDraw, ImageFont
 

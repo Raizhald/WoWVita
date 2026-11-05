@@ -654,7 +654,7 @@ public:
     struct Discovery { uint32_t area = 0, xp = 0, seq = 0; } discovery;
     std::function<std::string(uint32_t)> areaName;
     void sound(const char* e) { if (sounds.size() < 16) sounds.push_back(e); }
-    // Sounds in the world (proto3ds/source/sound_world.cpp turns them into positioned sounds): melee swings,
+    // Sounds in the world (game/source/sound_world.cpp turns them into positioned sounds): melee swings,
     // casts starting / going off (with up to 4 hit targets) / failing.
     struct WorldSound {
         enum Kind : uint8_t { Melee, SpellStart, SpellGo, SpellFail };

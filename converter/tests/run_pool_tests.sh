@@ -8,7 +8,7 @@
 set -e -o pipefail
 B=${1:?build dir}
 T=$(cd "$(dirname "$0")" && pwd)
-P=$T/../../proto3ds/tests
+P=$T/../../game/tests
 OUT=${OUT:-/tmp/w3d_pool}
 rm -rf "$OUT" && mkdir -p "$OUT/single" "$OUT/all" "$OUT/parts" "$OUT/mixed" "$OUT/prev1" "$OUT/prev2"
 python3 "$T/gen_water_data.py" "$OUT/Data" "$OUT/expect.txt"

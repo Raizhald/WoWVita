@@ -20,6 +20,7 @@
 #include <psp2/system_param.h>
 #include <psp2/touch.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -180,12 +181,38 @@ volatile bool g_audioRun = false;
 SceUID g_audioThread = -1;
 int g_audioPort = -1;
 
+// A quiet two-note chime mixed in when the sound starts: proves the Vita's audio output works even where the game
+// has nothing to play (no converted sound/ folder: no music, no ambience, UI sounds only online). -DW3D_NO_CHIME drops it.
+#ifndef W3D_NO_CHIME
+void mixChime(s16* out, int frames, long& pos) {
+    const long noteLen = kAudioRate * 18 / 100, total = noteLen * 2;
+    for (int f = 0; f < frames && pos < total; ++f, ++pos) {
+        const bool second = pos >= noteLen;
+        const long t = second ? pos - noteLen : pos;
+        const float hz = second ? 1318.5f : 987.8f;   // B5, E6
+        const float env = (t < 240 ? t / 240.0f : 1.0f) * (1.0f - (float)t / noteLen);
+        const int v = (int)(sinf(6.2831853f * hz * t / kAudioRate) * env * 6000.0f);
+        for (int c = 0; c < 2; ++c) {
+            const int m = out[f * 2 + c] + v;
+            out[f * 2 + c] = (s16)(m > 32767 ? 32767 : m < -32768 ? -32768 : m);
+        }
+    }
+}
+#endif
+
 int audioThread(SceSize args, void* argp) {
     (void)args; (void)argp;
     static s16 buf[2][kAudioGrain * 2];
     int i = 0;
+#ifndef W3D_NO_CHIME
+    long chime = -kAudioRate / 2;   // after half a second of silence
+#endif
     while (g_audioRun) {
         g_render(buf[i], kAudioGrain, kAudioRate);
+#ifndef W3D_NO_CHIME
+        if (chime < 0) chime += kAudioGrain;
+        else mixChime(buf[i], kAudioGrain, chime);
+#endif
         sceAudioOutOutput(g_audioPort, buf[i]);   // blocks until the previous buffer was played
         i ^= 1;
     }

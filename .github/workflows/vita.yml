@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+# one build at a time: a newer push cancels the older run, so the builds branch always gets the newest VPK
+concurrency:
+  group: vita-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   vpk:
     runs-on: ubuntu-latest

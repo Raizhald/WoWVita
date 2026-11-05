@@ -22,10 +22,16 @@ void recompose();         // c3d_gl.cpp: compose the last frame onto the display
 // scene is drawn at the display resolution, not stretched up from 400x240.
 Rect layoutTop();
 Rect layoutBottom();
-// Display position -> touch-screen pixel (0..319, 0..239); false outside the touch screen.
+// Display position -> touch-screen pixel (0..319, 0..239); false outside the touch screen (or its panel is closed).
 bool layoutToTouch(int dx, int dy, int* tx, int* ty);
-int layoutMode();          // 0 = side by side, 1 = big top screen with the touch screen shrunk into a corner
+// A finger on the display this frame (down, at dx, dy) -> a touch-screen touch for the game (true, at tx, ty).
+// Opens / closes the touch-screen panel in mode 2; call once per frame, also with down = false.
+bool layoutTouch(bool down, int dx, int dy, int* tx, int* ty);
+int layoutMode();          // 0 = side by side, 1 = big top screen + small touch screen, 2 = one screen + touch panel
 void layoutSetMode(int mode);
+void layoutNextMode();
+bool layoutPanelOpen();    // the touch screen is shown full size (always, except mode 2 with the panel closed)
+Rect layoutTopMax();       // the largest top-screen rectangle of all modes (the render target's size)
 
 // console.cpp: libctru's text console on the touch screen
 bool consoleShown();

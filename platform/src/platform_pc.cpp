@@ -5,7 +5,8 @@
 //   W3D_SHOTS=a,b,...   write the display (960x544) after these frames to $W3D_SHOT_DIR/frame_<n>.ppm
 //   W3D_INPUT=f:KEYS;.. hold buttons from frame f (KEYS = A+B+DUP..., "-" releases all), e.g. "100:A;104:-"
 //   W3D_TOUCH=f:x,y;..  touch the touch screen at (x,y) from frame f ("f:-" lifts)
-//   W3D_LAYOUT=0|1      screen layout (see layout.cpp)
+//   W3D_DTOUCH=f:x,y;.. touch the 960x544 display at (x,y) from frame f, through layout.cpp like a finger on the Vita
+//   W3D_LAYOUT=0|1|2    screen layout (see layout.cpp)
 #include <3ds.h>
 
 #include <EGL/egl.h>
@@ -32,11 +33,13 @@ long g_frame = 0;
 long g_maxFrames = -1;
 std::vector<long> g_shots;
 
-struct Ev { long frame; u32 keys; bool keysSet; int tx, ty; bool touchSet; bool touch; };
+struct Ev { long frame; u32 keys; bool keysSet; int tx, ty; bool touchSet; bool touch; bool display = false; };
 std::vector<Ev> g_events;
 u32 g_held = 0, g_prevHeld = 0;
 bool g_touch = false;
 int g_tx = 0, g_ty = 0;
+bool g_dTouch = false;   // W3D_DTOUCH: a finger on the display
+int g_dx = 0, g_dy = 0;
 
 u32 keyByName(const std::string& n) {
     static const struct { const char* n; u32 k; } t[] = {
@@ -75,7 +78,9 @@ void parseScripts() {
             g_events.push_back(e);
         }
     }
-    if (const char* s = getenv("W3D_TOUCH")) {
+    for (int pass = 0; pass < 2; ++pass) {
+        const char* s = getenv(pass ? "W3D_DTOUCH" : "W3D_TOUCH");
+        if (!s) continue;
         std::string in(s);
         size_t i = 0;
         while (i < in.size()) {
@@ -84,7 +89,7 @@ void parseScripts() {
             i = j == std::string::npos ? in.size() : j + 1;
             size_t c = item.find(':');
             if (c == std::string::npos) continue;
-            Ev e{atol(item.c_str()), 0, false, 0, 0, true, false};
+            Ev e{atol(item.c_str()), 0, false, 0, 0, true, false, pass == 1};
             std::string v = item.substr(c + 1);
             if (v != "-") {
                 e.touch = true;
@@ -198,8 +203,15 @@ void hidScanInput(void) {
     for (const Ev& e : g_events)
         if (e.frame == g_frame) {
             if (e.keysSet) g_held = e.keys;
-            if (e.touchSet) { g_touch = e.touch; g_tx = e.tx; g_ty = e.ty; }
+            if (e.touchSet && !e.display) { g_touch = e.touch; g_tx = e.tx; g_ty = e.ty; }
+            if (e.touchSet && e.display) { g_dTouch = e.touch; g_dx = e.tx; g_dy = e.ty; }
         }
+    if (getenv("W3D_DTOUCH")) {
+        int tx = 0, ty = 0;
+        g_touch = compat::layoutTouch(g_dTouch, g_dx, g_dy, &tx, &ty);
+        g_tx = tx;
+        g_ty = ty;
+    }
     if (g_touch) g_held |= KEY_TOUCH; else g_held &= ~KEY_TOUCH;
 }
 u32 hidKeysHeld(void) { return g_held; }

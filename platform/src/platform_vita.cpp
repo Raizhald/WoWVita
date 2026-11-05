@@ -5,7 +5,8 @@
 //   Cross / Circle -> A / B (swapped when the system's enter button is Circle, as on Japanese consoles)
 //   Triangle -> X   Square -> Y       rear touch panel, left / right half -> ZL / ZR
 //   front touch on the touch screen's rectangle (layout.cpp) -> the 3DS touch screen
-//   two fingers on the front panel -> switch the screen layout (side by side / big top screen)
+//   two fingers on the front panel -> the next screen layout (layout.cpp: one screen + touch panel, side by side,
+//   big top screen + small touch screen)
 #include <3ds.h>
 
 #include <psp2/apputil.h>
@@ -110,17 +111,15 @@ void readInput() {
     memset(&front, 0, sizeof front);
     sceTouchPeek(SCE_TOUCH_PORT_FRONT, &front, 1);
     const int fingers = (int)front.reportNum;
-    if (fingers >= 2 && g_frontFingers < 2) compat::layoutSetMode(compat::layoutMode() ? 0 : 1);
+    if (fingers >= 2 && g_frontFingers < 2) compat::layoutNextMode();
     g_frontFingers = fingers;
-    g_touch = false;
-    if (fingers == 1) {
-        int tx, ty;
-        if (compat::layoutToTouch(frontX(front.report[0].x), frontY(front.report[0].y), &tx, &ty)) {
-            g_touch = true;
-            g_tx = tx;
-            g_ty = ty;
-            k |= KEY_TOUCH;
-        }
+    int tx = 0, ty = 0;
+    g_touch = compat::layoutTouch(fingers == 1, fingers == 1 ? frontX(front.report[0].x) : 0,
+                                  fingers == 1 ? frontY(front.report[0].y) : 0, &tx, &ty);
+    if (g_touch) {
+        g_tx = tx;
+        g_ty = ty;
+        k |= KEY_TOUCH;
     }
 
     g_prevHeld = g_held;

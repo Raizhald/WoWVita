@@ -1015,6 +1015,15 @@ void compose() {
     // the touch screen: the GPU's target once drawn, the console from consoleInit / consoleClear until then
     Target* bot = g_outputs[GFX_BOTTOM][GFX_LEFT];
     if (bot && bot->drawn) compat::consoleHide();
+    if (compat::layoutMode() != 0) {   // a frame around the touch screen where it lies over the scene
+        const compat::Rect b = compat::layoutBottom();
+        const int H = compat::displayHeight(), f = compat::layoutPanelOpen() ? 3 : 2;
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(b.x - f, H - (b.y + b.h) - f, b.w + 2 * f, b.h + 2 * f);
+        glClearColor(0.55f, 0.42f, 0.16f, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+    }
     if (compat::consoleShown() || !bot) blitConsole(compat::layoutBottom());
     else blit(bot, compat::layoutBottom());
     glDisableVertexAttribArray(0);
@@ -1332,7 +1341,8 @@ C3D_RenderTarget* C3D_RenderTargetCreate(int width, int height, GPU_COLORBUF col
     // A 3DS screen target is made portrait (240 x 400): the GL one is landscape, and the top screen is made at the
     // size it is shown at on the display, so the scene is rendered at the Vita's resolution.
     const int lw = height, lh = width;
-    const compat::Rect r = lw >= 400 ? compat::layoutTop() : compat::layoutBottom();
+    // (the touch screen stays at its own 320x240: its 2D UI gains nothing from more pixels)
+    const compat::Rect r = lw >= 400 ? compat::layoutTopMax() : compat::Rect{0, 0, lw, lh};
     const int w = std::max(lw, r.w), h = std::max(lh, r.h);
     Target* t = newTarget(w, h, true, 0, C3D_DEPTHTYPE_OK(depthFmt));
     t->logicalW = lw;

@@ -15,6 +15,7 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.
+- Všechna 3 rozvržení obrazovek včetně klepnutí přes rozvržení (`W3D_DTOUCH`).
 - Původní testy hry: `run_swim.sh`, `run_slope.sh`, `run_anim.sh` – PASS.
 - Konvertor `w3dconv` se přeloží a `--synthetic` vyrobí stejný balík jako `data/synth.w3dp`.
 
@@ -26,8 +27,12 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 ## Plán – z 3DS klienta na čistě Vita klienta
 1. **Přeložit s VitaSDK a spustit na konzoli.** Opravit API odchylky v `platform_vita.cpp`, vyladit heap
    (`-DW3D_VITA_HEAP_MB`), změřit FPS a paměť.
-2. **Jedna obrazovka.** Hra počítá se dvěma obrazovkami 3DS (svět nahoře, dotykové menu dole). Pro Vitu: svět přes celou
-   obrazovku 960×544, dotykové rozhraní jako překryv / postranní panel. Postupně z `game_ui*.cpp`, `hud*.cpp`, `main.cpp`.
+2. **Jedna obrazovka.**
+   - ✅ Krok 1 (vrstva `platform/layout.cpp`): rozvržení „jedna obrazovka“, výchozí na Vitě – svět 906×544, dotyková
+     obrazovka jako náhled v rohu, klepnutí ji otevře jako panel ×1,5 (480×360), klepnutí mimo zavře. Dva prsty
+     přepínají 3 rozvržení. Cíl horní obrazovky se kreslí vždy v 906×544. Ověřeno na PC (`W3D_LAYOUT=2`, `W3D_DTOUCH`).
+   - Krok 2 (kód hry): HUD a okna z dotykové obrazovky přímo do světa (akční lišta, mapa, chat), aby panel byl potřeba
+     jen pro menu. Postupně z `game_ui*.cpp`, `hud*.cpp`, `main.cpp`.
 3. **Nativní vykreslování.** Teď běží přes emulaci citro3d (TEV kombinéry → shadery, převod textur PICA při nahrání).
    Postupně přepsat `render.cpp` a spol. přímo na vitaGL a vrstvu `platform/` zmenšovat.
 4. **Konvertor `--target vita`.** Textury rovnou ve formátu a uspořádání pro GPU Vity (bez dlaždicového PICA layoutu),

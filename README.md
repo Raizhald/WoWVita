@@ -56,7 +56,7 @@ EGL_PLATFORM=surfaceless W3D_SDMC=run/sdmc W3D_FRAMES=500 W3D_SHOTS=250,500 W3D_
 ```
 
 Script variables: `W3D_FRAMES`, `W3D_SHOTS`, `W3D_INPUT` (`frame:A+B;frame:-`), `W3D_TOUCH` (`frame:x,y`),
-`W3D_LAYOUT` (0/1), `W3D_ECHO=1` (console text to stdout). See `platform/src/platform_pc.cpp`.
+`W3D_LAYOUT` (0 side by side, 1 big world, 2 one screen), `W3D_DTOUCH` (`frame:x,y` on the 960x544 display, through the layout like a finger), `W3D_ECHO=1` (console text to stdout). See `platform/src/platform_pc.cpp`.
 
 ### Converter
 
@@ -83,8 +83,17 @@ Usage is described in [`docs/upstream/README.md`](docs/upstream/README.md).
 | Triangle, Square | X, Y |
 | D-pad, L, R, START, SELECT | the same |
 | rear touch panel, left / right half | ZL / ZR |
-| front touch on the touch-screen rectangle | the touch screen |
-| two fingers on the front panel | switch the layout (side by side / big top screen) |
+| front touch | the touch screen (see *Screen layouts*) |
+| two fingers on the front panel | the next screen layout |
+
+### Screen layouts
+
+The client was made for the 3DS's two screens: the world on the top screen, the touch menus on the bottom one.
+
+- **One screen** (default): the world fills the display (906x544); the touch screen waits as a small preview in the
+  corner. Tap anywhere to open it as a large panel (x1.5), tap inside the panel to use it, tap outside to close it.
+- **Side by side:** the world 640x384 on the left, the touch screen 1:1 on the right, both always visible.
+- **Big world + small touch screen:** the world 906x544 with the touch screen (x0.8) in the corner, tapped directly.
 
 ## Legal
 

@@ -1,0 +1,43 @@
+# Builds WoWVita.vpk (and the network test netcheck.vpk) with the VitaSDK Docker image.
+# The VPKs are attached to the run as the "WoWVita-vpk" artifact (Actions -> the run -> Artifacts).
+name: Vita build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  vpk:
+    runs-on: ubuntu-latest
+    container: vitasdk/vitasdk:latest
+    steps:
+      - name: Tools
+        run: |
+          if command -v apk >/dev/null; then apk add --no-cache git cmake make python3 bash
+          else apt-get update && apt-get install -y git cmake make python3; fi
+      - uses: actions/checkout@v4
+      - name: Vita libraries
+        run: |
+          # the image usually has every vdpm package; install the ones the client links if one is missing
+          for p in vitaGL vitaShaRK mathneon SceShaccCgExt taihen; do
+            ls "$VITASDK"/arm-vita-eabi/lib | grep -qi "$p" || vdpm "$p" || true
+          done
+      - name: WoWVita.vpk
+        run: |
+          cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake --build build-vita -j"$(nproc)" 2>&1 | tee build-vita.log
+          test -f build-vita/WoWVita.vpk
+      - name: netcheck.vpk
+        run: |
+          cmake -S netcheck -B build-net -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake
+          cmake --build build-net -j"$(nproc)"
+          cp build-net/w3dlogin.vpk build-net/netcheck.vpk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: WoWVita-vpk
+          path: |
+            build-vita/WoWVita.vpk
+            build-net/netcheck.vpk
+            build-vita.log
+          if-no-files-found: warn

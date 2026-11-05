@@ -23,9 +23,11 @@ jobs:
             ls "$VITASDK"/arm-vita-eabi/lib | grep -qi "$p" || vdpm "$p" || true
           done
       - name: WoWVita.vpk
+        shell: bash
         run: |
           cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake -DCMAKE_BUILD_TYPE=Release
-          cmake --build build-vita -j"$(nproc)" 2>&1 | tee build-vita.log
+          set -o pipefail
+          cmake --build build-vita -j"$(nproc)" -- -k 2>&1 | tee build-vita.log
           test -f build-vita/WoWVita.vpk
       - name: netcheck.vpk
         run: |

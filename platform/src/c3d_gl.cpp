@@ -705,10 +705,15 @@ GLenum glFactor(GPU_BLENDFACTOR f) {
         case GPU_ONE_MINUS_SRC_ALPHA: return GL_ONE_MINUS_SRC_ALPHA;
         case GPU_DST_ALPHA: return GL_DST_ALPHA;
         case GPU_ONE_MINUS_DST_ALPHA: return GL_ONE_MINUS_DST_ALPHA;
+#if defined(GL_CONSTANT_COLOR)
         case GPU_CONSTANT_COLOR: return GL_CONSTANT_COLOR;
         case GPU_ONE_MINUS_CONSTANT_COLOR: return GL_ONE_MINUS_CONSTANT_COLOR;
         case GPU_CONSTANT_ALPHA: return GL_CONSTANT_ALPHA;
         case GPU_ONE_MINUS_CONSTANT_ALPHA: return GL_ONE_MINUS_CONSTANT_ALPHA;
+#else   // vitaGL: the Vita's GPU has no blend constant (the game never uses one)
+        case GPU_CONSTANT_COLOR: case GPU_CONSTANT_ALPHA: return GL_ONE;
+        case GPU_ONE_MINUS_CONSTANT_COLOR: case GPU_ONE_MINUS_CONSTANT_ALPHA: return GL_ZERO;
+#endif
         case GPU_SRC_ALPHA_SATURATE: return GL_SRC_ALPHA_SATURATE;
     }
     return GL_ONE;
@@ -773,12 +778,14 @@ void applyFragmentOps() {
             glBlendFuncSeparate(b[2], b[3], b[4], b[5]);
             memcpy(G.blend, b, sizeof b);
         }
+#if defined(GL_CONSTANT_COLOR)
         if (G.blendColor != S.blendColor) {
             float c[4];
             colorToVec(S.blendColor, c);
             glBlendColor(c[0], c[1], c[2], c[3]);
             G.blendColor = S.blendColor;
         }
+#endif
     }
 }
 
@@ -1321,7 +1328,7 @@ static Target* newTarget(int w, int h, bool screen, GLuint colorTex, bool depth)
         glGenRenderbuffers(1, &t->depth);
         glBindRenderbuffer(GL_RENDERBUFFER, t->depth);
 #if defined(__vita__)
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8_OES, w, h);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, t->depth);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, GL_RENDERBUFFER, t->depth);
 #else

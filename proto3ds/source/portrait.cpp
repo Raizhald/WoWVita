@@ -102,6 +102,9 @@ void frame(const CreatureInstance* const units[2], const uint64_t guids[2], uint
             return;
         case State::Waiting: {
             if (g_frame - g_calFrame < 3) return;   // C3D_FRAME_SYNCDRAW: the GPU has long finished that frame
+#if defined(W3D_COMPAT)
+            C3D_CompatReadback(&g_slot[0].tex);   // Vita / PC: the pixels live in GL, copy them into tex.data
+#endif
             const bool ok = portraitCalibrate((const uint8_t*)g_slot[0].tex.data, ui::kPortraitSize, ui::kPortraitSize, g_corr);
             if (!ok) {
                 g_state = State::Failed;

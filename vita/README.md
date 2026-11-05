@@ -8,8 +8,26 @@ The port goes in stages. Done so far:
 2. **`vita/w3dlogin/`** — the PC network test client (`net/tools/w3dlogin.cpp`) as a Vita app. It logs into a
    1.12.1 server exactly like the game client will; no graphics yet.
 
-Next: a platform layer for `proto3ds/` (graphics, input, audio, time, locks, memory, threads), the renderer on
-vitaGL, a `--target vita` texture layout in the converter, then input / audio / UI layout.
+3. **`vita/compat/`** — a libctru + citro3d stand-in so `proto3ds/` builds unchanged: citro3d on OpenGL ES 2 (vitaGL
+   on the Vita), PICA shaders translated to GLSL / Cg, NDSP as a software mixer, the touch-screen text console, path
+   mapping (`sdmc:/` → `ux0:data/`, `romfs:/` → `app0:/`) and the two screens laid out on the 960x544 display.
+   `platform_pc.cpp` runs the whole client headless on a Linux PC (Mesa) with scripted input and frame dumps;
+   `platform_vita.cpp` is the Vita side (vitaGL, SceCtrl, SceTouch, SceAudioOut, the IME dialog) — written but not yet
+   built with the VitaSDK. See `STATUS.md`.
+
+### Vita controls
+
+| Vita | 3DS |
+|---|---|
+| left stick / right stick | Circle Pad / C-Stick |
+| Cross, Circle (swapped when the system's enter button is Circle) | A, B |
+| Triangle, Square | X, Y |
+| D-pad, L, R, START, SELECT | the same |
+| rear touch panel, left / right half | ZL / ZR |
+| front touch on the touch-screen rectangle | the touch screen |
+| two fingers on the front panel | switch the layout (side by side / big top screen) |
+
+Next: build and test on hardware, a `--target vita` texture layout in the converter.
 
 ## Building
 

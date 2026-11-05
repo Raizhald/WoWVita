@@ -1,3 +1,5 @@
 __pycache__/
 PLAN.md
 build-vita-*/
+build-pc/
+run/

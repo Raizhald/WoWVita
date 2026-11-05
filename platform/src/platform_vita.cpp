@@ -232,7 +232,8 @@ bool platformInitGL() {
     return true;
 }
 
-void platformShutdownGL() { vglEnd(); }
+// vitaGL has no shutdown call in every version; the system frees the GPU memory when the app exits
+void platformShutdownGL() {}
 
 int displayWidth() { return kW; }
 int displayHeight() { return kH; }

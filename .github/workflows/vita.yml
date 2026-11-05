@@ -6,6 +6,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   vpk:
     runs-on: ubuntu-latest
@@ -34,6 +37,17 @@ jobs:
           cmake -S netcheck -B build-net -DCMAKE_TOOLCHAIN_FILE=$VITASDK/share/vita.toolchain.cmake
           cmake --build build-net -j"$(nproc)"
           cp build-net/w3dlogin.vpk build-net/netcheck.vpk
+      - name: Publish to the builds branch
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # the latest VPKs on an orphan "builds" branch (one commit, force-pushed): easy to fetch with git
+          mkdir -p /tmp/out && cp build-vita/WoWVita.vpk build-net/netcheck.vpk /tmp/out/
+          cd /tmp/out && git init -q && git checkout -q -b builds && git add . \
+            && git -c user.name=ci -c user.email=ci@localhost commit -qm "VPKs of ${GITHUB_SHA}" \
+            && git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" builds
       - uses: actions/upload-artifact@v4
         if: always()
         with:

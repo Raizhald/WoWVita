@@ -49,3 +49,21 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 ## Nastavení na novém PC
 - VitaSDK: https://vitasdk.org (vdpm), balíčky `vitaGL vitaShaRK mathneon SceShaccCgExt taihen`.
 - PC test: Mesa + `libegl-dev libgles-dev` (postup v README.md).
+
+## Jak pokračovat na jiném místě
+- **Repozitář:** soukromý `https://github.com/Raizhald/WoWVita`, větev `main` (vývoj), `builds` (poslední hotová VPK),
+  `upstream-main` jen v lokálním gitu (původní WoW3DS, vzdálený repozitář `upstream` = github.com/ponuno/WoW3DS).
+- **Překlad VPK:** každý push do `main` spustí GitHub Actions (`.github/workflows/vita.yml`, obraz `vitasdk/vitasdk`).
+  Hotové `WoWVita.vpk` a `netcheck.vpk` jsou ve větvi `builds` (`git fetch origin builds` → `git show FETCH_HEAD:WoWVita.vpk`)
+  i jako artefakt běhu (Actions → běh → Artifacts). Lokálně: VitaSDK + `cmake -S . -B build-vita -DCMAKE_TOOLCHAIN_FILE=...`.
+- **PC test bez Vity:** `cmake -S . -B build-pc -DW3D_PC=1 && cmake --build build-pc -j` (bez systémových hlaviček EGL/GLES
+  se použijí `platform/tools/khr/include`), spuštění viz README.md. Skriptovaný vstup a snímky obrazovky do `run/`.
+- **Další kroky (pořadí):**
+  1. Skutečná herní data: plný klient WoW 1.12.1 (`Data/` s `terrain.MPQ`, `model.MPQ`, `texture.MPQ`, …) → `w3dconv`
+     (postup v `docs/upstream/README.md`) → obsah do `ux0:data/wowvita/`. Začít jednou oblastí (Elwynn Forest).
+  2. Přihlášení na server 1.12.1 (vMaNGOS); vyzkoušet IME klávesnici, `netcheck.vpk` pro samotnou síť.
+  3. Paměť na Vitě s velkými daty (`-DW3D_VITA_HEAP_MB`, výchozí 280).
+  4. Plán výše: HUD do jedné obrazovky, nativní vykreslování, `--target vita` v konvertoru.
+- **Licence:** kód WoW3DS nemá licenci – repozitář nechat soukromý, dokud autor WoW3DS nesvolí.
+- **Související projekt:** WoWee PSP port (github.com/SandstoneDev/WoWee-psp-port) – PSP, WoW 3.3.5a, MIT; na Vitě jen
+  přes Adrenaline. Jiná verze hry i protokolu než WoWVita.

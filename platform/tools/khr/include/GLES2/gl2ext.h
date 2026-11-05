@@ -1,0 +1,8 @@
+#pragma once
+#include <GLES2/gl2.h>
+#define GL_DEPTH24_STENCIL8_OES 0x88F0
+#define GL_DEPTH_COMPONENT24_OES 0x81A6
+#define GL_ETC1_RGB8_OES 0x8D64
+#define GL_MIN_EXT 0x8007
+#define GL_MAX_EXT 0x8008
+#define GL_TEXTURE_MAX_LEVEL_APPLE 0x813D

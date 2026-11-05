@@ -89,7 +89,7 @@ if(VITA)
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/template.xml sce_sys/livearea/contents/template.xml)
 else()
   if(NOT KHR_INCLUDE)
-    set(KHR_INCLUDE /home/claude/deps/khr/include)
+    set(KHR_INCLUDE ${COMPAT}/tools/khr/include)
   endif()
   target_include_directories(${EXE} PRIVATE ${KHR_INCLUDE})
   # -U_FORTIFY_SOURCE: Ubuntu turns printf into __printf_chk, which the console wrap would not see

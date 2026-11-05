@@ -16,7 +16,8 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 ## Ověřeno na PS Vitě (5. 11. 2026, první build z GitHub Actions)
 - VPK se nainstaluje a spustí; login obrazovka v rozvržení „jedna obrazovka“ s náhledem panelu.
 - Offline svět: terén, stromy, obloha; ladicí panel. **59,9 FPS**, CPU 16,7 ms, GPU 3,3 ms (velká rezerva GPU).
-- Zbývá ověřit: páčky, dotyk, zvuk, mlha (na fotce možná chybí), IME, přihlášení na server, paměť.
+- Ověřeno: obě páčky, D-pad, dotykový panel (otevření, zavření, tlačítka), mlha, zvuk (testovací tón po startu).
+- Zbývá ověřit: IME (klávesnice), přihlášení na server, skutečná herní data (konvertor), paměť.
 
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.

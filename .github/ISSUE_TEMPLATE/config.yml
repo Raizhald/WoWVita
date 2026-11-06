@@ -1,5 +1,1 @@
 blank_issues_enabled: true
-contact_links:
-  - name: WoW3DS (the 3DS client WoWVita is based on)
-    url: https://github.com/ponuno/WoW3DS
-    about: Problems of the 3DS version belong there.

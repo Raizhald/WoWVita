@@ -1,0 +1,15 @@
+WoWVita - prevodnik dat pro PS Vitu (Windows)
+
+w3dconv.exe      prevodnik z prikazove radky
+w3dgui.exe       totez s oknem (zaskrtni co prevest, Start)
+w3dpreview.exe   nahledy prevedenych balicku do PNG
+prevod-test.cmd  testovaci oblast: Elwynn Forest + Northshire, rozhrani, zvuk (desitky minut)
+prevod-vse.cmd   cela hra (hodiny, nekolik GB)
+
+Postup:
+1. Dvojklik na prevod-test.cmd (cesta ke hre je predvyplnena: E:\World Of Warcraft Classic\Data).
+2. Vysledek je ve slozce "wowvita" vedle tohoto souboru.
+3. Na Vite ve VitaShellu vytvor ux0:data/wowvita/ a zkopiruj tam vse z "wowvita" krome log_*.txt.
+4. Spust WoWVita, klepni na displej, v panelu Offline.
+
+Prevedena data obsahuji data ze hry - nesdilej je.

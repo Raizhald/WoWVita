@@ -1,0 +1,51 @@
+# Builds the converter for Windows (w3dconv.exe, w3dgui.exe, w3dpreview.exe: static MinGW, no DLLs) and publishes
+# it with the batch files of tools/windows on the "builds-converter" branch and as the "w3dconv-win64" artifact.
+name: Windows converter
+
+on:
+  push:
+    paths: ["converter/**", "common/**", "tools/windows/**", ".github/workflows/converter.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: converter-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  win64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64-posix gcc-mingw-w64-x86-64-posix cmake ninja-build
+      - name: Build
+        run: |
+          cmake -S converter -B build-win -G Ninja -DCMAKE_BUILD_TYPE=Release -DW3D_TESTS=OFF \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
+            -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+            -DCMAKE_FIND_ROOT_PATH=/usr/x86_64-w64-mingw32
+          cmake --build build-win -j"$(nproc)" 2>&1 | tee build-win.log
+          test -f build-win/w3dconv.exe
+      - name: Package
+        run: |
+          mkdir -p pkg && cp build-win/*.exe pkg/ && cp tools/windows/* pkg/ && cp converter/ui_skin.txt pkg/
+          ls -la pkg
+      - name: Publish to the builds-converter branch
+        if: github.ref == 'refs/heads/main'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd pkg && git init -q && git checkout -q -b builds-converter && git add . \
+            && git -c user.name=ci -c user.email=ci@localhost commit -qm "Windows converter of ${GITHUB_SHA}" \
+            && git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" builds-converter
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: w3dconv-win64
+          path: |
+            pkg/
+            build-win.log

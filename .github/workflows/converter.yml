@@ -4,7 +4,7 @@ name: Windows converter
 
 on:
   push:
-    paths: ["converter/**", "common/**", "tools/windows/**", ".github/workflows/converter.yml"]
+    paths: ["converter/**", "common/**", "tools/windows/**", ".gitattributes", ".github/workflows/converter.yml"]
   workflow_dispatch:
 
 permissions:

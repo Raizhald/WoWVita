@@ -286,8 +286,26 @@ PackIndex* g_index = nullptr;
 // One descriptor per pack file, used by the IO thread only. Stage 6.11: plain open()/lseek()/read(), no stdio. newlib's
 // buffered fread after an fseek refills its whole buffer from an aligned offset (a 10 KB texture cost a 64-128 KB read
 // from the card); the sdmc device's read() is one FSFILE_Read of exactly the size asked.
-int g_ioFiles[PackIndex::kMaxFiles] = {};   // -1: not open (see streamerInit)
+// WoWVita: two IO workers (kWorkers), each with its own descriptors (lseek + read is not safe on a shared one).
+#if defined(W3D_COMPAT)
+constexpr int kWorkers = 2;
+#else
+constexpr int kWorkers = 1;
+#endif
+int g_ioFilesW[kWorkers][PackIndex::kMaxFiles] = {};   // -1: not open (see streamerInit)
+#if defined(W3D_COMPAT)
+// PC test: a memory card's speed (W3D_SD_MS per read + W3D_SD_KBPS; the Vita's measured ~2.5 ms and ~11000 KB/s)
+void compatIoDelay(uint32_t size) {
+    static const double ms = getenv("W3D_SD_MS") ? atof(getenv("W3D_SD_MS")) : 0.0;
+    static const double kbps = getenv("W3D_SD_KBPS") ? atof(getenv("W3D_SD_KBPS")) : 0.0;
+    double t = ms + (kbps > 0 ? size / 1024.0 / kbps * 1000.0 : 0.0);
+    if (t > 0) svcSleepThread((s64)(t * 1e6));
+}
+#endif
 bool readExact(int fd, uint32_t offset, uint8_t* dst, uint32_t size) {
+#if defined(W3D_COMPAT)
+    compatIoDelay(size);
+#endif
     if (fd < 0 || lseek(fd, (off_t)offset, SEEK_SET) != (off_t)offset) return false;
     while (size) {
         const ssize_t n = read(fd, dst, size);
@@ -299,9 +317,15 @@ bool readExact(int fd, uint32_t offset, uint8_t* dst, uint32_t size) {
 }
 
 Thread g_thread = nullptr;
+Thread g_thread2 = nullptr;   // WoWVita: the second IO worker (kWorkers)
 std::atomic<bool> g_quit{false};
 LightLock g_lock;
 LightEvent g_wake;
+LightEvent g_wake2;
+void wakeWorkers() {
+    LightEvent_Signal(&g_wake);
+    if (g_thread2) LightEvent_Signal(&g_wake2);
+}
 std::vector<Job*> g_requests;   // guarded by g_lock; sorted so that the worker takes the back (the most wanted)
 std::deque<Job*> g_done;          // guarded by g_lock
 std::vector<Job*> g_incoming;     // main thread: submitted since the last sort
@@ -415,8 +439,9 @@ void terrainLodCaps(Tile* t) {
     w3d_terrain_regions(t->terr, t->batchMaxLod.data(), t->batchRegion.data(), t->regions);
 }
 
-void runJob(Job* j) {
-    const int f = j->file < PackIndex::kMaxFiles ? g_ioFiles[j->file] : -1;
+void finishJob(Job* j, u64 t1);
+void runJob(Job* j, int worker = 0) {
+    const int f = j->file < PackIndex::kMaxFiles ? g_ioFilesW[worker][j->file] : -1;
     const u64 t0 = svcGetSystemTick();
     j->ok = readExact(f, j->offset, j->dst, j->size);
 #ifdef W3D_PC_TEST
@@ -424,6 +449,11 @@ void runJob(Job* j) {
 #endif
     const u64 t1 = svcGetSystemTick();
     j->readUs = (uint32_t)(ticksToMs(t1 - t0) * 1000.0);
+    finishJob(j, t1);
+}
+
+// The part of a job after its read: cache flush, the terrain's height field.
+void finishJob(Job* j, u64 t1) {
     if (j->ok && j->kind != JobKind::Placement && j->kind != JobKind::Collision && j->kind != JobKind::Display &&
         j->kind != JobKind::CharInfo && j->kind != JobKind::CharImg && j->kind != JobKind::Item &&
         j->kind != JobKind::Liquid && j->kind != JobKind::Ground) {   // CPU-only data needs no flush
@@ -439,16 +469,68 @@ void runJob(Job* j) {
     j->cpuUs = (uint32_t)(ticksToMs(svcGetSystemTick() - t1) * 1000.0);
 }
 
-void workerMain(void*) {
+// WoWVita: reads that lie close together in one file go as one read. A memory card pays ~2.5 ms a read and reads
+// ~11 MB/s, and the queue holds hundreds of 5-40 KB reads (textures, models of a tile next to each other in the pack):
+// one read of their span costs a little more data for far fewer requests. g_lock held. j: the most wanted job, taken.
+constexpr uint32_t kGlueGap = 48 * 1024, kGlueSpan = 1024 * 1024;
+void takeNeighbours(Job* j, std::vector<Job*>& batch) {
+    batch.clear();
+    batch.push_back(j);
+#if defined(W3D_COMPAT)
+    uint32_t lo = j->offset, hi = j->offset + j->size;
+    for (bool grew = true; grew;) {   // grow the span by any queued job of the file within kGlueGap of it
+        grew = false;
+        for (size_t i = 0; i < g_requests.size(); ++i) {
+            Job* k = g_requests[i];
+            if (k->file != j->file || !k->size) continue;
+            const uint32_t a = k->offset, b = k->offset + k->size;
+            if (b + kGlueGap < lo || a > hi + kGlueGap) continue;
+            const uint32_t nlo = std::min(lo, a), nhi = std::max(hi, b);
+            if (nhi - nlo > kGlueSpan) continue;
+            lo = nlo;
+            hi = nhi;
+            batch.push_back(k);
+            g_requests.erase(g_requests.begin() + (ptrdiff_t)i);
+            --i;
+            grew = true;
+        }
+    }
+#endif
+}
+
+void runBatch(std::vector<Job*>& batch, int worker) {
+    if (batch.size() == 1) { runJob(batch[0], worker); return; }
+    uint32_t lo = UINT32_MAX, hi = 0;
+    for (Job* j : batch) { lo = std::min(lo, j->offset); hi = std::max(hi, j->offset + j->size); }
+    static thread_local std::vector<uint8_t> buf;
+    buf.resize(hi - lo);
+    const int file = batch[0]->file;
+    const int f = file < PackIndex::kMaxFiles ? g_ioFilesW[worker][file] : -1;
+    const u64 t0 = svcGetSystemTick();
+    const bool ok = readExact(f, lo, buf.data(), hi - lo);
+    const u64 t1 = svcGetSystemTick();
+    const uint32_t us = (uint32_t)(ticksToMs(t1 - t0) * 1000.0 / batch.size());
+    for (Job* j : batch) {
+        j->ok = ok;
+        if (ok) memcpy(j->dst, buf.data() + (j->offset - lo), j->size);
+        j->readUs = us;
+        finishJob(j, svcGetSystemTick());
+    }
+    if (buf.capacity() > 4 * kGlueSpan) std::vector<uint8_t>().swap(buf);
+}
+
+void workerLoop(int worker, LightEvent* wake) {
 #ifndef W3D_PC_TEST
     crashInstall();   // 6.31: crash.txt if this thread crashes
 #endif
+    std::vector<Job*> batch;
     while (!g_quit) {
-        LightEvent_Wait(&g_wake);
+        LightEvent_Wait(wake);
         for (;;) {
             LightLock_Lock(&g_lock);
             Job* j = nullptr;
             if (!g_requests.empty()) { j = g_requests.back(); g_requests.pop_back(); }
+            if (j && !g_quit) takeNeighbours(j, batch);
             LightLock_Unlock(&g_lock);
             if (!j) break;
             if (g_quit) {   // hand it back unrun so shutdown can free it
@@ -457,13 +539,15 @@ void workerMain(void*) {
                 LightLock_Unlock(&g_lock);
                 break;
             }
-            runJob(j);
+            runBatch(batch, worker);
             LightLock_Lock(&g_lock);
-            g_done.push_back(j);
+            for (Job* k : batch) g_done.push_back(k);
             LightLock_Unlock(&g_lock);
         }
     }
 }
+void workerMain(void*) { workerLoop(0, &g_wake); }
+void workerMain2(void*) { workerLoop(1, &g_wake2); }
 
 // 'e' must be an entry of g_index (its file comes from its position there); sizeOverride reads less than the entry holds.
 void submit(JobKind kind, const W3dEntry* e, uint8_t* dst, void* owner, uint32_t sizeOverride = 0) {
@@ -477,7 +561,7 @@ void submit(JobKind kind, const W3dEntry* e, uint8_t* dst, void* owner, uint32_t
     if (idle) g_requests.push_back(j);
     LightLock_Unlock(&g_lock);
     if (!idle) { g_incoming.push_back(j); return; }
-    if (g_thread) LightEvent_Signal(&g_wake);
+    if (g_thread) wakeWorkers();
 }
 
 void deferFree(FreeKind k, void* p, int slot = -1) { g_deferred.push_back({k, p, slot, g_frame}); }
@@ -1495,7 +1579,7 @@ void scheduleJobs() {
     g_stats.maxQueued = std::max(g_stats.maxQueued, (int)g_requests.size());
     const bool any = !g_requests.empty();
     LightLock_Unlock(&g_lock);
-    if (any && g_thread) LightEvent_Signal(&g_wake);
+    if (any && g_thread) wakeWorkers();
 }
 
 void processDeferred() {
@@ -1815,11 +1899,13 @@ bool streamerInit(PackIndex* index, char* err, size_t errLen) {
     g_quit = false;   // a map change shuts the streamer down and starts it again on the next pack
     g_freeSlots.clear();
     g_pool = nullptr;
-    for (int& f : g_ioFiles) f = -1;
-    for (int k = 0; k < index->fileCount; ++k) {
-        g_ioFiles[k] = open(index->files[k], O_RDONLY);
-        if (g_ioFiles[k] < 0) { snprintf(err, errLen, "cannot reopen %s", index->files[k]); return false; }
-    }
+    for (auto& w : g_ioFilesW)
+        for (int& f : w) f = -1;
+    for (int w = 0; w < kWorkers; ++w)
+        for (int k = 0; k < index->fileCount; ++k) {
+            g_ioFilesW[w][k] = open(index->files[k], O_RDONLY);
+            if (g_ioFilesW[w][k] < 0) { snprintf(err, errLen, "cannot reopen %s", index->files[k]); return false; }
+        }
 
     // White 8x8 stand-in texture.
     C3D_TexInit(&g_white.tex, 8, 8, GPU_RGB565);
@@ -1845,6 +1931,7 @@ bool streamerInit(PackIndex* index, char* err, size_t errLen) {
     // IO thread: core 2 on New 3DS, else core 1 with a CPU-time grant, else synchronous.
     LightLock_Init(&g_lock);
     LightEvent_Init(&g_wake, RESET_ONESHOT);
+    LightEvent_Init(&g_wake2, RESET_ONESHOT);
     s32 prio = 0x30;
     svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
     bool n3ds = false;
@@ -1861,6 +1948,9 @@ bool streamerInit(PackIndex* index, char* err, size_t errLen) {
         g_thread = threadCreate(workerMain, NULL, 32 * 1024, prio + 1, 0, false);
         if (g_thread) g_stats.workerCore = 0;
     }
+#if defined(W3D_COMPAT)
+    if (g_thread && kWorkers > 1) g_thread2 = threadCreate(workerMain2, NULL, 64 * 1024, prio - 1, 1, false);
+#endif
     farLoad();   // 6.24 (after the worker: the atlas is read like any texture)
     farObjLoad();   // 6.29
     return true;
@@ -1875,10 +1965,15 @@ void streamerShutdown() {
 #endif
     if (g_thread) {
         g_quit = true;
-        LightEvent_Signal(&g_wake);
+        wakeWorkers();
         threadJoin(g_thread, U64_MAX);
         threadFree(g_thread);
         g_thread = nullptr;
+        if (g_thread2) {
+            threadJoin(g_thread2, U64_MAX);
+            threadFree(g_thread2);
+            g_thread2 = nullptr;
+        }
     }
     // Complete every outstanding job (unrun ones as failed) through the normal path,
     // so assets orphaned while loading are freed exactly as during play.
@@ -1925,10 +2020,11 @@ void streamerShutdown() {
     g_freeSlots.clear();
     g_deferred.clear();
     g_retry.clear();
-    for (int& f : g_ioFiles) {
-        if (f >= 0) close(f);
-        f = -1;
-    }
+    for (auto& w : g_ioFilesW)
+        for (int& f : w) {
+            if (f >= 0) close(f);
+            f = -1;
+        }
     g_index = nullptr;
     C3D_TexDelete(&g_white.tex);
 }

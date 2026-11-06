@@ -1,5 +1,6 @@
 #include <string.h>
 #include "hud_game.hpp"
+#include "buttons.hpp"
 
 #include <ctype.h>
 #include <math.h>
@@ -600,7 +601,7 @@ void hudBuildGame(HudList& l, const HudInput& in) {
                 }
             }
             if (in.pad && in.pad->soft && o.guid == in.pad->soft && !o.self)   // interact prompt
-                l.textCentered((int)pl.sx, y - 12 - markUp, std::string("[Y] ") + ui::trText(in.pad->softVerb), kGold);
+                l.textCentered((int)pl.sx, y - 12 - markUp, std::string("[") + btnName(Btn::Y) + "] " + ui::trText(in.pad->softVerb), kGold);
         }
         // a game object the interact button would use (stage 5.18): its name and the prompt
         if (in.pad && in.pad->soft) {
@@ -609,7 +610,7 @@ void hudBuildGame(HudList& l, const HudInput& in) {
                 float p[3] = {so->mv.x, so->mv.y, so->mv.z + 1.4f}, sx, sy;
                 if (hudProject(in, p, &sx, &sy)) {
                     l.textCentered((int)sx, (int)sy - 12, ascii(so->name.empty() ? std::string("Object") : so->name), kGold);
-                    l.textCentered((int)sx, (int)sy - 23, std::string("[Y] ") + ui::trText(in.pad->softVerb), kGold);
+                    l.textCentered((int)sx, (int)sy - 23, std::string("[") + btnName(Btn::Y) + "] " + ui::trText(in.pad->softVerb), kGold);
                 }
             }
         }
@@ -763,11 +764,11 @@ void hudBuildGame(HudList& l, const HudInput& in) {
         if (life == w3n::Life::Dead) {
             panel(l, 110, 88, 180, 34);
             l.textCentered(200, 92, "You have died.", hudRgba(255, 70, 70));
-            l.textCentered(200, 106, g.resurrectOffer.active ? "Resurrection offered (touch screen)" : "A: Release Spirit", kWhite);
+            l.textCentered(200, 106, g.resurrectOffer.active ? "Resurrection offered (touch screen)" : btnText("{A}: Release Spirit"), kWhite);
         } else if (life == w3n::Life::Ghost) {
             char b[64];
             float d = g.corpseDistance(here);
-            if (g.canReclaim(here, now)) snprintf(b, sizeof b, "Ghost - A: Resurrect");
+            if (g.canReclaim(here, now)) snprintf(b, sizeof b, "%s", btnText("Ghost - {A}: Resurrect").c_str());
             else if (d >= 0 && d <= 39.0f) snprintf(b, sizeof b, "Ghost - resurrect in %u s", (unsigned)((g.reclaimDelayLeftMs(now) + 999) / 1000));
             else if (d >= 0) snprintf(b, sizeof b, "Ghost - your corpse: %.0f yd", d);
             else snprintf(b, sizeof b, "Ghost");
@@ -814,8 +815,8 @@ void hudBuildGame(HudList& l, const HudInput& in) {
     if (in.pad && in.pad->show) {
         const HudPadView& pv = *in.pad;
         if (pv.mode) {   // targeting mode: what the face buttons do now instead of the bars
-            const char* t1 = pv.mode == 1 ? "ENEMY: C-Stick aims, release R" : "FRIEND: C-Stick aims, release L";
-            const char* t2 = pv.mode == 1 ? "B last  A assist  Y attack  X next" : "B yourself  A assist  X next";
+            const std::string t1 = btnText(pv.mode == 1 ? "ENEMY: right stick aims, release {R}" : "FRIEND: right stick aims, release {L}");
+            const std::string t2 = btnText(pv.mode == 1 ? "{B} last  {A} assist  {Y} attack  {X} next" : "{B} yourself  {A} assist  {X} next");
             panel(l, 91, 172, 218, 30);
             ui::Image ti = ui::assets().sprite(pv.mode == 1 ? "cp_target_enemy" : "cp_target_friend");   // UI stage 11
             const int tx0 = ti.ok() ? 121 : 95;
@@ -827,7 +828,6 @@ void hudBuildGame(HudList& l, const HudInput& in) {
             // face buttons bottom right, icons 22 px,
             // the button's glyph in the corner, cooldowns as a dark sweep from the top and seconds
             static const int kDx[4] = {0, 23, 0, -23}, kDy[4] = {-19, 0, 19, 0};   // up, right, down, left
-            static const char* kGlyph[8] = {"↑", "→", "↓", "←", "X", "A", "B", "Y"};
             const int cs = 22;
             // UI stage 11: with ConsolePort's art (ui.w3dp built with --consoleport) the cells are round, like its bars:
             // the icon cut round, its ring over it, the button's glyph picture in the corner
@@ -852,9 +852,8 @@ void hudBuildGame(HudList& l, const HudInput& in) {
                     const bool lit = c.active || pv.binding;
                     l.image(x - 4, y - 4, rs, rs, lit && ringHl.ok() ? ringHl : ring,
                             c.active ? hudRgba(255, 210, 60) : pv.binding ? hudRgba(90, 230, 255) : hudRgba(255, 255, 255));
-                    ui::Image glyph = ui::assets().sprite(kGlyphPic[b]);
-                    if (glyph.ok()) l.image(x - 5, y - 5, 11, 11, glyph);
-                    else l.text(x + 1, y - 2, kGlyph[b], kGold);
+                    // (ConsolePort's glyph pictures are Xbox buttons: the Vita's signs as text instead)
+                    l.text(x + 1, y - 2, btnSlotGlyph(b), kGold);
                     continue;
                 }
                 l.rect(x, y, cs, cs, c.fixed ? hudRgba(30, 30, 40, 160) : hudRgba(10, 10, 20, 190));
@@ -866,13 +865,13 @@ void hudBuildGame(HudList& l, const HudInput& in) {
                 cellCooldown(l, x, y, cs, c, false, now);   // UI stage 12: the clock sweep, the time, the flash
                 if (c.count) l.textRight(x + cs, y + cs - 10, std::to_string(c.count), kWhite);
                 l.outline(x - 1, y - 1, cs + 2, cs + 2, c.active ? hudRgba(255, 210, 40) : pv.binding ? hudRgba(90, 230, 255) : kBorder);
-                l.text(x + 1, y - 2, kGlyph[b], kGold);
+                l.text(x + 1, y - 2, btnSlotGlyph(b), kGold);
             }
             for (int k = 0; k < 2; ++k) {   // ZL / ZR lit when their set (or both) is on
                 bool on = (pv.set & (1 << k)) != 0;
                 int x = k ? kHudW - 28 : 4, y = 155;   // above its cluster: ZL over the D-pad, ZR over the face buttons
                 l.rect(x, y, 24, 11, on ? hudRgba(120, 90, 20, 220) : hudRgba(0, 0, 0, 120));
-                l.textCentered(x + 12, y, k ? "ZR" : "ZL", on ? kGold : kGrey, false);
+                l.textCentered(x + 12, y, btnName(k ? Btn::ZR : Btn::ZL), on ? kGold : kGrey, false);
             }
             char t[16];
             snprintf(t, sizeof t, "p%d", pv.page + 1);
@@ -970,7 +969,7 @@ void hudBuildGame(HudList& l, const HudInput& in) {
     if (in.placeHint) {   // two short lines between the crossbar clusters
         l.fade = 255;
         const std::string t1 = HudList::fit(in.placeHint, 230);
-        const std::string t2 = ui::tr("C-Stick aim | again: cast | cancel", "C-Stick: прицел | ещё раз: каст | отмена");
+        const std::string t2 = ui::tr("Right stick aim | again: cast | cancel", "Правый стик: прицел | ещё раз: каст | отмена");
         const int w = std::max(HudList::width(t1), HudList::width(t2)), lh = HudList::lineHeight(), y = 168;
         l.rect(kHudW / 2 - w / 2 - 4, y - 1, w + 8, 2 * lh + 2, hudRgba(0, 0, 0, 150));
         l.textCentered(kHudW / 2, y, t1, hudRgba(255, 210, 90));

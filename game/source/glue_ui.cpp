@@ -1,4 +1,5 @@
 #include "glue_ui.hpp"
+#include "buttons.hpp"
 
 #include <stdio.h>
 #include <string.h>
@@ -428,8 +429,8 @@ void GlueUi::dialogs(HudList& l, int w, int h, const GlueModel& m, bool topScree
         l.textCentered(w / 2, dy + 12 + (int)i * lh, lines[i], kGlueGold, true, Font::Normal);
     const int by = dy + dh - 30;
     if (confirmDelete_ && m.message.empty() && m.wait.empty()) {
-        button(l, w / 2 - 92, by, 84, 22, tr("Okay", "Ок"), true, false, topScreen ? "A" : nullptr);
-        button(l, w / 2 + 8, by, 84, 22, tr("Cancel", "Отмена"), true, false, topScreen ? "B" : nullptr);
+        button(l, w / 2 - 92, by, 84, 22, tr("Okay", "Ок"), true, false, topScreen ? btnName(Btn::A) : nullptr);
+        button(l, w / 2 + 8, by, 84, 22, tr("Cancel", "Отмена"), true, false, topScreen ? btnName(Btn::B) : nullptr);
         if (!topScreen) {
             addBottom(w / 2 - 92, by, 84, 22, GlueAction::DeleteCharacter, 0, kButton);
             addBottom(w / 2 + 8, by, 84, 22, GlueAction::Back, 7, kButton);
@@ -437,7 +438,7 @@ void GlueUi::dialogs(HudList& l, int w, int h, const GlueModel& m, bool topScree
         return;
     }
     if (btn) {
-        button(l, w / 2 - 50, by, 100, 22, btn, true, topScreen, topScreen ? "A" : nullptr);
+        button(l, w / 2 - 50, by, 100, 22, btn, true, topScreen, topScreen ? btnName(Btn::A) : nullptr);
         if (!topScreen) addBottom(w / 2 - 50, by, 100, 22, act, arg, kButton);
     }
 }
@@ -541,12 +542,12 @@ void GlueUi::topChars(HudList& l, const GlueModel& m) {
         l.textFit(lx + 9, y + 23, zoneOf(m, c), lw - 16, kGlueDim, false, Font::Small);
     }
     if (!n) l.textCentered(lx + lw / 2, py + 40, tr("No characters", "Нет персонажей"), kGlueDim, true, Font::Small);
-    button(l, lx + 4, 192, lw - 8, 20, tr("Create New Character", "Создать персонажа"), true, false, "X");
-    button(l, lx + 4, 215, (lw - 12) / 2, 22, tr("Delete", "Удалить"), n > 0, false, "Y");
-    button(l, lx + 8 + (lw - 12) / 2, 215, (lw - 12) / 2, 22, tr("Back", "Назад"), true, false, "B");
+    button(l, lx + 4, 192, lw - 8, 20, tr("Create New Character", "Создать персонажа"), true, false, btnName(Btn::X));
+    button(l, lx + 4, 215, (lw - 12) / 2, 22, tr("Delete", "Удалить"), n > 0, false, btnName(Btn::Y));
+    button(l, lx + 8 + (lw - 12) / 2, 215, (lw - 12) / 2, 22, tr("Back", "Назад"), true, false, btnName(Btn::B));
     // Enter World, under the character
-    button(l, 74, 212, 112, 24, tr("Enter World", "Войти в мир"), n > 0, true, "A");
-    l.text(6, 226, tr("L / R: turn", "L / R: поворот"), kGlueDim, true, Font::Small);
+    button(l, 74, 212, 112, 24, tr("Enter World", "Войти в мир"), n > 0, true, btnName(Btn::A));
+    l.text(6, 226, btnText(tr("{L} / {R}: turn", "{L} / {R}: поворот")), kGlueDim, true, Font::Small);
 }
 
 void GlueUi::topCreate(HudList& l, const GlueModel& m) {
@@ -576,9 +577,9 @@ void GlueUi::topCreate(HudList& l, const GlueModel& m) {
         addTop(x, 148, 28, 28, GlueAction::None, s, kSex);
     }
     l.textCentered(50, 178, create.sex ? tr("Female", "Женский") : tr("Male", "Мужской"), kGlueGold, true, Font::Small);
-    button(l, 6, 190, 88, 20, tr("Randomize", "Случайно"), true, focused(kButton, GlueAction::None, 1), "X");
+    button(l, 6, 190, 88, 20, tr("Randomize", "Случайно"), true, focused(kButton, GlueAction::None, 1), btnName(Btn::X));
     addTop(6, 190, 88, 20, GlueAction::None, 1, kButton);
-    button(l, 6, 214, 88, 22, tr("Back", "Назад"), true, focused(kButton, GlueAction::CreateBack, 0), "B");
+    button(l, 6, 214, 88, 22, tr("Back", "Назад"), true, focused(kButton, GlueAction::CreateBack, 0), btnName(Btn::B));
     addTop(6, 214, 88, 22, GlueAction::CreateBack, 0, kButton);
     // right: classes, the look, Accept
     panel(l, 300, 0, 100, 240, 170);
@@ -619,9 +620,9 @@ void GlueUi::topCreate(HudList& l, const GlueModel& m) {
     std::string title = std::string(glue::raceName(create.race, g_lang)) + " " + glue::className(create.cls, g_lang);
     l.textCentered(200, 3, title, kGlueGold, true, Font::Normal);
     l.textCentered(200, 186, tr("Name", "Имя"), kGlueGold, true, Font::Small);
-    field(l, 130, 197, 140, 21, create.name, focused(kField, GlueAction::EditName, 0), false, tr("Y: enter a name", "Y: введите имя"));
+    field(l, 130, 197, 140, 21, create.name, focused(kField, GlueAction::EditName, 0), false, btnText(tr("{Y}: enter a name", "{Y}: введите имя")).c_str());
     addTop(130, 197, 140, 21, GlueAction::EditName, 0, kField);
-    l.textCentered(200, 225, tr("L / R: turn", "L / R: поворот"), kGlueDim, true, Font::Small);
+    l.textCentered(200, 225, btnText(tr("{L} / {R}: turn", "{L} / {R}: поворот")), kGlueDim, true, Font::Small);
 }
 
 // =================================================================== touch screen
@@ -666,7 +667,7 @@ void GlueUi::bottomLogin(HudList& l, const GlueModel& m) {
     addBottom(214, 172, 98, 24, GlueAction::ToggleLog, 0, kButton);
     button(l, 214, 208, 98, 24, tr("Quit", "Выход"), true, false);
     addBottom(214, 208, 98, 24, GlueAction::Quit, 0, kButton);
-    l.text(8, 206, tr("D-pad, A: the top screen", "Крестовина, A: верхний экран"), kGlueDim, false, Font::Small);
+    l.text(8, 206, btnText(tr("D-pad, {A}: the top screen", "Крестовина, {A}: верхний экран")), kGlueDim, false, Font::Small);
     l.text(8, 218, tr("The password is never saved", "Пароль не сохраняется"), kGlueDim, false, Font::Small);
 }
 

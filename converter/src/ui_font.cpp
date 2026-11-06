@@ -19,8 +19,10 @@ std::vector<uint32_t> uiCodepoints() {
     for (uint32_t c : {0xA0u, 0xA9u, 0xABu, 0xB0u, 0xB7u, 0xBBu, 0xD7u, 0x401u}) cps.push_back(c);
     for (uint32_t c = 0x410; c < 0x450; ++c) cps.push_back(c);
     for (uint32_t c : {0x451u, 0x2013u, 0x2014u, 0x2022u, 0x2026u, 0x2116u, 0x2190u, 0x2191u, 0x2192u, 0x2193u, 0x25B2u,
-                       0x25B6u, 0x25BCu, 0x25C0u, 0x25C6u, 0x2709u, 0x2713u, 0x2715u})
+                       0x25B6u, 0x25BCu, 0x25C0u, 0x25C6u, 0x2709u, 0x2713u, 0x2715u,
+                       0x25A1u, 0x25B3u, 0x25CBu})   // (the PS Vita's button signs)
         cps.push_back(c);
+    std::sort(cps.begin(), cps.end());   // (the client finds glyphs by code point with a binary search)
     return cps;
 }
 

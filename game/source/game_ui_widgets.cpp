@@ -8,6 +8,7 @@
 #include <algorithm>
 
 #include "game_ui.hpp"
+#include "buttons.hpp"
 #include "text.hpp"
 #include "ui_style.hpp"
 
@@ -262,18 +263,17 @@ void GameUi::crossbarPicker(w3n::GameSession& g, const Input& in) {
                                                                               : std::string(tr("Bind: ", "Привязать: ")) + what;
     list_.textFit(10, kTop + 6, title, 220, kGold, true, Font::Normal);
     if (!drag_.active) btn(kTouchW - 74, kTop + 4, 66, 20, tr("Cancel", "Отмена"), Act::ClosePanel, 0, Style::Normal, Font::Small);
-    static const char* kSet[4] = {"", "ZL", "ZR", "ZL+R"};
-    static const char* kGlyph[8] = {"↑", "→", "↓", "←", "X", "A", "B", "Y"};
+    const std::string kSet[4] = {"", btnName(Btn::ZL), btnName(Btn::ZR), btnText("{ZL}+{ZR}")};
     const int cell = 32, gap = 3, x0 = 40, y0 = kTop + 30;
     for (int set = 0; set < 4; ++set) {
         const int y = y0 + set * (cell + gap);
-        list_.textRight(x0 - 4, y + 10, set ? kSet[set] : "—", set == shownSet_ ? kGold : kGrey);
+        list_.textRight(x0 - 4, y + 10, set ? kSet[set] : std::string("—"), set == shownSet_ ? kGold : kGrey);
         for (int b = 0; b < 8; ++b) {
             const int slot = set * 8 + b, x = x0 + b * (cell + gap);
             if (b == 4) list_.rect(x - 2, y, 1, cell, kFrameDim);   // D-pad | face buttons
             if (!padSlotBindable(slot)) {
                 list_.rect(x, y, cell, cell, kRowAlt);
-                list_.textCentered(x + cell / 2, y + 2, kGlyph[b], kGrey);
+                list_.textCentered(x + cell / 2, y + 2, btnSlotGlyph(b), kGrey);
                 list_.textCentered(x + cell / 2, y + 16, HudList::fit(padFixedName(b), cell - 2), hudRgba(110, 106, 98));
                 continue;
             }
@@ -282,7 +282,7 @@ void GameUi::crossbarPicker(w3n::GameSession& g, const Input& in) {
             if (a.type != ActionSlot::Empty) iconBox(x, y, cell, actionIcon(g, a), actionName(g, a), hover ? kGold : kFrameDim, true);
             else { list_.rect(x, y, cell, cell, kRow); list_.outline(x - 1, y - 1, cell + 2, cell + 2, hover ? kGold : kFrameDim); }
             if (hover) list_.outline(x - 2, y - 2, cell + 4, cell + 4, kGold);
-            list_.text(x + 2, y + cell - 12, kGlyph[b], kGold);
+            list_.text(x + 2, y + cell - 12, btnSlotGlyph(b), kGold);
             Button& r = region(x, y, cell, cell, Act::BarCell, slot);
             pickerCells_.push_back(r);
         }
@@ -362,11 +362,11 @@ void GameUi::drawPanel(w3n::GameSession& g, const Input& in) {
                 list_.textCentered(kTouchW / 2, kTop + 48, who, kGold, true, Font::Large);
                 if (g.duel.challenged) {
                     list_.textCentered(kTouchW / 2, kTop + 72, tr("challenges you to a duel.", "вызывает вас на дуэль."), kText, true, Font::Normal);
-                    btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (fv0 ? " (Y)" : " (A)"), Act::InviteYes, 0, Style::Primary);
-                    btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (fv0 ? " (A)" : " (B)"), Act::InviteNo, 0, Style::Normal);
+                    btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (fv0 ? (std::string(" (") + btnName(Btn::Y) + ")") : (std::string(" (") + btnName(Btn::A) + ")")), Act::InviteYes, 0, Style::Primary);
+                    btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (fv0 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
                 } else {
                     list_.textCentered(kTouchW / 2, kTop + 72, tr("Duel requested. Waiting...", "Вызов на дуэль отправлен. Ждём..."), kText, true, Font::Normal);
-                    btn(102, kTop + 100, 116, 28, std::string(tr("Cancel", "Отменить")) + (fv0 ? " (A)" : " (B)"), Act::InviteNo, 0, Style::Normal);
+                    btn(102, kTop + 100, 116, 28, std::string(tr("Cancel", "Отменить")) + (fv0 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
                 }
                 break;
             }
@@ -378,8 +378,8 @@ void GameUi::drawPanel(w3n::GameSession& g, const Input& in) {
                                      : std::string(tr("invites you to the guild ", "приглашает вас в гильдию ")) + g.guildInviteName,
                                kText, true, Font::Normal);
             const bool fv = in.cfg && in.cfg->scheme == PadScheme::Forever;
-            btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (fv ? " (Y)" : " (A)"), Act::InviteYes, 0, Style::Primary);
-            btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (fv ? " (A)" : " (B)"), Act::InviteNo, 0, Style::Normal);
+            btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (fv ? (std::string(" (") + btnName(Btn::Y) + ")") : (std::string(" (") + btnName(Btn::A) + ")")), Act::InviteYes, 0, Style::Primary);
+            btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (fv ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
             break;
         }
         case Panel::Binder:

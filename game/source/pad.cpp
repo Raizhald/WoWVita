@@ -1,4 +1,5 @@
 #include "pad.hpp"
+#include "buttons.hpp"
 
 #include <math.h>
 #include <stdio.h>
@@ -15,13 +16,16 @@ constexpr float kDirCut = 0.38f;                         // ~22.5 deg: a directi
 }  // namespace
 
 const char* padButtonGlyph(int b) {
-    static const char* n[8] = {"Up", "Rt", "Dn", "Lt", "X", "A", "B", "Y"};
-    return b >= 0 && b < 8 ? n[b] : "?";
+    static const char* n[4] = {"Up", "Rt", "Dn", "Lt"};
+    return b >= 0 && b < 4 ? n[b] : b < 8 ? btnSlotGlyph(b) : "?";
 }
 
 const char* padSetName(int set) {
-    static const char* n[4] = {"", "ZL", "ZR", "ZL+ZR"};
-    return set >= 0 && set < 4 ? n[set] : "";
+    static std::string n[4];   // (made on use: the platform knows the system's enter button only after start-up)
+    n[1] = btnName(Btn::ZL);
+    n[2] = btnName(Btn::ZR);
+    n[3] = btnText("{ZL}+{ZR}");
+    return set >= 1 && set < 4 ? n[set].c_str() : "";
 }
 
 // ------------------------------------------------------------------ config file: "key value" lines

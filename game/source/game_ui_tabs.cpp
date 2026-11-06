@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include "game_ui.hpp"
+#include "buttons.hpp"
 #include "text.hpp"
 #include "ui_style.hpp"
 
@@ -1072,7 +1073,7 @@ void GameUi::drawSettings(const Input& in) {
         opt(120, 96, tr("On", "Вкл"), c.faceMovement, 20);
         opt(220, 96, tr("Off", "Выкл"), !c.faceMovement, 21);
         y += 21;
-        label("ZL / ZR");
+        label(btnText("{ZL} / {ZR}").c_str());
         opt(120, 96, tr("Hold", "Удерживать"), !c.toggleModifiers, 30);
         opt(220, 96, tr("Toggle", "Переключать"), c.toggleModifiers, 31);
         y += 21;

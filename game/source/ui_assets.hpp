@@ -57,6 +57,7 @@ public:
     const std::string& path() const { return path_; }
 
     const FontView& font(Font f) const { return fonts_[(int)f]; }
+    const FontView& builtinFont(Font f) const;   // the client's own font of the size (ui_font_builtin.h)
     Image sprite(const char* name) const;
     Image icon(uint32_t key) const;
     Image spellIcon(uint32_t spell) const { return icon(W3D_UI_KEY(W3D_UIKEY_SPELL, spell)); }

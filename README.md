@@ -82,9 +82,12 @@ Usage is described in [`docs/upstream/README.md`](docs/upstream/README.md).
 | Cross, Circle (swapped when the system's enter button is Circle) | A, B |
 | Triangle, Square | X, Y |
 | D-pad, L, R, START, SELECT | the same |
-| rear touch panel, left / right half | ZL / ZR |
+| rear touch panel, left / right half (shown as **L2 / R2**) | ZL / ZR |
 | front touch | the touch screen (see *Screen layouts*) |
 | two fingers on the front panel | the next screen layout |
+
+The game's prompts and hotbars show the Vita's buttons (✕ ○ △ □, L, R, L2, R2, sticks); the signs come from the
+client's own font, so packs converted before need no new conversion (`game/source/buttons.hpp`).
 
 ### Screen layouts
 

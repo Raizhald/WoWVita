@@ -604,8 +604,8 @@ bool convertUi(const UiOptions& uo, const DataDir& data, bool verbose) {
             }
             std::vector<uint8_t> b;
             if (data.read("Fonts\\ARIALN.TTF", b)) ttfs.push_back(std::move(b));
-            for (const char* sys : {"C:\\Windows\\Fonts\\arialbd.ttf", "C:\\Windows\\Fonts\\arial.ttf",
-                                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/Arial.ttf"}) {
+            for (const char* sys : {"C:\\Windows\\Fonts\\arialbd.ttf", "C:\\Windows\\Fonts\\arial.ttf", "C:\\Windows\\Fonts\\seguisym.ttf",
+                                    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/Library/Fonts/Arial.ttf"}) {   // (Segoe UI Symbol: the button signs)
                 std::vector<uint8_t> s;
                 if (readFile(sys, s)) { ttfs.push_back(std::move(s)); break; }
             }

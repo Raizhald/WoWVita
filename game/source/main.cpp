@@ -13,6 +13,7 @@
 //           SELECT walk/fly, X draw distance, A doodads, ZR fog, ZL doodad detail, Y 40 s streaming benchmark,
 //           START quit. Online walking: the controller scheme of pad.hpp (Forever or Classic, START menu).
 #include "audio.hpp"
+#include "buttons.hpp"
 #include "unit_state.hpp"
 #include "w3d_worldobj.h"
 #include "sound_world.hpp"
@@ -2211,9 +2212,9 @@ int main() {
                        l->kind == 0 ? "start" : l->kind == 1 ? "go" : "fail", l->dist, kRes[l->result % 7]);
             }
 
-            printf("\x1b[17;1HCirclePad move/turn CStick look   ");
-            printf("\x1b[18;1HL/R down/up  B fast%s SELECT walk/fly", g_login.online() ? "/jump" : "     ");
-            printf("\x1b[19;1HX dist  A doodads  ZR fog  ZL detail   ");
+            printf("\x1b[17;1HL-stick move/turn  R-stick look     ");
+            printf("\x1b[18;1HL/R down/up  %s fast%s SELECT walk/fly", btnAscii(Btn::B), g_login.online() ? "/jump" : "     ");
+            printf("\x1b[19;1H%.3s dist %.5s doodads %s fog %s detail ", btnAscii(Btn::X), btnAscii(Btn::A), btnName(Btn::ZR), btnName(Btn::ZL));
             printf("\x1b[20;1HSTART quit                             ");
             if (g_login.online()) {
                 printf("\x1b[22;1HNET %-22.22s %4lu ms %5llu KB ", netNote.c_str(), (unsigned long)g_login.latencyMs(),

@@ -7,6 +7,7 @@
 #include <algorithm>
 
 #include "game_ui.hpp"
+#include "buttons.hpp"
 #include "text.hpp"
 #include "ui_style.hpp"
 
@@ -65,7 +66,8 @@ void GameUi::drawDeath(w3n::GameSession& g, const Input& in) {
     window(8, kTop + 4, kTouchW - 16, kContentH - 8, true);
     const w3n::Life life = g.life();
     const bool forever = in.cfg && in.cfg->scheme == PadScheme::Forever;
-    const char* useKey = forever ? " (Y)" : " (A)";
+    const std::string useKeyS = std::string(" (") + btnName(forever ? Btn::Y : Btn::A) + ")";
+    const char* useKey = useKeyS.c_str();
     char b[96];
     int y = kTop + 14;
     if (life == w3n::Life::Dead) {

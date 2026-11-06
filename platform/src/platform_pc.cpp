@@ -193,6 +193,13 @@ void audioStop() {
 // ------------------------------------------------------------------ hid / apt / swkbd
 extern "C" {
 
+// game/source/buttons.cpp: the PC test acts as a console whose enter button is Cross (W3D_ENTER_CIRCLE=1: Circle)
+int compatEnterIsCircle(void) {
+    const char* e = getenv("W3D_ENTER_CIRCLE");
+    return e && *e == '1';
+}
+
+
 Handle hidMemHandle = 0;
 Result hidInit(void) { return 0; }
 void hidExit(void) {}

@@ -300,6 +300,9 @@ void audioStop() {
 // ------------------------------------------------------------------ hid / apt / swkbd
 extern "C" {
 
+// game/source/buttons.cpp: Circle is the game's A (confirm) when the system's enter button is Circle
+int compatEnterIsCircle(void) { return g_enterCircle ? 1 : 0; }
+
 Handle hidMemHandle = 0;
 Result hidInit(void) { return 0; }
 void hidExit(void) {}

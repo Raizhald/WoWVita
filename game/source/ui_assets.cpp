@@ -56,6 +56,24 @@ bool MapView::toUv(float x, float y, float* u, float* v) const {
     return *u >= 0 && *u <= 1 && *v >= 0 && *v <= 1;
 }
 
+const FontView& Assets::builtinFont(Font f) const {
+    static FontView v[3];
+    static bool made = false;
+    if (!made) {
+        for (int i = 0; i < 3; ++i) {
+            const W3dUiFont& bf = kUiFontBuiltin[i];
+            v[i].tex = kTexBuiltinFont;
+            v[i].pixelSize = bf.pixelSize;
+            v[i].lineHeight = bf.lineHeight;
+            v[i].ascent = bf.ascent;
+            v[i].glyphs = kUiGlyphBuiltin + bf.firstGlyph;
+            v[i].count = bf.glyphCount;
+        }
+        made = true;
+    }
+    return v[(int)f % 3];
+}
+
 void Assets::builtinFonts() {
     for (int i = 0; i < 3; ++i) {
         const W3dUiFont& f = kUiFontBuiltin[i];

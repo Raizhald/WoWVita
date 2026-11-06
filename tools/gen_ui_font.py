@@ -1,6 +1,6 @@
 # Generates game/source/ui_font_builtin.h: the 3DS client's own fonts (the stub skin of UI stage 7, used when
 # ui.w3dp has no fonts): DejaVu Sans Bold at 9, 12 and 16 px (Bitstream Vera licence: free to embed), Latin +
-# Cyrillic + the arrows and signs the UI draws, hinted by FreeType (PIL), one 4-bit alpha atlas 256 px wide.
+# Cyrillic + the arrows and signs the UI draws (and the PS Vita's button signs), hinted by FreeType (PIL), one 4-bit alpha atlas 256 px wide.
 #   python3 tools/gen_ui_font.py game/source/ui_font_builtin.h [font.ttf]
 import sys
 from PIL import Image, ImageDraw, ImageFont
@@ -9,7 +9,9 @@ TTF = sys.argv[2] if len(sys.argv) > 2 else "/usr/share/fonts/truetype/dejavu/De
 SIZES = [9, 12, 16]
 W = 256
 CPS = list(range(32, 127)) + [0xA0, 0xA9, 0xAB, 0xB0, 0xB7, 0xBB, 0xD7] + [0x401] + list(range(0x410, 0x450)) + [0x451] + \
-      [0x2013, 0x2014, 0x2022, 0x2026, 0x2116, 0x2190, 0x2191, 0x2192, 0x2193, 0x25B2, 0x25B6, 0x25BC, 0x25C0, 0x25C6, 0x2709, 0x2713, 0x2715]
+      [0x2013, 0x2014, 0x2022, 0x2026, 0x2116, 0x2190, 0x2191, 0x2192, 0x2193, 0x25B2, 0x25B6, 0x25BC, 0x25C0, 0x25C6, 0x2709, 0x2713, 0x2715] + \
+      [0x25A1, 0x25B3, 0x25CB]   # the PS Vita's buttons: square, triangle, circle (cross: 0x2715)
+CPS = sorted(set(CPS))   # (FontView::find searches the glyphs by code point)
 
 def main():
     fonts, glyphs, placed = [], [], []

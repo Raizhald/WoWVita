@@ -3,12 +3,21 @@
 #include <algorithm>
 
 namespace {
-const W3dUiGlyph* glyphOf(const ui::FontView& f, uint32_t cp) {
-    if (const W3dUiGlyph* g = f.find(cp)) return g;
-    if (cp == 0xA0) return f.find(' ');
-    if (cp == 0x401) return f.find(0x415);   // Yo without its dots rather than '?'
-    if (cp == 0x451) return f.find(0x435);
-    return f.find('?');
+// A glyph and the texture it is in: the size's font, else the built-in font of the size (signs a converted pack may lack,
+// the PS Vita's button signs among them), else the font's '?'.
+struct Gl {
+    const W3dUiGlyph* g;
+    uint16_t tex;
+};
+Gl glyphOf(const ui::FontView& f, ui::Font which, uint32_t cp) {
+    if (const W3dUiGlyph* g = f.find(cp)) return {g, f.tex};
+    if (cp == 0xA0) return {f.find(' '), f.tex};
+    if (cp == 0x401) return {f.find(0x415), f.tex};   // Yo without its dots rather than '?'
+    if (cp == 0x451) return {f.find(0x435), f.tex};
+    const ui::FontView& b = ui::assets().builtinFont(which);
+    if (b.glyphs != f.glyphs)
+        if (const W3dUiGlyph* g = b.find(cp)) return {g, b.tex};
+    return {f.find('?'), f.tex};
 }
 }  // namespace
 
@@ -60,7 +69,7 @@ int HudList::width(const std::string& s, ui::Font f) {
     const ui::FontView& fv = ui::assets().font(f);
     int w = 0;
     for (size_t i = 0; i < s.size();) {
-        const W3dUiGlyph* g = glyphOf(fv, ui::nextCodepoint(s, i));
+        const W3dUiGlyph* g = glyphOf(fv, f, ui::nextCodepoint(s, i)).g;
         if (g) w += g->advance;
     }
     return w;
@@ -73,11 +82,12 @@ int HudList::text(int x, int y, const std::string& s, uint32_t color, bool shado
     for (int pass = shadow ? 0 : 1; pass < 2; ++pass) {
         int pen = x + (pass == 0 ? 1 : 0), py = y + (pass == 0 ? 1 : 0);
         for (size_t i = 0; i < s.size();) {
-            const W3dUiGlyph* g = glyphOf(fv, ui::nextCodepoint(s, i));
+            const Gl gl = glyphOf(fv, f, ui::nextCodepoint(s, i));
+            const W3dUiGlyph* g = gl.g;
             if (!g) continue;
             if (g->w && g->h) {
                 int gx = pen + g->xoff, gy = py + g->yoff;
-                quad(gx, gy, gx + g->w, gy + g->h, g->x, g->y, g->x + g->w, g->y + g->h, pass == 0 ? black : color, fv.tex, kHudAlpha);
+                quad(gx, gy, gx + g->w, gy + g->h, g->x, g->y, g->x + g->w, g->y + g->h, pass == 0 ? black : color, gl.tex, kHudAlpha);
             }
             pen += g->advance;
         }
@@ -102,7 +112,7 @@ std::string HudList::fit(const std::string& s, int maxW, ui::Font f) {
     const ui::FontView& fv = ui::assets().font(f);
     for (size_t i = 0; i < s.size();) {
         size_t start = i;
-        const W3dUiGlyph* g = glyphOf(fv, ui::nextCodepoint(s, i));
+        const W3dUiGlyph* g = glyphOf(fv, f, ui::nextCodepoint(s, i)).g;
         int a = g ? g->advance : 0;
         if (w + a + dots > maxW) break;
         w += a;

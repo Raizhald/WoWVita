@@ -869,13 +869,15 @@ void hudBuildGame(HudList& l, const HudInput& in) {
             }
             for (int k = 0; k < 2; ++k) {   // ZL / ZR lit when their set (or both) is on
                 bool on = (pv.set & (1 << k)) != 0;
-                int x = k ? kHudW - 28 : 4, y = 155;   // above its cluster: ZL over the D-pad, ZR over the face buttons
-                l.rect(x, y, 24, 11, on ? hudRgba(120, 90, 20, 220) : hudRgba(0, 0, 0, 120));
-                l.textCentered(x + 12, y, btnName(k ? Btn::ZR : Btn::ZL), on ? kGold : kGrey, false);
+                // WoWVita: touch buttons (main.cpp kModBox): a tap switches the set on / off
+                int x = k ? kHudW - 34 : 2, y = 151;   // above its cluster: ZL over the D-pad, ZR over the face buttons
+                l.rect(x, y, 32, 15, on ? hudRgba(120, 90, 20, 230) : hudRgba(0, 0, 0, 150));
+                l.outline(x, y, 32, 15, on ? kGold : hudRgba(150, 150, 150, 200));
+                l.textCentered(x + 16, y + 2, btnName(k ? Btn::ZR : Btn::ZL), on ? kGold : kGrey, false);
             }
             char t[16];
             snprintf(t, sizeof t, "p%d", pv.page + 1);
-            l.text(32, 155, t, kGrey);
+            l.text(38, 154, t, kGrey);
         }
     }
     // ---- UI stage 8: the experience bar along the bottom edge, like the original's above its action bar: purple, blue

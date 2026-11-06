@@ -1033,18 +1033,35 @@ int main() {
             touchPosition tp{};
             if (held & KEY_TOUCH) hidTouchRead(&tp);
 #if defined(W3D_COMPAT)
-            {   // WoWVita: a tap on the world selects the unit under the finger; a tap on the selected one interacts
-                if (worldTap) {
+            // WoWVita: the hotbar sets' L2 / R2 (ZL / ZR) are touch buttons over the bars (hud_game.cpp): a tap latches
+            // the button on, the next tap off - no rear touch, no finger held on the screen
+            static bool latchZL = false, latchZR = false;
+            const u32 latchedBefore = (latchZL ? KEY_ZL : 0) | (latchZR ? KEY_ZR : 0);
+            if (padCfg.scheme == PadScheme::Classic) latchZL = latchZR = false;   // (Classic has no sets on ZL / ZR)
+            {   // a tap on the world selects the unit under the finger; a tap on the selected one interacts
+                // (the buttons' boxes, generous for a finger: top-screen pixels around 2..34 / 366..398 x 151..166)
+                const bool onZL = worldTap && worldTapX < 52 && worldTapY >= 136 && worldTapY < 180;
+                const bool onZR = worldTap && worldTapX >= kHudW - 52 && worldTapY >= 136 && worldTapY < 180;
+                if (padCfg.scheme != PadScheme::Classic && (onZL || onZR)) {
+                    if (onZL) latchZL = !latchZL;
+                    else latchZR = !latchZR;
+                } else if (worldTap) {
                     const uint64_t hit = unitAtScreen(gs, cam, worldTapX, worldTapY, g_login.sessionMs());
                     if (hit && hit == gs.target()) down |= padCfg.scheme == PadScheme::Classic ? KEY_A : KEY_Y;
                     else if (hit) gs.setTarget(hit, g_login.sessionMs());
                 }
             }
+            const u32 latched = (latchZL ? KEY_ZL : 0) | (latchZR ? KEY_ZR : 0);
+            held |= latched;
+            down |= latched & ~latchedBefore;
 #endif
             PadInput pi;
             pi.down = down;
             pi.held = held;
             pi.up = hidKeysUp();
+#if defined(W3D_COMPAT)
+            pi.up |= latchedBefore & ~latched;
+#endif
             pi.lx = std::clamp(cpRaw.dx / 156.0f, -1.0f, 1.0f);
             pi.ly = std::clamp(cpRaw.dy / 156.0f, -1.0f, 1.0f);
             pi.rx = std::clamp(csRaw.dx / 156.0f, -1.0f, 1.0f);

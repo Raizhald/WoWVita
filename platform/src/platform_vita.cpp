@@ -3,7 +3,7 @@
 // Controls (the 3DS buttons the game reads):
 //   left stick -> Circle Pad          right stick -> C-Stick         D-pad, L, R, START, SELECT -> the same
 //   Cross / Circle -> A / B (swapped when the system's enter button is Circle, as on Japanese consoles)
-//   Triangle -> X   Square -> Y       rear touch panel, left / right half -> ZL / ZR
+//   Triangle -> X   Square -> Y       ZL / ZR (shown as L2 / R2): touch buttons over the hotbars (main.cpp)
 //   front touch on the touch screen's rectangle (layout.cpp) -> the 3DS touch screen
 //   two fingers on the front panel -> the next screen layout (layout.cpp: one screen + touch panel, side by side,
 //   big top screen + small touch screen)
@@ -100,12 +100,7 @@ void readInput() {
     if (g_ry >= th) k |= KEY_CSTICK_UP;
     if (g_ry <= -th) k |= KEY_CSTICK_DOWN;
 
-    // rear panel: ZL / ZR
-    SceTouchData rear;
-    memset(&rear, 0, sizeof rear);
-    sceTouchPeek(SCE_TOUCH_PORT_BACK, &rear, 1);
-    const int rearMid = (g_rear.minAaX + g_rear.maxAaX) / 2;
-    for (unsigned i = 0; i < rear.reportNum && i < 8; ++i) k |= rear.report[i].x < rearMid ? KEY_ZL : KEY_ZR;
+    // (ZL / ZR: touch buttons over the hotbars, game/source/main.cpp - the rear panel is not used)
 
     // front panel: the touch screen; two fingers switch the layout
     SceTouchData front;

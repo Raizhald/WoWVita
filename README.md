@@ -82,7 +82,7 @@ Usage is described in [`docs/upstream/README.md`](docs/upstream/README.md).
 | Cross, Circle (swapped when the system's enter button is Circle) | A, B |
 | Triangle, Square | X, Y |
 | D-pad, L, R, START, SELECT | the same |
-| rear touch panel, left / right half (shown as **L2 / R2**) | ZL / ZR |
+| touch buttons **L2 / R2** over the hotbars (a tap switches the set on, the next tap off) | ZL / ZR |
 | front touch | the touch screen (see *Screen layouts*); a tap on a unit in the world selects it, again: interact |
 | two fingers on the front panel | the next screen layout |
 

@@ -287,7 +287,8 @@ PackIndex* g_index = nullptr;
 // buffered fread after an fseek refills its whole buffer from an aligned offset (a 10 KB texture cost a 64-128 KB read
 // from the card); the sdmc device's read() is one FSFILE_Read of exactly the size asked.
 // WoWVita: two IO workers (kWorkers), each with its own descriptors (lseek + read is not safe on a shared one).
-#if defined(W3D_COMPAT)
+// (off for now: the Vita build with them stopped at start-up - see STATUS.md; W3D_IO_FAST=1 turns them on)
+#if defined(W3D_COMPAT) && defined(W3D_IO_FAST)
 constexpr int kWorkers = 2;
 #else
 constexpr int kWorkers = 1;
@@ -476,7 +477,7 @@ constexpr uint32_t kGlueGap = 48 * 1024, kGlueSpan = 1024 * 1024;
 void takeNeighbours(Job* j, std::vector<Job*>& batch) {
     batch.clear();
     batch.push_back(j);
-#if defined(W3D_COMPAT)
+#if defined(W3D_COMPAT) && defined(W3D_IO_FAST)
     uint32_t lo = j->offset, hi = j->offset + j->size;
     for (bool grew = true; grew;) {   // grow the span by any queued job of the file within kGlueGap of it
         grew = false;
@@ -502,7 +503,8 @@ void runBatch(std::vector<Job*>& batch, int worker) {
     if (batch.size() == 1) { runJob(batch[0], worker); return; }
     uint32_t lo = UINT32_MAX, hi = 0;
     for (Job* j : batch) { lo = std::min(lo, j->offset); hi = std::max(hi, j->offset + j->size); }
-    static thread_local std::vector<uint8_t> buf;
+    static std::vector<uint8_t> bufs[kWorkers];   // (one per worker; no thread_local on the Vita)
+    std::vector<uint8_t>& buf = bufs[worker];
     buf.resize(hi - lo);
     const int file = batch[0]->file;
     const int f = file < PackIndex::kMaxFiles ? g_ioFilesW[worker][file] : -1;

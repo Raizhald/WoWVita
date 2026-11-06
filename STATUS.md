@@ -27,6 +27,12 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - Výkon (benchmark Northshire, po VBO): průměr 48,8 FPS, běžný snímek 17 ms (60 FPS); zbývají zaseknutí u nových dlaždic
   (oprava „views“ v `de9d3a4`, na Vitě zatím neměřená) a jednorázový překlad shaderů (obloha, voda, efekty).
 - Zbývá: celá hra (`prevod-vse.cmd`), delší hraní online (souboje, questy, chat, paměť).
+- **Ovládání (6. 11. 2026):** nápisy tlačítek Vity (✕ ○ △ □, L2/R2) v celém rozhraní; klepnutí na jednotku ve světě
+  ji vybere, další klepnutí na vybranou interaguje – na Vitě ověřeno, funguje. Panel se otevírá jen z náhledu v rohu.
+- **Rychlejší načítání (slučování čtení + 2. čtecí vlákno, `W3D_IO_FAST`) je VYPNUTÉ:** build s ním se na Vitě zasekl
+  při startu. Příčina zatím neznámá – potřeba `perf_prev_events.txt` ze zaseknutého spuštění (podezřelé:
+  `thread_local` buffer – už nahrazen, souběh dvou vláken).
+- Autorovi WoW3DS odeslána žádost o svolení ke zveřejnění (6. 11. 2026); do odpovědi repozitář soukromý.
 
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.

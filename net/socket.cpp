@@ -156,6 +156,7 @@ bool TcpSocket::beginConnect(const std::string& host, uint16_t port, std::string
     ioctlsocket(s, FIONBIO, &nb);
 #elif defined(__vita__)
     // newlib's fcntl() does not reach SceNet sockets; SO_NONBLOCK maps onto SCE_NET_SO_NBIO.
+    int one = 1;
     setsockopt(s, SOL_SOCKET, SO_NONBLOCK, (const char*)&one, sizeof one);
 #else
     fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);

@@ -21,7 +21,7 @@ FetchContent_Declare(wowee GIT_REPOSITORY https://github.com/Kelsidavis/WoWee GI
 FetchContent_MakeAvailable(glm meshoptimizer rgetc1 wowee)
 
 # StormLib (MIT): read the client's MPQ archives directly, no extraction step.
-option(W3D_CASC "Read the modern client (WoW Forever) through CascLib" ON)
+option(W3D_CASC "Read the modern client (WoW Forever) through CascLib" OFF)   # WoWVita: WoW Forever (CASC) data not used; net/forever is not in this repo
 if(W3D_CASC)
   enable_language(C)
 endif()

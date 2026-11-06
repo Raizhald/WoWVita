@@ -1,0 +1,72 @@
+name: Bug report
+description: Something does not work, crashes or looks wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please do **not** attach game files (MPQ, converted `.w3dp` packs): they contain data from the game.
+  - type: input
+    id: version
+    attributes:
+      label: WoWVita version
+      description: The release you installed (e.g. 0.1.0)
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: console
+    attributes:
+      label: Console
+      options:
+        - PS Vita 1000 (OLED)
+        - PS Vita 2000 (Slim)
+        - PS TV
+    validations:
+      required: true
+  - type: dropdown
+    id: storage
+    attributes:
+      label: Storage
+      options:
+        - Sony memory card
+        - SD2Vita (microSD)
+        - USB (PS TV)
+        - Other / not sure
+  - type: input
+    id: server
+    attributes:
+      label: Server
+      description: The server address you play on, or "Offline"
+      placeholder: "logon.microbot-wow.net"
+  - type: dropdown
+    id: data
+    attributes:
+      label: Converted game data
+      options:
+        - convert-test.cmd (Elwynn Forest + Northshire)
+        - convert-all.cmd (the whole game)
+        - None (built-in test region)
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what happened instead. Where in the world (zone, place)?
+      placeholder: |
+        1. Logged in, entered the world in Goldshire
+        2. Tapped the vendor
+        3. The game froze
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Please attach (drag into this box) from `ux0:data/wowvita/` on the Vita, copied right after the problem:
+        `perf_events.txt` (or `perf_prev_events.txt` if you started the game again since), `report.txt` and `crash.txt` if there is one.
+  - type: textarea
+    id: media
+    attributes:
+      label: Photo or video
+      description: A photo of the screen or a short video helps a lot.

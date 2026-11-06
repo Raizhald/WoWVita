@@ -42,4 +42,6 @@ The converter uses [WoWee](https://github.com/Kelsidavis/WoWee) (MIT); quest dat
 Unofficial fan project, not affiliated with Blizzard Entertainment or Sony. World of Warcraft is a trademark of
 Blizzard Entertainment.
 
+**Found a bug?** [Report it here](../../issues/new/choose) - please attach `perf_events.txt` from `ux0:data/wowvita/`.
+
 Building from source: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).

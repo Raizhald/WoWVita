@@ -20,7 +20,13 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - **Skutečná herní data (6. 11. 2026):** převodník pro Windows (`.github/workflows/converter.yml`, větev `builds-converter`,
   `tools/windows/prevod-test.cmd`) převedl plného klienta 1.12.1 (rozhraní, zvuk, Elwynn Forest + Northshire); na Vitě
   login s pozadím a logem hry, Northshire Abbey, terén, budovy, stromy.
-- Zbývá ověřit: IME (klávesnice), přihlášení na server, výkon a paměť s daty, celá hra (`prevod-vse.cmd`).
+- **Online (6. 11. 2026):** Microbot WoW (dřív NycterMoon, vMaNGOS 1.12.1, `logon.microbot-wow.net`, bez Wardenu):
+  přihlášení, výběr realmu, vytvoření postavy (rasa, povolání, vzhled, jméno přes IME), vstup do světa
+  v Northshire, pohyb, HUD. Elysium Project (`logon.elysium-project.org`): přihlášení a realmy ano, herní server ne
+  (Warden – klient ho neumí a umět nebude).
+- Výkon (benchmark Northshire, po VBO): průměr 48,8 FPS, běžný snímek 17 ms (60 FPS); zbývají zaseknutí u nových dlaždic
+  (oprava „views“ v `de9d3a4`, na Vitě zatím neměřená) a jednorázový překlad shaderů (obloha, voda, efekty).
+- Zbývá: celá hra (`prevod-vse.cmd`), delší hraní online (souboje, questy, chat, paměť).
 
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.

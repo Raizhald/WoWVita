@@ -33,6 +33,10 @@ void layoutNextMode();
 bool layoutPanelOpen();    // the touch screen is shown full size (always, except mode 2 with the panel closed)
 Rect layoutTopMax();       // the largest top-screen rectangle of all modes (the render target's size)
 
+// c3d_gl.cpp: linear / VRAM allocations (vertex and index data become GL buffers)
+void gpuMemAdded(void* p, size_t size);
+void gpuMemRemoved(void* p);
+
 // console.cpp: libctru's text console on the touch screen
 bool consoleShown();
 void consoleHide();

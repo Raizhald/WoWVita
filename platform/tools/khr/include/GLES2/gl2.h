@@ -97,6 +97,10 @@ typedef float GLclampf; typedef intptr_t GLintptr; typedef ptrdiff_t GLsizeiptr;
 #define GL_COMPILE_STATUS 0x8B81
 #define GL_LINK_STATUS 0x8B82
 #define GL_INFO_LOG_LENGTH 0x8B84
+#define GL_ARRAY_BUFFER 0x8892
+#define GL_ELEMENT_ARRAY_BUFFER 0x8893
+#define GL_STATIC_DRAW 0x88E4
+#define GL_DYNAMIC_DRAW 0x88E8
 #define GL_FRAMEBUFFER 0x8D40
 #define GL_RENDERBUFFER 0x8D41
 #define GL_RGBA4 0x8056
@@ -110,6 +114,11 @@ typedef float GLclampf; typedef intptr_t GLintptr; typedef ptrdiff_t GLsizeiptr;
 void glActiveTexture(GLenum);
 void glAttachShader(GLuint, GLuint);
 void glBindAttribLocation(GLuint, GLuint, const GLchar*);
+void glBindBuffer(GLenum, GLuint);
+void glBufferData(GLenum, GLsizeiptr, const void*, GLenum);
+void glBufferSubData(GLenum, GLintptr, GLsizeiptr, const void*);
+void glDeleteBuffers(GLsizei, const GLuint*);
+void glGenBuffers(GLsizei, GLuint*);
 void glBindFramebuffer(GLenum, GLuint);
 void glBindRenderbuffer(GLenum, GLuint);
 void glBindTexture(GLenum, GLuint);

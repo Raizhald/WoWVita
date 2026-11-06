@@ -80,14 +80,71 @@ TexRec* findTexContaining(const void* p) {
     return nullptr;
 }
 
+// ================================================================== vertex / index buffers
+// The 3DS GPU reads vertices and indices straight from linear / VRAM memory. Handing those pointers to GL as client
+// arrays makes vitaGL copy every buffer on every draw (a terrain tile is one buffer drawn piece by piece: tens of copies
+// of it a frame). Instead every linear / VRAM allocation is known here (ctru_common.cpp tells), gets a GL buffer the
+// first time a draw reads it, and afterwards only the ranges the game flushes (GSPGPU_FlushDataCache: the 3DS needs
+// that flush before the GPU reads new data) are sent again.
+struct BufRec {
+    u32 size = 0;
+    GLuint gl = 0;
+    uintptr_t dirtyLo = UINTPTR_MAX, dirtyHi = 0;   // flushed since the last upload (absolute addresses)
+};
+// (never destroyed: linear memory is still freed by other static destructors at exit)
+std::mutex& g_bufLock = *new std::mutex;    // allocations come and go on the streamer's threads too
+std::map<uintptr_t, BufRec>& g_bufs = *new std::map<uintptr_t, BufRec>;   // every linear / VRAM allocation
+std::vector<GLuint>& g_glBufToDelete = *new std::vector<GLuint>;
+bool g_useVbo = true;                        // W3D_NO_VBO=1 (PC test): the old client arrays, for comparison
+
 void markDirtyRange(const void* p, u32 size) {
     if (!p || !size) return;
-    std::lock_guard<std::mutex> g(g_texLock);
     uintptr_t a = (uintptr_t)p, e = a + size;
-    auto it = g_texByData.upper_bound(a);
-    if (it != g_texByData.begin()) --it;
-    for (; it != g_texByData.end() && it->first < e; ++it)
-        if (it->first + it->second.total > a) it->second.dirty = true;
+    {
+        std::lock_guard<std::mutex> g(g_texLock);
+        auto it = g_texByData.upper_bound(a);
+        if (it != g_texByData.begin()) --it;
+        for (; it != g_texByData.end() && it->first < e; ++it)
+            if (it->first + it->second.total > a) it->second.dirty = true;
+    }
+    std::lock_guard<std::mutex> g(g_bufLock);
+    auto it = g_bufs.upper_bound(a);
+    if (it != g_bufs.begin()) --it;
+    for (; it != g_bufs.end() && it->first < e; ++it) {
+        BufRec& b = it->second;
+        const uintptr_t lo = std::max(a, it->first), hi = std::min(e, it->first + b.size);
+        if (!b.gl || lo >= hi) continue;
+        b.dirtyLo = std::min(b.dirtyLo, lo);
+        b.dirtyHi = std::max(b.dirtyHi, hi);
+    }
+}
+
+// The GL buffer holding p (uploaded / brought up to date now) and p's offset in it; 0 when p is not GPU memory.
+GLuint bufferFor(const void* p, GLenum target, uintptr_t* offset) {
+    if (!g_useVbo || !p) return 0;
+    const uintptr_t a = (uintptr_t)p;
+    std::lock_guard<std::mutex> g(g_bufLock);
+    auto it = g_bufs.upper_bound(a);
+    if (it == g_bufs.begin()) return 0;
+    --it;
+    BufRec& b = it->second;
+    if (a >= it->first + b.size) return 0;
+    if (!b.gl) {
+        glGenBuffers(1, &b.gl);
+        glBindBuffer(target, b.gl);
+        glBufferData(target, b.size, (const void*)it->first, GL_DYNAMIC_DRAW);
+        b.dirtyLo = UINTPTR_MAX;
+        b.dirtyHi = 0;
+    } else {
+        glBindBuffer(target, b.gl);
+        if (b.dirtyLo < b.dirtyHi) {
+            glBufferSubData(target, (GLintptr)(b.dirtyLo - it->first), (GLsizeiptr)(b.dirtyHi - b.dirtyLo), (const void*)b.dirtyLo);
+            b.dirtyLo = UINTPTR_MAX;
+            b.dirtyHi = 0;
+        }
+    }
+    *offset = a - it->first;
+    return b.gl;
 }
 
 int fmtBits(GPU_TEXCOLOR f) {
@@ -904,7 +961,14 @@ bool prepareDraw() {
             const int csz = fmt == GPU_FLOAT ? 4 : fmt == GPU_SHORT ? 2 : 1;
             off = (off + csz - 1) / csz * csz;
             const int reg = (int)((ai.permutation >> (loader * 4)) & 0xF);
-            glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, (const u8*)bc.ptr + off);
+            const u8* src = (const u8*)bc.ptr + off;
+            uintptr_t o = 0;
+            if (bufferFor(src, GL_ARRAY_BUFFER, &o)) {
+                glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, (const void*)o);
+            } else {
+                glBindBuffer(GL_ARRAY_BUFFER, 0);
+                glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, src);
+            }
             enabled |= 1u << reg;
             off += attrSize(fmt, cnt);
         }
@@ -918,6 +982,7 @@ bool prepareDraw() {
         }
     }
     G.attribEnabled = enabled;
+    glBindBuffer(GL_ARRAY_BUFFER, 0);   // (the pointers above keep their buffers; client arrays elsewhere need 0)
     return true;
 }
 
@@ -1048,6 +1113,7 @@ bool C3D_Init(size_t cmdBufSize) {
     if (S.inited) return true;
     if (!compat::platformInitGL()) return false;
     S.inited = true;
+    if (const char* e = getenv("W3D_NO_VBO")) g_useVbo = *e != '1';
     for (int i = 0; i < 6; ++i) C3D_TexEnvInit(&S.env[i]);
     AttrInfo_Init(&S.attr);
     BufInfo_Init(&S.buf);
@@ -1100,7 +1166,14 @@ void C3D_DrawArrays(GPU_Primitive_t primitive, int first, int size) {
 
 void C3D_DrawElements(GPU_Primitive_t primitive, int count, int type, const void* indices) {
     if (!prepareDraw()) return;
-    glDrawElements(glPrim(primitive), count, type == C3D_UNSIGNED_SHORT ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE, indices);
+    const GLenum t = type == C3D_UNSIGNED_SHORT ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+    uintptr_t o = 0;
+    if (bufferFor(indices, GL_ELEMENT_ARRAY_BUFFER, &o)) {
+        glDrawElements(glPrim(primitive), count, t, (const void*)o);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+    } else {
+        glDrawElements(glPrim(primitive), count, t, indices);
+    }
 }
 
 void C3D_ImmDrawBegin(GPU_Primitive_t primitive) { (void)primitive; }
@@ -1478,6 +1551,13 @@ bool C3D_FrameBegin(u8 flags) {
             g_glTexToDelete.clear();
         }
     }
+    {
+        std::lock_guard<std::mutex> g(g_bufLock);
+        if (!g_glBufToDelete.empty()) {
+            glDeleteBuffers((GLsizei)g_glBufToDelete.size(), g_glBufToDelete.data());
+            g_glBufToDelete.clear();
+        }
+    }
     return true;
 }
 
@@ -1580,5 +1660,22 @@ namespace compat {
 void recompose() {
     compose();
     if (S.drawOn) bindTarget(S.drawOn);
+}
+}  // namespace compat
+
+// ctru_common.cpp: every linear / VRAM allocation and its end (any thread)
+namespace compat {
+void gpuMemAdded(void* p, size_t size) {
+    std::lock_guard<std::mutex> g(g_bufLock);
+    BufRec r;
+    r.size = (u32)size;
+    g_bufs[(uintptr_t)p] = r;
+}
+void gpuMemRemoved(void* p) {
+    std::lock_guard<std::mutex> g(g_bufLock);
+    auto it = g_bufs.find((uintptr_t)p);
+    if (it == g_bufs.end()) return;
+    if (it->second.gl) g_glBufToDelete.push_back(it->second.gl);
+    g_bufs.erase(it);
 }
 }  // namespace compat

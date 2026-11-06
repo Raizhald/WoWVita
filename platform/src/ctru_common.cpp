@@ -1,6 +1,8 @@
 // ctru_common.cpp — libctru system services on POSIX / VitaSDK: time, threads, locks, memory, gfx/apt stand-ins.
 #include <3ds.h>
 
+#include "platform.h"
+
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -19,7 +21,16 @@
 extern "C" {
 
 // Symbols the 3DS build gets from heaps.cpp / libctru (read by main.cpp and the perf log).
-u32 __ctru_heap = 0, __ctru_heap_size = 0, __ctru_linear_heap = 0, __ctru_linear_heap_size = 0;
+// __ctru_heap_size: the game's free-heap figure is __ctru_heap_size - mallinfo().uordblks (streamer.cpp keeps only the
+// 3 x 3 tiles around the camera below 3 MB), so it is the whole malloc heap here: newlib's on the Vita.
+#if defined(__vita__)
+#ifndef W3D_VITA_HEAP_MB
+#define W3D_VITA_HEAP_MB 280
+#endif
+u32 __ctru_heap = 0, __ctru_heap_size = (u32)W3D_VITA_HEAP_MB << 20, __ctru_linear_heap = 0, __ctru_linear_heap_size = 0;
+#else
+u32 __ctru_heap = 0, __ctru_heap_size = 512u << 20, __ctru_linear_heap = 0, __ctru_linear_heap_size = 0;
+#endif
 
 // ------------------------------------------------------------------ time
 static u64 monoUs() {
@@ -311,8 +322,11 @@ static void* allocKind(size_t size, size_t align, u32 kind) {
     h->size = (u32)size;
     h->kind = kind;
     h->offset = (u32)(p - (uintptr_t)raw);
-    std::lock_guard<std::mutex> g(g_memLock);
-    (kind ? g_vramUsed : g_linearUsed) += size;
+    {
+        std::lock_guard<std::mutex> g(g_memLock);
+        (kind ? g_vramUsed : g_linearUsed) += size;
+    }
+    compat::gpuMemAdded((void*)p, size);
     return (void*)p;
 }
 
@@ -335,6 +349,7 @@ void linearFree(void* mem) {
         std::lock_guard<std::mutex> g(g_memLock);
         (h->kind ? g_vramUsed : g_linearUsed) -= h->size;
     }
+    compat::gpuMemRemoved(mem);
     h->magic = 0;
     free((u8*)mem - h->offset);
 }

@@ -14,9 +14,9 @@ No game files are included. Do not share your converted files.
 ## Install
 
 1. Install **`WoWVita.vpk`** with VitaShell.
-2. Unpack the converter on your PC and run **`prevod-test.cmd`** (Elwynn Forest and Northshire, tens of minutes) or
-   **`prevod-vse.cmd`** (the whole world, hours). Set the path to your WoW `Data` folder at the top of the file.
-3. Copy everything from the output folder (except `log_*.txt`) to **`ux0:data/wowvita/`** on the Vita.
+2. Unpack the converter on your PC and drag your WoW **`Data`** folder onto **`convert-test.cmd`** (Elwynn Forest and
+   Northshire, tens of minutes) or **`convert-all.cmd`** (the whole world, hours).
+3. Copy everything from the `wowvita` folder it makes (except `log_*.txt`) to **`ux0:data/wowvita/`** on the Vita.
 4. Start **WoWVita**, tap the small panel in the corner, enter the server, your account and password, tap **Login**.
 
 ## Controls

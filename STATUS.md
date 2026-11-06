@@ -18,7 +18,7 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - Offline svět: terén, stromy, obloha; ladicí panel. **59,9 FPS**, CPU 16,7 ms, GPU 3,3 ms (velká rezerva GPU).
 - Ověřeno: obě páčky, D-pad, dotykový panel (otevření, zavření, tlačítka), mlha, zvuk (testovací tón po startu).
 - **Skutečná herní data (6. 11. 2026):** převodník pro Windows (`.github/workflows/converter.yml`, větev `builds-converter`,
-  `tools/windows/prevod-test.cmd`) převedl plného klienta 1.12.1 (rozhraní, zvuk, Elwynn Forest + Northshire); na Vitě
+  `tools/windows/convert-test.cmd`) převedl plného klienta 1.12.1 (rozhraní, zvuk, Elwynn Forest + Northshire); na Vitě
   login s pozadím a logem hry, Northshire Abbey, terén, budovy, stromy.
 - **Online (6. 11. 2026):** Microbot WoW (dřív NycterMoon, vMaNGOS 1.12.1, `logon.microbot-wow.net`, bez Wardenu):
   přihlášení, výběr realmu, vytvoření postavy (rasa, povolání, vzhled, jméno přes IME), vstup do světa
@@ -26,7 +26,7 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
   (Warden – klient ho neumí a umět nebude).
 - Výkon (benchmark Northshire, po VBO): průměr 48,8 FPS, běžný snímek 17 ms (60 FPS); zbývají zaseknutí u nových dlaždic
   (oprava „views“ v `de9d3a4`, na Vitě zatím neměřená) a jednorázový překlad shaderů (obloha, voda, efekty).
-- Zbývá: celá hra (`prevod-vse.cmd`), delší hraní online (souboje, questy, chat, paměť).
+- Zbývá: celá hra (`convert-all.cmd`), delší hraní online (souboje, questy, chat, paměť).
 - **Ovládání (6. 11. 2026):** nápisy tlačítek Vity (✕ ○ △ □, L2/R2) v celém rozhraní; klepnutí na jednotku ve světě
   ji vybere, další klepnutí na vybranou interaguje – na Vitě ověřeno, funguje. Panel se otevírá jen z náhledu v rohu.
 - **Rychlejší načítání (slučování čtení + 2. čtecí vlákno, `W3D_IO_FAST`) je VYPNUTÉ:** build s ním se na Vitě zasekl

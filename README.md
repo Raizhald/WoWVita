@@ -7,8 +7,9 @@ WoWVita is a fork of **[WoW3DS](https://github.com/ponuno/WoW3DS)**, the Nintend
 streaming, collision, characters, the network client, the whole game UI) comes from WoW3DS; this fork drops the 3DS
 build and carries the client to the Vita. All credit for the client itself goes to the WoW3DS author.
 
-> **Licence.** The WoW3DS code has no licence file, so its author keeps all rights to it. Do not publish this fork
-> (or builds of it) without the WoW3DS author's permission. `tools/questdb/questdb.bin` and its script are GPL-3.0
+> **Permission.** The WoW3DS code has no licence file; its author (ponuno) gave permission to port it and release
+> WoWVita publicly on 6 November 2026 ("Sure thing. It would actually be super cool if you made a release.").
+> All rights to the WoW3DS code stay with its author. `tools/questdb/questdb.bin` and its script are GPL-3.0
 > (derived from Questie), see [`docs/upstream/README.md`](docs/upstream/README.md).
 
 No game data, textures, models or sounds are in this repository. You need your own legally obtained WoW 1.12.1 client

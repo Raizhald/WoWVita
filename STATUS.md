@@ -3,7 +3,7 @@
 Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původní větev 3DS je v gitu jako
 `upstream-main` (vzdálený repozitář `upstream`); vlastní vývoj jde ve větvi `main`.
 
-**Licence:** WoW3DS nemá licenční soubor – před zveřejněním forku je potřeba svolení autora WoW3DS.
+**Svolení:** autor WoW3DS (ponuno) 6. 11. 2026 na Redditu svolil k portu i veřejnému vydání („Sure thing. It would actually be super cool if you made a release.“). Kód WoW3DS dál bez licenčního souboru – v README ho uvádět jako autora.
 
 ## Co se při forku změnilo
 - Odstraněno vše jen pro 3DS: `Makefile` (devkitARM), balení CIA, `tools/armcheck`, starý `romfs/synth.w3dp` (formát 3),
@@ -32,7 +32,7 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - **Rychlejší načítání (slučování čtení + 2. čtecí vlákno, `W3D_IO_FAST`) je VYPNUTÉ:** build s ním se na Vitě zasekl
   při startu. Příčina zatím neznámá – potřeba `perf_prev_events.txt` ze zaseknutého spuštění (podezřelé:
   `thread_local` buffer – už nahrazen, souběh dvou vláken).
-- Autorovi WoW3DS odeslána žádost o svolení ke zveřejnění (6. 11. 2026); do odpovědi repozitář soukromý.
+- Autor WoW3DS svolil k vydání (6. 11. 2026). Upstream mezitím vydal 7.09/7.10 (Turtle WoW, opravy) – před vydáním sloučit.
 
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.
@@ -79,6 +79,6 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
   2. Přihlášení na server 1.12.1 (vMaNGOS); vyzkoušet IME klávesnici, `netcheck.vpk` pro samotnou síť.
   3. Paměť na Vitě s velkými daty (`-DW3D_VITA_HEAP_MB`, výchozí 280).
   4. Plán výše: HUD do jedné obrazovky, nativní vykreslování, `--target vita` v konvertoru.
-- **Licence:** kód WoW3DS nemá licenci – repozitář nechat soukromý, dokud autor WoW3DS nesvolí.
+- **Svolení k vydání:** dáno autorem WoW3DS 6. 11. 2026 (Reddit).
 - **Související projekt:** WoWee PSP port (github.com/SandstoneDev/WoWee-psp-port) – PSP, WoW 3.3.5a, MIT; na Vitě jen
   přes Adrenaline. Jiná verze hry i protokolu než WoWVita.

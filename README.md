@@ -83,7 +83,7 @@ Usage is described in [`docs/upstream/README.md`](docs/upstream/README.md).
 | Triangle, Square | X, Y |
 | D-pad, L, R, START, SELECT | the same |
 | rear touch panel, left / right half (shown as **L2 / R2**) | ZL / ZR |
-| front touch | the touch screen (see *Screen layouts*) |
+| front touch | the touch screen (see *Screen layouts*); a tap on a unit in the world selects it, again: interact |
 | two fingers on the front panel | the next screen layout |
 
 The game's prompts and hotbars show the Vita's buttons (✕ ○ △ □, L, R, L2, R2, sticks); the signs come from the
@@ -93,8 +93,10 @@ client's own font, so packs converted before need no new conversion (`game/sourc
 
 The client was made for the 3DS's two screens: the world on the top screen, the touch menus on the bottom one.
 
-- **One screen** (default): the world fills the display (906x544); the touch screen waits as a small preview in the
-  corner. Tap anywhere to open it as a large panel (x1.5), tap inside the panel to use it, tap outside to close it.
+- **One screen** (default): the world fills the display (906x544); the touch screen waits as a preview in the bottom
+  right corner. Tap the preview to open it as a large panel (x1.5), tap inside the panel to use it, tap outside to
+  close it. A tap on a creature, NPC or player in the world selects it; a tap on the selected one interacts
+  (talk, loot, attack) like □.
 - **Side by side:** the world 640x384 on the left, the touch screen 1:1 on the right, both always visible.
 - **Big world + small touch screen:** the world 906x544 with the touch screen (x0.8) in the corner, tapped directly.
 

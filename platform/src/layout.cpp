@@ -4,9 +4,10 @@
 //         960 = 640 + 320, so both are fully visible and the touch screen is tapped directly.
 // Mode 1: the top screen as large as the display allows (906x544) with the touch screen shrunk (x0.8) into the
 //         bottom right corner over it, tapped directly.
-// Mode 2 (one screen, the Vita default): the top screen 906x544; the touch screen is a small preview in the corner
-//         until the display is tapped. A tap anywhere opens it as a panel (x1.5, 480x360, finger-sized); taps inside
-//         the panel go to the game, a tap outside closes it. The tap that opens or closes the panel is not passed on.
+// Mode 2 (one screen, the Vita default): the top screen 906x544; the touch screen is a preview in the bottom right
+//         corner. A tap on the preview opens it as a panel (x1.5, 480x360, finger-sized); taps inside the panel go to
+//         the game, a tap outside closes it. A tap on the scene selects the unit under it (game/source/main.cpp:
+//         unitAtScreen; a tap on the selected unit interacts). The tap that opens or closes the panel is not passed on.
 #include "platform.h"
 
 namespace compat {
@@ -21,8 +22,10 @@ int g_mode = 0;   // the PC test's scripts are written for mode 0 (W3D_LAYOUT ch
 bool g_panel = false;      // mode 2: the touch-screen panel is open
 bool g_wasDown = false;
 bool g_gameTouch = false;  // the current touch started inside the touch screen: it goes to the game
+bool g_worldTap = false;   // a tap on the scene since the game last asked (compatWorldTap)
+int g_worldX = 0, g_worldY = 0;
 
-const int kPanelW = 480, kPanelH = 360, kThumbW = 96, kThumbH = 72, kMargin = 8;
+const int kPanelW = 480, kPanelH = 360, kThumbW = 128, kThumbH = 96, kMargin = 8;
 
 Rect panelRect() {
     const int W = displayWidth(), H = displayHeight();
@@ -35,6 +38,15 @@ void toTouch(const Rect& r, int dx, int dy, int* tx, int* ty) {
     int x = (dx - r.x) * 320 / r.w, y = (dy - r.y) * 240 / r.h;
     *tx = x < 0 ? 0 : x > 319 ? 319 : x;
     *ty = y < 0 ? 0 : y > 239 ? 239 : y;
+}
+
+// A tap on the scene: kept for the game in top-screen pixels (400x240), when it hit the top screen's picture.
+void worldTap(int dx, int dy) {
+    const Rect t = layoutTop();
+    if (!inside(t, dx, dy)) return;
+    g_worldX = (dx - t.x) * 400 / t.w;
+    g_worldY = (dy - t.y) * 240 / t.h;
+    g_worldTap = true;
 }
 
 }  // namespace
@@ -88,8 +100,11 @@ bool layoutTouch(bool down, int dx, int dy, int* tx, int* ty) {
         return false;
     }
     if (start) {
-        if (g_mode == 2 && !g_panel) {   // open the panel; this tap is only for that
-            g_panel = true;
+        if (g_mode == 2 && !g_panel) {   // the preview opens the panel (this tap is only for that); the scene: nothing
+            const int W = displayWidth(), H = displayHeight(), pad = 12;   // (a little around the preview counts)
+            const Rect thumb{W - kThumbW - kMargin - pad, H - kThumbH - kMargin - pad, kThumbW + 2 * pad, kThumbH + 2 * pad};
+            if (inside(thumb, dx, dy)) g_panel = true;
+            else worldTap(dx, dy);
             g_gameTouch = false;
             return false;
         }
@@ -98,6 +113,7 @@ bool layoutTouch(bool down, int dx, int dy, int* tx, int* ty) {
             g_panel = false;
             return false;
         }
+        if (!g_gameTouch) worldTap(dx, dy);   // modes 0 / 1: a tap on the top screen's picture
     }
     if (!g_gameTouch) return false;
     // a drag that leaves the touch screen stays on its edge, as on the 3DS
@@ -106,3 +122,12 @@ bool layoutTouch(bool down, int dx, int dy, int* tx, int* ty) {
 }
 
 }  // namespace compat
+
+// game/source/main.cpp: the last tap on the scene, once (top-screen pixels)
+extern "C" int compatWorldTap(int* x, int* y) {
+    if (!compat::g_worldTap) return 0;
+    compat::g_worldTap = false;
+    *x = compat::g_worldX;
+    *y = compat::g_worldY;
+    return 1;
+}

@@ -562,6 +562,43 @@ static void fail(const char* msg) {
     }
 }
 
+#if defined(W3D_COMPAT)
+// WoWVita (platform/src/layout.cpp): a tap on the scene, in top-screen pixels (400x240); 1 once per tap
+extern "C" int compatWorldTap(int* x, int* y);
+
+// The unit drawn under top-screen pixel (x, y): its box from the feet to the head (by its scale), widened to a finger;
+// of several the nearest to the camera, else the one whose middle is nearest within 28 px. 0: none.
+static uint64_t unitAtScreen(w3n::GameSession& g, const Camera& cam, int x, int y, uint32_t now) {
+    HudInput hi;
+    memcpy(hi.camPos, cam.pos, sizeof hi.camPos);
+    hi.camYaw = cam.yaw;
+    hi.camPitch = cam.pitch;
+    uint64_t best = 0, near = 0;
+    float bestDist = 1e9f, nearPx = 28.0f;
+    for (auto& [guid, o] : g.objects.all()) {
+        if (!o.hasPos || !o.isUnitLike() || o.self) continue;
+        float p[3];
+        o.positionAt(now, p);
+        const float dx = p[0] - cam.pos[0], dy = p[1] - cam.pos[1], dz = p[2] - cam.pos[2];
+        const float dist = sqrtf(dx * dx + dy * dy + dz * dz);
+        if (dist > 60.0f) continue;
+        float scale = o.fieldF(w3n::UF::OBJECT_SCALE_X);
+        if (!(scale > 0.05f && scale < 20.0f)) scale = 1.0f;
+        const float feet[3] = {p[0], p[1], p[2]}, head[3] = {p[0], p[1], p[2] + 2.0f * scale};
+        float fx, fy, hx, hy;
+        if (!hudProject(hi, feet, &fx, &fy) || !hudProject(hi, head, &hx, &hy)) continue;
+        const float h = std::max(fy - hy, 8.0f), halfW = std::max(h * 0.3f, 10.0f), cx = (fx + hx) * 0.5f;
+        if (x >= cx - halfW && x <= cx + halfW && y >= hy - 6 && y <= fy + 6) {
+            if (dist < bestDist) { bestDist = dist; best = guid; }
+        } else {
+            const float mx = x - cx, my = y - (fy + hy) * 0.5f, d = sqrtf(mx * mx + my * my);
+            if (d < nearPx) { nearPx = d; near = guid; }
+        }
+    }
+    return best ? best : near;
+}
+#endif
+
 int main() {
     crashInstall();   // 6.31: crash.txt on a CPU exception
     osSetSpeedupEnable(true);  // 804 MHz + L2 on New 3DS
@@ -930,6 +967,10 @@ int main() {
         perf::mark("input");
         hidScanInput();
         u32 down = hidKeysDown(), held = hidKeysHeld();
+#if defined(W3D_COMPAT)
+        int worldTapX = 0, worldTapY = 0;   // WoWVita: a tap on the scene this frame (taken every frame: none goes stale)
+        const bool worldTap = compatWorldTap(&worldTapX, &worldTapY) != 0;
+#endif
         if ((down & KEY_START) && g_login.phase() == LoginFlow::Phase::Offline) break;   // flying offline: START quits
         // The login screens (stage 4; the original client's screens since stage 5.29) own both screens and the buttons
         // until the world: login, realms, the characters and their creation.
@@ -991,6 +1032,15 @@ int main() {
             w3n::GameSession& gs = g_login.game();
             touchPosition tp{};
             if (held & KEY_TOUCH) hidTouchRead(&tp);
+#if defined(W3D_COMPAT)
+            {   // WoWVita: a tap on the world selects the unit under the finger; a tap on the selected one interacts
+                if (worldTap) {
+                    const uint64_t hit = unitAtScreen(gs, cam, worldTapX, worldTapY, g_login.sessionMs());
+                    if (hit && hit == gs.target()) down |= padCfg.scheme == PadScheme::Classic ? KEY_A : KEY_Y;
+                    else if (hit) gs.setTarget(hit, g_login.sessionMs());
+                }
+            }
+#endif
             PadInput pi;
             pi.down = down;
             pi.held = held;

@@ -17,7 +17,10 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - VPK se nainstaluje a spustí; login obrazovka v rozvržení „jedna obrazovka“ s náhledem panelu.
 - Offline svět: terén, stromy, obloha; ladicí panel. **59,9 FPS**, CPU 16,7 ms, GPU 3,3 ms (velká rezerva GPU).
 - Ověřeno: obě páčky, D-pad, dotykový panel (otevření, zavření, tlačítka), mlha, zvuk (testovací tón po startu).
-- Zbývá ověřit: IME (klávesnice), přihlášení na server, skutečná herní data (konvertor), paměť.
+- **Skutečná herní data (6. 11. 2026):** převodník pro Windows (`.github/workflows/converter.yml`, větev `builds-converter`,
+  `tools/windows/prevod-test.cmd`) převedl plného klienta 1.12.1 (rozhraní, zvuk, Elwynn Forest + Northshire); na Vitě
+  login s pozadím a logem hry, Northshire Abbey, terén, budovy, stromy.
+- Zbývá ověřit: IME (klávesnice), přihlášení na server, výkon a paměť s daty, celá hra (`prevod-vse.cmd`).
 
 ## Ověřeno na PC (po forku)
 - Build PC verze, login obrazovka, offline svět + pohyb, ladicí konzole na dotykové obrazovce.

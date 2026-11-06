@@ -82,20 +82,36 @@ TexRec* findTexContaining(const void* p) {
 
 // ================================================================== vertex / index buffers
 // The 3DS GPU reads vertices and indices straight from linear / VRAM memory. Handing those pointers to GL as client
-// arrays makes vitaGL copy every buffer on every draw (a terrain tile is one buffer drawn piece by piece: tens of copies
-// of it a frame). Instead every linear / VRAM allocation is known here (ctru_common.cpp tells), gets a GL buffer the
-// first time a draw reads it, and afterwards only the ranges the game flushes (GSPGPU_FlushDataCache: the 3DS needs
-// that flush before the GPU reads new data) are sent again.
+// arrays makes vitaGL copy every buffer on every draw. So every linear / VRAM allocation is known here (ctru_common.cpp
+// tells), and the ranges draws read from it become GL buffers ("views"): one per vertex buffer start (bc.ptr, as long as
+// the highest vertex any draw used) and one per index list. A view is uploaded once; afterwards only what the game
+// flushes (GSPGPU_FlushDataCache: the 3DS needs that flush before the GPU reads new data) is sent again.
+// Views are small on purpose: vitaGL copies a whole buffer when one in use is changed, and the streamer's pools are
+// tens of MB in one allocation (a buffer per allocation stalled 140-450 ms at every new tile).
+struct View {
+    u32 len = 0;
+    GLuint gl = 0;
+    u32 dirtyLo = 0xFFFFFFFF, dirtyHi = 0;   // flushed since the last upload (offsets in the view)
+    int maxCount = -1;                        // index views: the count maxIndex belongs to (-1: not known)
+    u32 maxIndex = 0;
+};
 struct BufRec {
     u32 size = 0;
-    GLuint gl = 0;
-    uintptr_t dirtyLo = UINTPTR_MAX, dirtyHi = 0;   // flushed since the last upload (absolute addresses)
+    std::map<uintptr_t, View> views;          // by start address
 };
 // (never destroyed: linear memory is still freed by other static destructors at exit)
 std::mutex& g_bufLock = *new std::mutex;    // allocations come and go on the streamer's threads too
 std::map<uintptr_t, BufRec>& g_bufs = *new std::map<uintptr_t, BufRec>;   // every linear / VRAM allocation
 std::vector<GLuint>& g_glBufToDelete = *new std::vector<GLuint>;
 bool g_useVbo = true;                        // W3D_NO_VBO=1 (PC test): the old client arrays, for comparison
+
+// the allocation containing address a (g_bufLock held)
+std::map<uintptr_t, BufRec>::iterator allocOf(uintptr_t a) {
+    auto it = g_bufs.upper_bound(a);
+    if (it == g_bufs.begin()) return g_bufs.end();
+    --it;
+    return a < it->first + it->second.size ? it : g_bufs.end();
+}
 
 void markDirtyRange(const void* p, u32 size) {
     if (!p || !size) return;
@@ -111,40 +127,58 @@ void markDirtyRange(const void* p, u32 size) {
     auto it = g_bufs.upper_bound(a);
     if (it != g_bufs.begin()) --it;
     for (; it != g_bufs.end() && it->first < e; ++it) {
-        BufRec& b = it->second;
-        const uintptr_t lo = std::max(a, it->first), hi = std::min(e, it->first + b.size);
-        if (!b.gl || lo >= hi) continue;
-        b.dirtyLo = std::min(b.dirtyLo, lo);
-        b.dirtyHi = std::max(b.dirtyHi, hi);
+        if (it->first + it->second.size <= a) continue;
+        for (auto& kv : it->second.views) {   // (a pool allocation has a few hundred views at most)
+            View& v = kv.second;
+            const uintptr_t lo = std::max(a, kv.first), hi = std::min(e, kv.first + v.len);
+            if (lo >= hi) continue;
+            v.dirtyLo = std::min(v.dirtyLo, (u32)(lo - kv.first));
+            v.dirtyHi = std::max(v.dirtyHi, (u32)(hi - kv.first));
+            v.maxCount = -1;
+        }
     }
 }
 
-// The GL buffer holding p (uploaded / brought up to date now) and p's offset in it; 0 when p is not GPU memory.
-GLuint bufferFor(const void* p, GLenum target, uintptr_t* offset) {
+// The GL buffer holding at least `need` bytes from p (made / brought up to date now, bound to target); 0 when p is not
+// GPU memory. *maxIndex (index views of `count` u8 / u16 indices): the largest index, kept until the data changes.
+GLuint viewFor(const void* p, u32 need, GLenum target, int count = -1, bool u16idx = false, u32* maxIndex = nullptr) {
     if (!g_useVbo || !p) return 0;
     const uintptr_t a = (uintptr_t)p;
     std::lock_guard<std::mutex> g(g_bufLock);
-    auto it = g_bufs.upper_bound(a);
-    if (it == g_bufs.begin()) return 0;
-    --it;
-    BufRec& b = it->second;
-    if (a >= it->first + b.size) return 0;
-    if (!b.gl) {
-        glGenBuffers(1, &b.gl);
-        glBindBuffer(target, b.gl);
-        glBufferData(target, b.size, (const void*)it->first, GL_DYNAMIC_DRAW);
-        b.dirtyLo = UINTPTR_MAX;
-        b.dirtyHi = 0;
+    auto al = allocOf(a);
+    if (al == g_bufs.end()) return 0;
+    const u32 room = (u32)(al->first + al->second.size - a);
+    if (need > room) need = room;
+    if (!need) return 0;
+    View& v = al->second.views[a];
+    if (!v.gl || v.len < need) {
+        if (!v.gl) glGenBuffers(1, &v.gl);
+        glBindBuffer(target, v.gl);
+        v.len = std::max(need, v.len);
+        if (v.len > room) v.len = room;
+        glBufferData(target, v.len, p, GL_STATIC_DRAW);
+        v.dirtyLo = 0xFFFFFFFF;
+        v.dirtyHi = 0;
+        v.maxCount = -1;
     } else {
-        glBindBuffer(target, b.gl);
-        if (b.dirtyLo < b.dirtyHi) {
-            glBufferSubData(target, (GLintptr)(b.dirtyLo - it->first), (GLsizeiptr)(b.dirtyHi - b.dirtyLo), (const void*)b.dirtyLo);
-            b.dirtyLo = UINTPTR_MAX;
-            b.dirtyHi = 0;
+        glBindBuffer(target, v.gl);
+        if (v.dirtyLo < v.dirtyHi) {
+            glBufferSubData(target, v.dirtyLo, v.dirtyHi - v.dirtyLo, (const u8*)p + v.dirtyLo);
+            v.dirtyLo = 0xFFFFFFFF;
+            v.dirtyHi = 0;
         }
     }
-    *offset = a - it->first;
-    return b.gl;
+    if (maxIndex) {
+        if (v.maxCount != count) {
+            u32 m = 0;
+            if (u16idx) { const u16* q = (const u16*)p; for (int i = 0; i < count; ++i) m = std::max<u32>(m, q[i]); }
+            else { const u8* q = (const u8*)p; for (int i = 0; i < count; ++i) m = std::max<u32>(m, q[i]); }
+            v.maxIndex = m;
+            v.maxCount = count;
+        }
+        *maxIndex = v.maxIndex;
+    }
+    return v.gl;
 }
 
 int fmtBits(GPU_TEXCOLOR f) {
@@ -892,7 +926,7 @@ GLenum attrType(int fmt) {
     }
 }
 
-bool prepareDraw() {
+bool prepareDraw(u32 vertices) {
     if (!S.drawOn) return false;
     Program* p = currentProgram();
     if (!p) return false;
@@ -949,6 +983,9 @@ bool prepareDraw() {
         const int count = (int)(bc.flags[1] >> 28);
         const int stride = (int)((bc.flags[1] >> 16) & 0xFFF);
         const u64 perm = (u64)bc.flags[0] | ((u64)(bc.flags[1] & 0xFFFF) << 32);
+        // one GL buffer for this vertex buffer: every vertex the draw can reach (its attributes are inside a stride)
+        const GLuint vbo = viewFor(bc.ptr, vertices * (u32)std::max(stride, 1), GL_ARRAY_BUFFER);
+        if (!vbo) glBindBuffer(GL_ARRAY_BUFFER, 0);
         int off = 0;
         for (int k = 0; k < count; ++k) {
             const int loader = (int)((perm >> (4 * k)) & 0xF);
@@ -961,14 +998,8 @@ bool prepareDraw() {
             const int csz = fmt == GPU_FLOAT ? 4 : fmt == GPU_SHORT ? 2 : 1;
             off = (off + csz - 1) / csz * csz;
             const int reg = (int)((ai.permutation >> (loader * 4)) & 0xF);
-            const u8* src = (const u8*)bc.ptr + off;
-            uintptr_t o = 0;
-            if (bufferFor(src, GL_ARRAY_BUFFER, &o)) {
-                glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, (const void*)o);
-            } else {
-                glBindBuffer(GL_ARRAY_BUFFER, 0);
-                glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, src);
-            }
+            if (vbo) glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, (const void*)(uintptr_t)off);
+            else glVertexAttribPointer(reg, cnt, attrType(fmt), GL_FALSE, stride, (const u8*)bc.ptr + off);
             enabled |= 1u << reg;
             off += attrSize(fmt, cnt);
         }
@@ -1160,16 +1191,26 @@ void C3D_SetScissor(GPU_SCISSORMODE mode, u32 left, u32 top, u32 right, u32 bott
 }
 
 void C3D_DrawArrays(GPU_Primitive_t primitive, int first, int size) {
-    if (!prepareDraw()) return;
+    if (size <= 0 || !prepareDraw((u32)(first + size))) return;
     glDrawArrays(glPrim(primitive), first, size);
 }
 
 void C3D_DrawElements(GPU_Primitive_t primitive, int count, int type, const void* indices) {
-    if (!prepareDraw()) return;
-    const GLenum t = type == C3D_UNSIGNED_SHORT ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
-    uintptr_t o = 0;
-    if (bufferFor(indices, GL_ELEMENT_ARRAY_BUFFER, &o)) {
-        glDrawElements(glPrim(primitive), count, t, (const void*)o);
+    if (count <= 0 || !S.drawOn) return;
+    const bool u16idx = type == C3D_UNSIGNED_SHORT;
+    const GLenum t = u16idx ? GL_UNSIGNED_SHORT : GL_UNSIGNED_BYTE;
+    // the index list first: its largest index says how much of the vertex buffers the draw reads
+    u32 maxIndex = 0;
+    const GLuint ibo = viewFor(indices, (u32)count * (u16idx ? 2 : 1), GL_ELEMENT_ARRAY_BUFFER, count, u16idx, &maxIndex);
+    if (!ibo) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+        if (u16idx) { const u16* q = (const u16*)indices; for (int i = 0; i < count; ++i) maxIndex = std::max<u32>(maxIndex, q[i]); }
+        else { const u8* q = (const u8*)indices; for (int i = 0; i < count; ++i) maxIndex = std::max<u32>(maxIndex, q[i]); }
+    }
+    if (!prepareDraw(maxIndex + 1)) return;
+    if (ibo) {
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
+        glDrawElements(glPrim(primitive), count, t, nullptr);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
     } else {
         glDrawElements(glPrim(primitive), count, t, indices);
@@ -1667,15 +1708,16 @@ void recompose() {
 namespace compat {
 void gpuMemAdded(void* p, size_t size) {
     std::lock_guard<std::mutex> g(g_bufLock);
-    BufRec r;
+    BufRec& r = g_bufs[(uintptr_t)p];
     r.size = (u32)size;
-    g_bufs[(uintptr_t)p] = r;
+    r.views.clear();
 }
 void gpuMemRemoved(void* p) {
     std::lock_guard<std::mutex> g(g_bufLock);
     auto it = g_bufs.find((uintptr_t)p);
     if (it == g_bufs.end()) return;
-    if (it->second.gl) g_glBufToDelete.push_back(it->second.gl);
+    for (auto& kv : it->second.views)
+        if (kv.second.gl) g_glBufToDelete.push_back(kv.second.gl);
     g_bufs.erase(it);
 }
 }  // namespace compat

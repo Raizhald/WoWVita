@@ -13,7 +13,7 @@ python3 "$T/gen_ui_data.py" "$OUT/data" "$LATIN"
 "$CONV" --data "$OUT/data" --ui -o "$OUT/out/ui.w3dp" | tail -8
 "$CONV" --info "$OUT/out/ui.w3dp" | tail -2
 g++ -std=c++20 -O1 -g -fsanitize=address,undefined -I"$W/game/source" -I"$W/game/tests" -I"$W/common" -I"$W/converter/extern/stb" \
-    -I"$D/rgetc1" "$W/game/tests/ui_pack_test.cpp" "$W/game/tests/ui_raster.cpp" "$W/game/source/hud.cpp" \
+    -I"$D/rgetc1" "$W/game/tests/ui_pack_test.cpp" "$W/game/tests/ui_raster.cpp" "$W/game/source/hud.cpp" "$W/game/source/buttons.cpp" "$W/game/tests/stub/buttons_stub.cpp" \
     "$W/game/source/ui_assets.cpp" "$D/rgetc1/rg_etc1.cpp" -w -o "$OUT/ui_pack_test"
 "$OUT/ui_pack_test" "$OUT/out/ui.w3dp" "$OUT/ui_pack.png"
 grep -q "^B" "$OUT/out/talents.txt" && grep -q "^N" "$OUT/out/taxi.txt" && echo "TEXTS (talents.txt, taxi.txt): PASS"

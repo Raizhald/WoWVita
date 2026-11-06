@@ -4,7 +4,7 @@
 
 namespace {
 // A glyph and the texture it is in: the size's font, else the built-in font of the size (signs a converted pack may lack,
-// the PS Vita's button signs among them), else the font's '?'.
+// the PS Vita's button signs among them), else a near sign the font has, else the font's '?'.
 struct Gl {
     const W3dUiGlyph* g;
     uint16_t tex;
@@ -17,6 +17,16 @@ Gl glyphOf(const ui::FontView& f, ui::Font which, uint32_t cp) {
     const ui::FontView& b = ui::assets().builtinFont(which);
     if (b.glyphs != f.glyphs)
         if (const W3dUiGlyph* g = b.find(cp)) return {g, b.tex};
+    // 7.03: arrows the game's fonts lack (FRIZQT and its fallbacks have ▲ ▼ but no ◀ ▶: the pager showed '?'): the nearest one
+    // the font has, an ASCII bracket at worst
+    struct Alt { uint32_t cp, a, b; };
+    static const Alt kAlt[] = {{0x25C0, 0x2190, '<'}, {0x25B6, 0x2192, '>'}, {0x25B2, 0x2191, '^'}, {0x25BC, 0x2193, 'v'},
+                               {0x2190, 0x25C0, '<'}, {0x2192, 0x25B6, '>'}, {0x2191, 0x25B2, '^'}, {0x2193, 0x25BC, 'v'}};
+    for (const Alt& a : kAlt)
+        if (a.cp == cp) {
+            if (const W3dUiGlyph* g = f.find(a.a)) return {g, f.tex};
+            if (const W3dUiGlyph* g = f.find(a.b)) return {g, f.tex};
+        }
     return {f.find('?'), f.tex};
 }
 }  // namespace

@@ -19,12 +19,12 @@ NET="$N/game.cpp $N/game_social.cpp $N/game_spells.cpp $N/game_items.cpp $N/game
      $N/game_auction.cpp $N/game_trade.cpp $N/game_water.cpp $N/tables.cpp $N/result_text.cpp $N/objects.cpp $N/transport.cpp $N/movement.cpp $N/client.cpp \
      $N/crypto.cpp $N/socket.cpp $N/inflate.cpp"
 UI="$P/source/game_ui.cpp $P/source/game_ui_widgets.cpp $P/source/game_ui_tabs.cpp $P/source/game_ui_windows.cpp $P/source/game_ui_keyboard.cpp \
-    $P/source/ui_style.cpp $P/source/hud.cpp $P/source/ui_assets.cpp $P/source/pad.cpp $P/source/action_layout.cpp \
-    $P/tests/ui_raster.cpp $D/rgetc1/rg_etc1.cpp"
+    $P/source/ui_style.cpp $P/source/hud.cpp $P/source/buttons.cpp $P/tests/stub/buttons_stub.cpp $P/source/ui_assets.cpp $P/source/pad.cpp $P/source/action_layout.cpp \
+    $P/source/questwatch.cpp $P/source/questdb.cpp $P/tests/ui_raster.cpp $D/rgetc1/rg_etc1.cpp"
 INC="-I$P/tests/ui_stub -I$N -I$P/source -I$P/../common -I$P/tests -I$P/../converter/extern/stb -I$D/rgetc1"
 g++ -std=c++20 -O1 -g -fsanitize=address,undefined -Wall $INC "$P/tests/ui_test.cpp" $UI $NET -o "$OUT/ui_test"
 g++ -std=c++20 -O1 -g -fsanitize=address,undefined -Wall -I"$P/tests/ui_stub" -I"$N" -I"$P/source" "$P/tests/pad_test.cpp" \
-    "$P/source/pad.cpp" -o "$OUT/pad_test"
+    "$P/source/pad.cpp" "$P/source/buttons.cpp" "$P/tests/stub/buttons_stub.cpp" -o "$OUT/pad_test"
 "$OUT/pad_test"
 "$OUT/ui_test" "$LOG" "$FIGHT" "$OUT" "$TRADE" "$P/../net/tests/data/factions_test.txt" "$PARTY"
 echo "wrote $OUT/ui_*.png and $OUT/ui_sheet.png"

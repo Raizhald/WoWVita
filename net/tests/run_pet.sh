@@ -10,3 +10,9 @@ g++ -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I"$N" "$N/test
 "$OUT/pet_test"
 g++ -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I"$N" "$N/tests/subtitle_test.cpp" $SRC -o "$OUT/subtitle_test"
 "$OUT/subtitle_test"
+# 7.08: the spirit healer answers a ghost
+g++ -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I"$N" "$N/tests/healer_test.cpp" $SRC -o "$OUT/healer_test"
+"$OUT/healer_test"
+# 7.11: helpful spells go at ourselves when an enemy / nothing is selected
+g++ -std=c++20 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I"$N" "$N/tests/selfcast_test.cpp" $SRC -o "$OUT/selfcast_test"
+"$OUT/selfcast_test"

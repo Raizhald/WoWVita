@@ -24,8 +24,9 @@ static void usage() {
         "options:\n"
         "  --tiles X0 Y0 X1 Y1   convert a rectangle of tiles into one pack (streaming test)\n"
         "  --grid 9|5|3          terrain vertices per chunk edge (default 9)\n"
-        "  --terrain-tex N       max terrain texture size (default 64)\n"
-        "  --model-tex N         max model texture size (default 64)\n"
+        "  --terrain-tex N       max terrain texture size (default 256; 3DS 64)\n"
+        "  --model-tex N         max model texture size (default 128; 3DS 64)\n"
+        "  --3ds-textures        the 3DS texture sizes (terrain 64, models 64, buildings 128, creatures 128): smaller, blurrier packs\n"
         "  --format etc1|rgb565  texture format (default etc1; alpha -> etc1a4/rgba4)\n"
         "  --max-tris N          triangle budget per model (default 400)\n"
         "  --draw-error YD       how far a simplified model's floors may move from their exact shape (default 0.15; 0 = 2% of its size)\n"
@@ -38,7 +39,7 @@ static void usage() {
         "  --no-wmo              skip buildings (WMO)\n"
         "  --no-wmo-doodads      buildings without the models placed inside them\n"
         "  --wmo-exterior-only   drop interior-only WMO groups\n"
-        "  --wmo-tex N           max WMO texture size (default 128)\n"
+        "  --wmo-tex N           max WMO texture size (default 256; 3DS 128)\n"
         "  --wmo-tris N          triangle budget per WMO group (default 3000, 0 = all)\n"
         "  --dump-placements F   write every building group / doodad placement to text file F\n"
         "  --tex-quality Q       ETC1 encoder: low (default, fast), medium (~14x slower, +0.3 dB), high\n"
@@ -70,7 +71,7 @@ static void usage() {
         "  --no-items            players without worn items (armour on the body, helmets, shoulders, weapons)\n"
         "  --item-tris N         triangle budget per item model (default 300)\n"
         "  --item-tex N          max texture size of item models (default 128)\n"
-        "  --creature-tex N      max creature texture size (default 128)\n"
+        "  --creature-tex N      max creature texture size (default 256; 3DS 128)\n"
         "  --creature-tris N     triangle budget per creature model (default 800)\n"
         "  --player-tris N       triangle budget per character (race) model, all geosets together (default 3500)\n"
         "  --creature-anim-kb N  animation budget per creature model, KB (default 320; 0 = every animation)\n"
@@ -134,6 +135,7 @@ int main(int argc, char** argv) {
         else if (a == "-o") o.out = next();
         else if (a == "--grid") o.grid = std::atoi(next());
         else if (a == "--terrain-tex") o.terrainTex = std::atoi(next());
+        else if (a == "--3ds-textures") { o.terrainTex = 64; o.modelTex = 64; o.wmoTex = 128; o.creatureTex = 128; }
         else if (a == "--model-tex") o.modelTex = std::atoi(next());
         else if (a == "--tex-quality") {
             std::string q = next();

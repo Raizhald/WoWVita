@@ -42,8 +42,10 @@ struct Options {
     int tileX0 = 32, tileY0 = 48, tileX1 = 32, tileY1 = 48;  // inclusive region
     std::string out = "test.w3dp";
     int grid = 9;               // terrain vertices per chunk edge: 9, 5, 3
-    int terrainTex = 64;        // max terrain texture size
-    int modelTex = 64;          // max model texture size
+    // WoWVita: sharper textures than the 3DS defaults (the Vita draws the scene at 906x544, not 400x240): terrain 64 -> 256,
+    // doodads 64 -> 128, buildings and creatures 128 -> 256. --3ds-textures gives the old sizes.
+    int terrainTex = 256;       // max terrain texture size
+    int modelTex = 128;         // max model texture size
     uint8_t texFormat = W3D_TEX_ETC1;
     int maxModelTris = 400;     // per model after simplification
     int maxDoodads = -1;        // -1 = all placements on the tile
@@ -53,7 +55,7 @@ struct Options {
     bool noWmoDoodads = false;  // buildings without their furniture/lamps
     bool noPortals = false;          // 6.42: no WMO portals (every interior group is drawn near it, as before)
     bool wmoExteriorOnly = false;   // drop interior-only groups (without them there is nothing behind the doors)
-    int wmoTex = 128;           // max WMO texture size
+    int wmoTex = 256;           // max WMO texture size (WoWVita; 3DS 128)
     float drawMaxError = 0.15f;  // 6.19b: yards a simplified building / doodad may move from its collision; --draw-error
                                  // (6.47: floors only - the walkable triangles, n.z >= cos 50 degrees)
     float drawWallError = 0.5f;  // 6.47: the same bound for walls, roofs and the rest (0 = 2% of the mesh size only); --wall-error
@@ -80,7 +82,7 @@ struct Options {
     bool terrainCenters = true;    // 6.18a: the squares' centre vertices in the drawn ground too (LOD 0; +50% triangles); --terrain-centers
     // Creatures (stage 5.3): every CreatureDisplayInfo row -> CDSP + CMDL (skinned, animated)
     bool creatures = false;
-    int creatureTex = 128;      // max creature texture size
+    int creatureTex = 256;      // max creature texture size (WoWVita; 3DS 128)
     int creatureTris = 800;     // triangle budget per creature model
     int playerTris = 3500;      // 5.49: per character (race) model - ALL its geosets (hair styles, beards, ears ...) share it; 800 left holes and a ruined face
     int creatureAnimKb = 320;   // animation keys per creature model (the essential animations always fit)

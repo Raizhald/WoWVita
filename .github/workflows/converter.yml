@@ -35,13 +35,14 @@ jobs:
           mkdir -p pkg && cp build-win/*.exe pkg/ && cp tools/windows/* pkg/ && cp converter/ui_skin.txt pkg/
           ls -la pkg
       - name: Publish to the builds-converter branch
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/io-fast-test'
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cd pkg && git init -q && git checkout -q -b builds-converter && git add . \
+          B=builds-converter; [ "$GITHUB_REF" = refs/heads/main ] || B="builds-converter-${GITHUB_REF#refs/heads/}"
+          cd pkg && git init -q && git checkout -q -b "$B" && git add . \
             && git -c user.name=ci -c user.email=ci@localhost commit -qm "Windows converter of ${GITHUB_SHA}" \
-            && git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" builds-converter
+            && git push -qf "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}" "$B"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -1657,10 +1657,17 @@ void GameUi::drawSettings(const Input& in) {
         opt(120, 96, tr("On", "Вкл"), c.showStats, 180);
         opt(220, 96, tr("Off", "Выкл"), !c.showStats, 181);
         y += 20;
+#if defined(W3D_COMPAT)
+        // WoWVita: no "GPU early" (a 3DS-only gain; on the Vita a mid-frame flush that only costs time - see main.cpp)
+        label(tr("Log / Frame", "Лог / Кадр"));
+        opt(120, 96, c.perfLog ? tr("Log", "Лог") : tr("no log", "без лога"), c.perfLog, 202);
+        opt(220, 96, c.pace == 2 ? tr("Auto 60/30", "Авто 60/30") : c.pace == 1 ? tr("Steady 30", "Ровно 30") : tr("Free", "Свободно"), c.pace != 0, 204);
+#else
         label(tr("Log / GPU / Frame", "Лог / GPU / Кадр"));   // stage 6: perf.csv; 6.3: the early GPU kick; 6.4: vsync (each button toggles)
         opt(120, 64, c.perfLog ? tr("Log", "Лог") : tr("no log", "без лога"), c.perfLog, 202);
         opt(186, 64, c.gpuKick ? tr("GPU early", "GPU рано") : tr("GPU end", "GPU конец"), c.gpuKick, 203);
         opt(252, 64, c.pace == 2 ? tr("Auto 60/30", "Авто 60/30") : c.pace == 1 ? tr("Steady 30", "Ровно 30") : tr("Free", "Свободно"), c.pace != 0, 204);   // 6.71
+#endif
         y += 20;
         label(tr("Horizon", "Горизонт"));   // 6.34b: the ground and far buildings past the draw distance (costs GPU time)
         const char* hz[3] = {tr("Off", "Выкл"), "800", "1200"};

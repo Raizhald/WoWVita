@@ -291,14 +291,23 @@ PackIndex* g_index = nullptr;
 // One descriptor per pack file, used by the IO thread only. Stage 6.11: plain open()/lseek()/read(), no stdio. newlib's
 // buffered fread after an fseek refills its whole buffer from an aligned offset (a 10 KB texture cost a 64-128 KB read
 // from the card); the sdmc device's read() is one FSFILE_Read of exactly the size asked.
-// WoWVita: two IO workers (kWorkers), each with its own descriptors (lseek + read is not safe on a shared one).
-// (off for now: the Vita build with them stopped at start-up - see STATUS.md; W3D_IO_FAST=1 turns them on)
+// WoWVita: two IO workers (kWorkers) and glued reads (takeNeighbours), W3D_IO_FAST builds.
+// The workers SHARE one descriptor per pack file (as the PSP port of WoWee does): each lseek + read pair runs under
+// g_ioLock, in pieces of at most kIoChunk, so neither worker waits for the whole of the other's glued read and the card
+// sees no second set of open files. The gain of the second worker is the CPU work after a read (a tile's height field,
+// ~200 ms) overlapping the next read, not two reads at once (the card serves one at a time anyway).
+// ux0:data/wowvita/io_safe.txt (any content) turns both off at run time: one worker, one read per job, as before.
 #if defined(W3D_COMPAT) && defined(W3D_IO_FAST)
 constexpr int kWorkers = 2;
 #else
 constexpr int kWorkers = 1;
 #endif
-int g_ioFilesW[kWorkers][PackIndex::kMaxFiles] = {};   // -1: not open (see streamerInit)
+int g_ioFiles[PackIndex::kMaxFiles] = {};   // -1: not open (see streamerInit)
+LightLock g_ioLock;
+constexpr uint32_t kIoChunk = 256 * 1024;
+int g_ioWorkers = kWorkers;   // run time (io_safe.txt: 1)
+bool g_ioGlue = kWorkers > 1;
+std::atomic<uint32_t> g_ioReads{0}, g_ioGluedJobs{0};   // card reads, jobs that shared one (perf_events)
 #if defined(W3D_COMPAT)
 // PC test: a memory card's speed (W3D_SD_MS per read + W3D_SD_KBPS; the Vita's measured ~2.5 ms and ~11000 KB/s)
 void compatIoDelay(uint32_t size) {
@@ -312,12 +321,22 @@ bool readExact(int fd, uint32_t offset, uint8_t* dst, uint32_t size) {
 #if defined(W3D_COMPAT)
     compatIoDelay(size);
 #endif
-    if (fd < 0 || lseek(fd, (off_t)offset, SEEK_SET) != (off_t)offset) return false;
+    if (fd < 0) return false;
+    g_ioReads.fetch_add(1, std::memory_order_relaxed);
     while (size) {
-        const ssize_t n = read(fd, dst, size);
-        if (n <= 0) return false;
-        dst += n;
-        size -= (uint32_t)n;
+        uint32_t want = size < kIoChunk ? size : kIoChunk;
+        LightLock_Lock(&g_ioLock);
+        bool ok = lseek(fd, (off_t)offset, SEEK_SET) == (off_t)offset;
+        while (ok && want) {
+            const ssize_t n = read(fd, dst, want);
+            if (n <= 0) { ok = false; break; }
+            dst += n;
+            offset += (uint32_t)n;
+            size -= (uint32_t)n;
+            want -= (uint32_t)n;
+        }
+        LightLock_Unlock(&g_ioLock);
+        if (!ok) return false;
     }
     return true;
 }
@@ -449,7 +468,8 @@ void terrainLodCaps(Tile* t) {
 
 void finishJob(Job* j, u64 t1);
 void runJob(Job* j, int worker = 0) {
-    const int f = j->file < PackIndex::kMaxFiles ? g_ioFilesW[worker][j->file] : -1;
+    (void)worker;
+    const int f = j->file < PackIndex::kMaxFiles ? g_ioFiles[j->file] : -1;
     const u64 t0 = svcGetSystemTick();
     j->ok = readExact(f, j->offset, j->dst, j->size);
 #ifdef W3D_PC_TEST
@@ -485,6 +505,7 @@ void takeNeighbours(Job* j, std::vector<Job*>& batch) {
     batch.clear();
     batch.push_back(j);
 #if defined(W3D_COMPAT) && defined(W3D_IO_FAST)
+    if (!g_ioGlue) return;
     uint32_t lo = j->offset, hi = j->offset + j->size;
     for (bool grew = true; grew;) {   // grow the span by any queued job of the file within kGlueGap of it
         grew = false;
@@ -514,11 +535,12 @@ void runBatch(std::vector<Job*>& batch, int worker) {
     std::vector<uint8_t>& buf = bufs[worker];
     buf.resize(hi - lo);
     const int file = batch[0]->file;
-    const int f = file < PackIndex::kMaxFiles ? g_ioFilesW[worker][file] : -1;
+    const int f = file < PackIndex::kMaxFiles ? g_ioFiles[file] : -1;
     const u64 t0 = svcGetSystemTick();
     const bool ok = readExact(f, lo, buf.data(), hi - lo);
     const u64 t1 = svcGetSystemTick();
     const uint32_t us = (uint32_t)(ticksToMs(t1 - t0) * 1000.0 / batch.size());
+    g_ioGluedJobs.fetch_add((uint32_t)batch.size(), std::memory_order_relaxed);
     for (Job* j : batch) {
         j->ok = ok;
         if (ok) memcpy(j->dst, buf.data() + (j->offset - lo), j->size);
@@ -1950,13 +1972,21 @@ bool streamerInit(PackIndex* index, char* err, size_t errLen) {
     g_quit = false;   // a map change shuts the streamer down and starts it again on the next pack
     g_freeSlots.clear();
     g_pool = nullptr;
-    for (auto& w : g_ioFilesW)
-        for (int& f : w) f = -1;
-    for (int w = 0; w < kWorkers; ++w)
-        for (int k = 0; k < index->fileCount; ++k) {
-            g_ioFilesW[w][k] = open(index->files[k], O_RDONLY);
-            if (g_ioFilesW[w][k] < 0) { snprintf(err, errLen, "cannot reopen %s", index->files[k]); return false; }
-        }
+    for (int& f : g_ioFiles) f = -1;
+    for (int k = 0; k < index->fileCount; ++k) {
+        g_ioFiles[k] = open(index->files[k], O_RDONLY);
+        if (g_ioFiles[k] < 0) { snprintf(err, errLen, "cannot reopen %s", index->files[k]); return false; }
+    }
+    LightLock_Init(&g_ioLock);
+    g_ioWorkers = kWorkers;
+    g_ioGlue = kWorkers > 1;
+    if (FILE* safe = fopen("sdmc:/3ds/w3dproto/io_safe.txt", "rb")) {
+        fclose(safe);
+        g_ioWorkers = 1;
+        g_ioGlue = false;
+    }
+    g_ioReads = 0;
+    g_ioGluedJobs = 0;
 
     // White 8x8 stand-in texture.
     C3D_TexInit(&g_white.tex, 8, 8, GPU_RGB565);
@@ -2000,8 +2030,9 @@ bool streamerInit(PackIndex* index, char* err, size_t errLen) {
         if (g_thread) g_stats.workerCore = 0;
     }
 #if defined(W3D_COMPAT)
-    if (g_thread && kWorkers > 1) g_thread2 = threadCreate(workerMain2, NULL, 64 * 1024, prio - 1, 1, false);
+    if (g_thread && g_ioWorkers > 1) g_thread2 = threadCreate(workerMain2, NULL, 64 * 1024, prio - 1, 1, false);
 #endif
+
     farLoad();   // 6.24 (after the worker: the atlas is read like any texture)
     farObjLoad();   // 6.29
     return true;
@@ -2074,11 +2105,10 @@ void streamerShutdown() {
     g_freeSlots.clear();
     g_deferred.clear();
     g_retry.clear();
-    for (auto& w : g_ioFilesW)
-        for (int& f : w) {
-            if (f >= 0) close(f);
-            f = -1;
-        }
+    for (int& f : g_ioFiles) {
+        if (f >= 0) close(f);
+        f = -1;
+    }
     g_index = nullptr;
     C3D_TexDelete(&g_white.tex);
 }
@@ -2415,6 +2445,16 @@ bool streamerReadEntry(uint32_t type, uint32_t id, void* dst, uint32_t size) {
     const bool ok = fseek(f, (long)e->offset, SEEK_SET) == 0 && fread(dst, 1, size, f) == size;
     fclose(f);
     return ok;
+}
+
+// WoWVita: the IO set-up and its counters, for perf_events.txt
+const char* streamerIoStatus() {
+    static char b[200];
+    snprintf(b, sizeof b, "%d IO worker(s)%s, glued reads %s, one shared descriptor per pack file%s; %u card reads, %u jobs in glued reads",
+             g_thread2 ? 2 : (g_thread ? 1 : 0), g_ioWorkers > 1 && g_thread && !g_thread2 ? " (the second did not start)" : "",
+             g_ioGlue ? "on" : "off", g_ioWorkers < kWorkers ? " (io_safe.txt)" : "", (unsigned)g_ioReads.load(),
+             (unsigned)g_ioGluedJobs.load());
+    return b;
 }
 
 uint32_t streamerEntrySize(uint32_t type, uint32_t id) {

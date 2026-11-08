@@ -978,6 +978,7 @@ int main() {
     perf::init(kOutDir, padCfg.perfLog);   // stage 6: perf.csv (a row a second) + perf_events.txt
     perf::event("PVS: %s", pvs::status());   // 6.54
     perf::event("horizon: %s", hlod::status());   // 6.57
+    perf::event("streamer: %s", streamerIoStatus());   // WoWVita
     perf::event("pack %s: %d tiles, %lu index entries", g_report.packPath, g_report.tilesInPack, (unsigned long)index.entries.size());
     // Top screen mode (Settings): 800x240 wide, or stereoscopic 3D with a second target for the right eye.
     C3D_RenderTarget* topWide = nullptr;
@@ -3089,6 +3090,7 @@ int main() {
         }
     }
 
+    perf::event("streamer: %s", streamerIoStatus());   // WoWVita: the reads of the session
     perf::event("quit");
     perf::shutdown();
     writeReport(bench.frameMs.empty() ? nullptr : &bench, cam.drawDist, rs);

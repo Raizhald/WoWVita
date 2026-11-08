@@ -56,6 +56,8 @@ endif()
 add_executable(${EXE} ${GAME_SOURCES} ${NET_SOURCES} ${COMPAT_SOURCES} ${MATHS_SOURCES})
 add_dependencies(${EXE} shaders)
 target_include_directories(${EXE} PRIVATE ${COMPAT}/include ${GEN} ${ROOT}/game/source ${ROOT}/net ${ROOT}/common)
+# faster world streaming: glued reads + a second IO worker sharing the descriptors (game/source/streamer.cpp)
+target_compile_definitions(${EXE} PRIVATE W3D_IO_FAST=1)
 
 # The 3DS build: -O3 -ffast-math -fno-finite-math-only, no RTTI / exceptions
 set(GAME_FLAGS -O2 -ffast-math -fno-finite-math-only -Wall -Wno-psabi -Wno-unused-function -Wno-unused-variable)

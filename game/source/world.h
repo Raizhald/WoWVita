@@ -510,6 +510,7 @@ CreatureDisplay* streamerAcquirePlayerDisplay(const W3dLook& look, const uint32_
 int streamerCharInfo(uint32_t race, uint32_t sex, const uint8_t** blob, uint32_t* size);
 // Reads the first 'size' bytes of an entry right away (small entries only: the GLUE scenes).
 bool streamerReadEntry(uint32_t type, uint32_t id, void* dst, uint32_t size);
+const char* streamerIoStatus();   // WoWVita: workers, glued reads, counters (perf_events.txt)
 // 6.59: a game object whose model is a building (OWMO entry, id 0x80000000 | display): its parts (groups + furniture, models
 // acquired on the first ask) in the object's own space and its collision triangles (9 floats each). nullptr: none in the pack.
 // 'at' = where the object stands (the parts' read priority). Unused ones are released by streamerObjWmoTick after 30 s.

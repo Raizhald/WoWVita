@@ -29,9 +29,11 @@ Fork projektu [WoW3DS](https://github.com/ponuno/WoW3DS) jen pro PS Vitu. Původ
 - Zbývá: celá hra (`convert-all.cmd`), delší hraní online (souboje, questy, chat, paměť).
 - **Ovládání (6. 11. 2026):** nápisy tlačítek Vity (✕ ○ △ □, L2/R2) v celém rozhraní; klepnutí na jednotku ve světě
   ji vybere, další klepnutí na vybranou interaguje – na Vitě ověřeno, funguje. Panel se otevírá jen z náhledu v rohu.
-- **Rychlejší načítání (slučování čtení + 2. čtecí vlákno, `W3D_IO_FAST`) je VYPNUTÉ:** build s ním se na Vitě zasekl
-  při startu. Příčina zatím neznámá – potřeba `perf_prev_events.txt` ze zaseknutého spuštění (podezřelé:
-  `thread_local` buffer – už nahrazen, souběh dvou vláken).
+- **Rychlejší načítání (`W3D_IO_FAST`) – ZKUŠEBNÍ build (větev `io-fast-test`, 8. 11. 2026):** slučování blízkých čtení
+  + 2. čtecí vlákno. Nově obě vlákna sdílejí jeden deskriptor na soubor (čtení po 256 KB pod zámkem, podle PSP portu
+  WoWee) – žádná druhá sada otevřených souborů. Předchozí build, který se zasekl při startu, měl `thread_local` buffer
+  (na Vitě nejspíš nefunkční). `ux0:data/wowvita/io_safe.txt` vrátí staré chování; `perf_events.txt` má řádek
+  `streamer:` (vlákna, počet čtení). Na PC (simulace karty, ThreadSanitizer) bez problémů; na Vitě neověřeno.
 - Autor WoW3DS svolil k vydání (6. 11. 2026). Upstream mezitím vydal 7.09/7.10 (Turtle WoW, opravy) – před vydáním sloučit.
 
 ## Ověřeno na PC (po forku)

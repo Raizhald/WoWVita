@@ -16,6 +16,7 @@
 #if defined(__vita__)
 #include <psp2/kernel/processmgr.h>
 #include <psp2/kernel/threadmgr.h>
+#include <psp2/display.h>
 #endif
 
 extern "C" {
@@ -401,7 +402,14 @@ void gfxSetWide(bool enable) { g_wide = enable; }
 bool gfxIsWide(void) { return g_wide; }
 void gfxSwapBuffers(void) {}
 void gfxFlushBuffers(void) {}
+// The real vertical blank on the Vita: the frame pacer (pacer.hpp, from upstream 6.71) starts each frame on one and counts
+// the blanks since the last frame. A fixed 16.7 ms sleep here added a whole period after the work of every frame, so
+// every frame looked like a missed blank and the pacer stayed at 30 FPS.
+#if defined(__vita__)
+void gspWaitForVBlank(void) { sceDisplayWaitVblankStart(); }
+#else
 void gspWaitForVBlank(void) { svcSleepThread(16666666); }
+#endif
 void gxCmdQueueInterrupt(GSPGPU_Event irq) { (void)irq; }
 void gspWaitForAnyEvent(void) { svcSleepThread(1000000); }
 

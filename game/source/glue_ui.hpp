@@ -24,6 +24,7 @@ enum class GlueAction : uint8_t {
     RealmAccept, RealmCancel,                                                               // realm list
     EnterWorld, CreateNew, DeleteCharacter, ChangeRealm, Back, Explore,                    // character list
     EditName, CreateAccept, CreateBack,                                                     // creation
+    Survivors,                                                                              // login: the Survivors mode
 };
 
 // What the screens show; login.cpp fills it every frame.

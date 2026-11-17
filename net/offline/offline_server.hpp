@@ -21,6 +21,7 @@
 #include "../client.hpp"
 #include "offline_core.hpp"
 #include "offline_save.hpp"
+#include "survivors.hpp"
 
 namespace w3n {
 namespace offline {
@@ -50,6 +51,10 @@ public:
     const std::string& lastError() const { return lastError_; }    void setGroundQuery(bool (*fn)(float, float, float, float*)) { world_.setGroundQuery(fn); }
     void setSink(PacketSink s) { sink_ = std::move(s); }
     void setCharacterName(const std::string& name) { save_.player.name = name; }
+
+    // ---- Survivors: the director runs inside update() (before / after the world step). Solo: no companions.
+    void setSurvivors(survivors::Director* d) { survivors_ = d; }
+    survivors::Director* survivorsDirector() const { return survivors_; }
 
     // ---- the internal logical message interface
     void onClientPacket(uint16_t opcode, const Bytes& data, uint32_t nowMs);
@@ -100,6 +105,10 @@ private:
     void applyEventFieldUpdates(uint32_t nowMs);
     void errorLine(const std::string& text, uint32_t nowMs);
     Entity* botEntity(int i) { return world_.bot(i); }
+    void sendSpellVisual(const Entity& caster, uint32_t spell, const uint64_t* targets, int count);
+    void sendRunSpeed(float speed);
+    class SurvivorsHost;
+    friend class SurvivorsHost;
 
     const WorldData* data_ = nullptr;
     std::string savePath_;
@@ -122,6 +131,8 @@ private:
     uint32_t lastInventoryItems_ = 0;  // a cheap change detector for the bag sync
     std::string lastError_;
     std::string playerName_;
+    survivors::Director* survivors_ = nullptr;
+    uint32_t speedCounter_ = 0;
 };
 
 }  // namespace offline

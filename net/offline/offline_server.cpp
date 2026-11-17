@@ -190,7 +190,76 @@ uint8_t fillClassSpells(const WorldData* data, uint8_t cls, std::array<uint32_t,
     return count;
 }
 
+// The create block of a creature (login burst and runtime spawns share it).
+void addCreatureCreate(UpdateBuilder& u, const Entity& e) {
+    FieldSet f;
+    f.set(UF::OBJECT_GUID, (uint32_t)e.guid);
+    f.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(e.guid >> 32));
+    f.set(UF::OBJECT_TYPE, 0x9);
+    f.set(UF::OBJECT_ENTRY, e.entry);
+    float scale = e.scale > 0.05f && e.scale < 20.0f ? e.scale : 1.0f;
+    uint32_t scaleBits;
+    std::memcpy(&scaleBits, &scale, 4);
+    f.set(UF::OBJECT_SCALE_X, scaleBits);
+    f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, e.hp));
+    f.set(UF::UNIT_MAXHEALTH, e.maxHp);
+    f.set(UF::UNIT_LEVEL, e.level);
+    f.set(UF::UNIT_FACTIONTEMPLATE, e.faction);
+    f.set(UF::UNIT_BYTES_0, 0u | (1u << 8) | (0u << 16) | ((uint32_t)e.powerType << 24));
+    f.set(UF::UNIT_POWER1 + e.powerType, wirePower(e));
+    f.set(UF::UNIT_MAXPOWER1 + e.powerType, e.maxPower);
+    f.set(UF::UNIT_DISPLAYID, (uint32_t)e.displayId);
+    f.set(UF::UNIT_NATIVEDISPLAYID, (uint32_t)e.displayId);
+    f.set(UF::UNIT_NPC_FLAGS, e.npcFlags);
+    f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
+    f.set(UF::UNIT_COMBATREACH, 0x3FC00000u);
+    if (e.dead) f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
+    addCreate(u, e.guid, 3, kUfHighGuid, e.x, e.y, e.z, e.o, f);
+}
+
 }  // namespace
+
+// The director's view of the session (survivors.hpp).
+class OfflineSession::SurvivorsHost : public survivors::Host {
+public:
+    explicit SurvivorsHost(OfflineSession& s) : s_(s) {}
+    void spellVisual(const Entity& caster, uint32_t spell, const uint64_t* targets, int count) override {
+        s_.sendSpellVisual(caster, spell, targets, count);
+    }
+    void setRunSpeed(float speed) override { s_.sendRunSpeed(speed); }
+    void selfChanged() override { s_.sendSelfFields(); }
+    void notice(const std::string& text) override { s_.sendChat(0x0A, 0, text); }
+private:
+    OfflineSession& s_;
+};
+
+void OfflineSession::sendSpellVisual(const Entity& caster, uint32_t spell, const uint64_t* targets, int count) {
+    // SMSG_SPELL_GO without a cast before it: the client plays the cast / missile / impact visuals.
+    Writer w;
+    w.packedGuid(caster.guid);
+    w.packedGuid(caster.guid);
+    w.u32(spell);
+    w.u16(0);            // cast flags
+    count = std::max(0, std::min(count, 4));
+    w.u8((uint8_t)count);
+    for (int i = 0; i < count; ++i) w.u64(targets[i]);
+    w.u8(0);             // misses
+    if (count > 0) {
+        w.u16(0x0002);   // TARGET_FLAG_UNIT
+        w.packedGuid(targets[0]);
+    } else {
+        w.u16(0);        // self
+    }
+    send(SMSG_SPELL_GO, w.b);
+}
+
+void OfflineSession::sendRunSpeed(float speed) {
+    Writer w;
+    w.u64(playerGuid_);
+    w.u32(++speedCounter_);
+    w.f32(speed);
+    send(0x0E2, w.b);    // SMSG_FORCE_RUN_SPEED_CHANGE
+}
 
 // ---------------------------------------------------------------- setup
 void OfflineSession::setup(const WorldData* data, const char* savePath) {
@@ -392,7 +461,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     inWorld_ = true;
     incoming_.clear();
     outgoing_.clear();
-    world_.reset(nowMs, save_.seed, save_.player, save_.bots, true);
+    world_.reset(nowMs, save_.seed, save_.player, save_.bots, survivors_ == nullptr);
     lastPartyStats_ = 0;
     lastMoveSend_ = 0;
     lastSave_ = nowMs;
@@ -403,6 +472,10 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
         if (orient) *orient = p->o;
     }
     loginPackets(nowMs);
+    if (survivors_) {   // Survivors: the run starts with the world
+        SurvivorsHost host(*this);
+        survivors_->start(world_, nowMs, host);
+    }
     return true;
 }
 
@@ -546,6 +619,7 @@ void OfflineSession::sendInventory() {
 }
 
 void OfflineSession::sendPartyList() {
+    if (!world_.bot(0)) return;   // solo (Survivors): no group
     Writer w;
     w.u8(0);       // not a raid
     w.u8(0);       // our subgroup / assistant
@@ -822,26 +896,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         if (!e || !e->used || e->objType != 3) continue;
         const float dx = e->x - px, dy = e->y - py;
         if (dx * dx + dy * dy > 150.0f * 150.0f) continue;
-        FieldSet f;
-        f.set(UF::OBJECT_GUID, (uint32_t)e->guid);
-        f.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(e->guid >> 32));
-        f.set(UF::OBJECT_TYPE, 0x9);
-        f.set(UF::OBJECT_ENTRY, e->entry);
-        f.set(UF::OBJECT_SCALE_X, 0x3F800000u);
-        f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, e->hp));
-        f.set(UF::UNIT_MAXHEALTH, e->maxHp);
-        f.set(UF::UNIT_LEVEL, e->level);
-        f.set(UF::UNIT_FACTIONTEMPLATE, e->faction);
-        f.set(UF::UNIT_BYTES_0, 0u | (1u << 8) | (0u << 16) | ((uint32_t)e->powerType << 24));
-        f.set(UF::UNIT_POWER1 + e->powerType, wirePower(*e));
-        f.set(UF::UNIT_MAXPOWER1 + e->powerType, e->maxPower);
-        f.set(UF::UNIT_DISPLAYID, (uint32_t)e->displayId);
-        f.set(UF::UNIT_NATIVEDISPLAYID, (uint32_t)e->displayId);
-        f.set(UF::UNIT_NPC_FLAGS, e->npcFlags);
-        f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
-        f.set(UF::UNIT_COMBATREACH, 0x3FC00000u);
-        if (e->dead) f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
-        addCreate(u, e->guid, 3, kUfHighGuid, e->x, e->y, e->z, e->o, f);
+        addCreatureCreate(u, *e);
     }
     sendUpdateObject(u.finish());
 
@@ -1027,6 +1082,7 @@ void OfflineSession::handleDeath(uint16_t op, const Bytes& data, uint32_t nowMs)
     (void)data;
     Entity* p = world_.player();
     if (!p) return;
+    if (survivors_) return;   // Survivors: a death ends the run (the director's results screen)
     if (op == CMSG_REPOP_REQUEST) {
         if (!p->dead) { errorLine("You are not dead.", nowMs); return; }
         ghost_ = true;
@@ -1171,7 +1227,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 sendUpdateObject(u.finish());
                 if (a->self) {
                     ++stats.deaths;
-                    sendChat(0x0A, 0, "You have died. Release your spirit, then reclaim your corpse.");
+                    if (!survivors_) sendChat(0x0A, 0, "You have died. Release your spirit, then reclaim your corpse.");
                 }
                 if (a->objType == 3) ++stats.kills;
                 // The attacker's auto-attack stops when the victim dies.
@@ -1182,6 +1238,21 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                     w.u32(0);
                     send(SMSG_ATTACKSTOP, w.b);
                 }
+                break;
+            }
+            case SimEvent::Spawned: {
+                if (!a) break;
+                UpdateBuilder u;
+                addCreatureCreate(u, *a);
+                sendUpdateObject(u.finish());
+                break;
+            }
+            case SimEvent::Despawned: {
+                Writer w;
+                w.u64(e.a);
+                send(0x0AA, w.b);   // SMSG_DESTROY_OBJECT
+                if (lootGuid_ == e.a) lootGuid_ = 0;
+                if (target_ == e.a) target_ = 0;
                 break;
             }
             case SimEvent::Respawn: {
@@ -1272,7 +1343,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 break;
             }
             case SimEvent::LootReady:
-                if (a) {
+                if (a && !a->swarm) {   // (Survivors corpses have nothing to loot)
                     FieldSet f;
                     f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
                     UpdateBuilder u;
@@ -1419,7 +1490,15 @@ void OfflineSession::update(uint32_t nowMs) {
     }
 
     world_.setData(data_);
-    world_.step(nowMs);    ++stats.steps;
+    if (survivors_) {
+        SurvivorsHost host(*this);
+        if (survivors_->beforeStep(world_, nowMs, host)) world_.step(nowMs);
+        else world_.holdClock(nowMs);
+        survivors_->afterStep(world_, nowMs, host);
+    } else {
+        world_.step(nowMs);
+    }
+    ++stats.steps;
     dispatchEvents(nowMs);
     sendMovementToClient(nowMs);
     if (nowMs - lastPartyStats_ >= 1000) {

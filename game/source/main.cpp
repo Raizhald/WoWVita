@@ -28,6 +28,7 @@
 #include "vram_guard.hpp"
 #include "glue_data.hpp"
 #include "login.hpp"
+#include "survivors_ui.hpp"
 #include "creature_view.hpp"
 #include "game_ui.hpp"
 #include "hud_game.hpp"
@@ -1512,7 +1513,28 @@ int main() {
                 uiIn.camYaw = cam.yaw;
                 uiIn.groundAt = [](float x, float y, float zRef, float* z) { return streamerFloorHeight(x, y, zRef, z); };
             }
+            // Survivors: its cards / results own the buttons and the taps while they are up (survivors_ui.cpp).
+            bool survivorsModal = false;
+            if (g_login.survivorsActive()) {
+                survivorsUi::Input si;
+                si.down = padDown;
+#if defined(W3D_COMPAT)
+                si.tap = worldTap;
+                si.tapX = worldTapX;
+                si.tapY = worldTapY;
+#endif
+                const survivorsUi::Action sa = survivorsUi::update(g_login.survivors(), si);
+                if (sa == survivorsUi::Action::Restart) g_login.survivors().requestRestart();
+                if (sa == survivorsUi::Action::MainMenu) g_login.quitSurvivors();
+                survivorsModal = survivorsUi::modal(g_login.survivors());
+                if (survivorsModal) {
+                    uiIn.down = 0;
+                    uiIn.touched = false;
+                    po = PadOut();   // no walking, no actions (the camera holds still too)
+                }
+            }
             uiOut = gameUi.update(gs, uiIn, walk);
+            if (survivorsModal) { uiOut.blockMove = true; uiOut.blockJump = true; }
             if (uiOut.placing && padCfg.scheme == PadScheme::Old3DS) { po.dir = 0; po.turn = 0; }   // the Circle Pad aims, not walks
             for (const char* e : uiOut.sounds) audio::play(e);
             if (uiOut.soundChanged) audio::setVolumes(padCfg.musicVol, padCfg.sfxVol, padCfg.ambVol);
@@ -2754,6 +2776,7 @@ int main() {
             hi.portrait[0] = portrait::image(0, game->selfGuid());
             hi.portrait[1] = portrait::image(1, game->target());
             hudBuildGame(hud, hi);
+            if (g_login.survivorsActive()) survivorsUi::draw(hud, g_login.survivors());
         } else {
             hud.clear();
         }

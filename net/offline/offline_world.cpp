@@ -132,8 +132,9 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
         }
     }
 
-    // ---- the four companions
-    for (int i = 0; i < kMaxParty; ++i) {
+    // ---- the four companions (none in a solo session: Survivors)
+    runtimeSerial_ = 0;
+    for (int i = 0; i < kMaxParty && botsEnabled; ++i) {
         profiles_[1 + i] = bots[(size_t)i];
         profiles_[1 + i].isBot = true;
         profiles_[1 + i].used = true;
@@ -181,7 +182,7 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
     if (data_) {
         int idx = 0;
         for (const Spawn& s : data_->spawns) {
-            if (idx >= kMaxEntities - 5) break;
+            if (idx >= kMaxStaticSpawns) break;
             spawnCreature(s, nowMs, idx++);
         }
     }
@@ -228,6 +229,47 @@ void World::spawnCreature(const Spawn& s, uint32_t nowMs, int index) {
     e.lootCount = 0;
     e.dead = false;
     applyGround(e);
+}
+
+Entity* World::spawnAt(uint32_t entry, float x, float y, float z, float o, uint32_t nowMs) {
+    const CreatureTemplate* t = data_ ? data_->creature(entry) : nullptr;
+    if (!t) return nullptr;
+    bool free = false;
+    for (const Entity& p : pool_) free = free || !p.used;
+    if (!free) return nullptr;
+    // Runtime creatures use their own low-guid range (above any spawn index) so a corpse never maps to a
+    // pack spawn's respawn timer.
+    runtimeSerial_ = (runtimeSerial_ + 1) & 0x7FFFFF;
+    const uint64_t guid = 0xF130000000000000ull | ((uint64_t)(t->entry & 0xFFFFFF) << 24) |
+                          (uint64_t)(0x800000u | runtimeSerial_);
+    Spawn s;
+    s.entry = entry;
+    s.x = x; s.y = y; s.z = z; s.o = o;
+    const int index = (int)(0x800000u | runtimeSerial_) - 1;
+    spawnCreature(s, nowMs, index);
+    Entity* e = entity(guid);
+    if (!e) return nullptr;
+    e->swarm = true;
+    emit(SimEvent::Spawned, e->guid, 0, 0, 0);
+    return e;
+}
+
+void World::despawn(Entity& e) {
+    if (!e.used || e.self || e.bot) return;
+    const uint64_t g = e.guid;
+    // Nobody keeps pointing at a unit that is gone.
+    for (Entity& o : pool_) {
+        if (!o.used || &o == &e) continue;
+        if (o.victim == g) o.victim = 0;
+        if (o.target == g) o.target = 0;
+        if (o.castTarget == g) { o.castSpell = 0; o.castTarget = 0; }
+        for (uint8_t i = 0; i < o.threatCount;) {
+            if (o.threat[i].who == g) o.threat[i] = o.threat[--o.threatCount];
+            else ++i;
+        }
+    }
+    e = Entity();
+    emit(SimEvent::Despawned, g, 0, 0, 0);
 }
 
 // ---------------------------------------------------------------- events
@@ -766,10 +808,11 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
         const Spawn* spawn = nullptr;
         if (data_) {
             const uint32_t low = (uint32_t)(e.guid & 0xFFFFFF);
-            if (low >= 1 && low <= data_->spawns.size()) spawn = &data_->spawns[low - 1];
+            if (!e.swarm && low >= 1 && low <= data_->spawns.size()) spawn = &data_->spawns[low - 1];
         }
         e.respawnAtMs = nowMs + (spawn ? spawn->respawnMs : 30000u);
         if (e.respawnAtMs < nowMs + 5000) e.respawnAtMs = nowMs + 5000;
+        if (e.swarm) e.respawnAtMs = 0;   // Survivors: the director removes the corpse
         emit(SimEvent::LootReady, e.guid, killer.guid, 0, (int32_t)e.lootCount);
     } else if (e.bot) {
         e.recoveringUntilMs = nowMs + 10000;
@@ -1001,8 +1044,23 @@ void World::tickCreature(Entity& e, uint32_t nowMs) {
         if (e.respawnAtMs && nowMs >= e.respawnAtMs) respawn(e, nowMs);
         return;
     }
+    if (e.swarm) {
+        // Survivors: always hunt the player; no leash, no evade, no wandering home.
+        if (player_ && player_->alive()) {
+            if (e.victim != player_->guid) {
+                e.victim = e.target = player_->guid;
+                if (threatOf(e, player_->guid) <= 0) addThreat(e, player_->guid, 1);
+                e.aiState = 1;
+            }
+        } else {
+            e.victim = e.target = 0;
+            e.moving = false;
+            return;
+        }
+        e.homeX = e.x; e.homeY = e.y; e.homeZ = e.z; e.homeO = e.o;
+    }
     // Evade: too far from home, or the target is unreachable for too long.
-    if (e.victim) {
+    if (e.victim && !e.swarm) {
         Entity* t = entity(e.victim);
         if (!t || !t->alive()) { e.victim = e.target = 0; e.threatCount = 0; }
         else if (dist2d(e.x, e.y, e.homeX, e.homeY) > kEvadeDist ||

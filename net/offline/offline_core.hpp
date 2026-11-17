@@ -27,7 +27,8 @@ namespace w3n {
 namespace offline {
 
 constexpr uint32_t kSimStepMs = 50;          // fixed simulation tick (20 Hz), independent of rendering
-constexpr int kMaxEntities = 56;             // player + 4 bots + 51 creatures
+constexpr int kMaxEntities = 96;             // player + 4 bots + 91 creatures (Survivors swarms need more)
+constexpr int kMaxStaticSpawns = 51;         // creatures created from the pack's spawn list
 constexpr int kMaxEvents = 512;              // up to 8 catch-up steps may be buffered before dispatch
 constexpr int kMaxThreat = 12;
 constexpr int kMaxAuras = 8;
@@ -281,6 +282,10 @@ struct Entity {
     float netO = 0;                    // the orientation the client was last told
     uint32_t recoveringUntilMs = 0;
 
+    // Survivors: a runtime swarm creature. It always hunts the player, never evades and never respawns
+    // (the Survivors director despawns its corpse).
+    bool swarm = false;
+
     // Player-only profile pointer index (-1 = none).
     int8_t profileIndex = -1;
 
@@ -298,6 +303,7 @@ struct SimEvent {
         CastStarted = 7, CastFinished = 8, CastFailed = 9, AttackStarted = 10, AttackStopped = 11,
         AuraApplied = 12, AuraRemoved = 13, AttackError = 14, Message = 15, Looted = 16,
         ThreatChanged = 17, PowerChanged = 18, ItemGained = 19, QuestProgress = 20, QuestComplete = 21,
+        Spawned = 22, Despawned = 23,   // runtime creatures (Survivors): the server creates / destroys the object
     };
     uint8_t type = 0;
     uint64_t a = 0, b = 0;             // actor / target (or victim / attacker)
@@ -413,6 +419,12 @@ public:
     void addXp(Entity& e, uint32_t xp, uint32_t nowMs);
     // Player resurrection (corpse reclaim / spirit healer): clears combat and restores a share of HP.
     void revive(Entity& e, int32_t hpPercent, uint32_t nowMs);
+    // ---- runtime creatures (Survivors). spawnAt returns nullptr when the pool is full or the entry is unknown.
+    Entity* spawnAt(uint32_t entry, float x, float y, float z, float o, uint32_t nowMs);
+    void despawn(Entity& e);
+    // Keep the clock where it is (a paused game): the next step() does not run a catch-up burst.
+    void holdClock(uint32_t nowMs) { lastStepMs_ = nowMs; now_ = nowMs; }
+    void snapToGround(Entity& e) { applyGround(e); }
     // Cancel an in-progress cast (player pressed cancel / an interrupt landed).
     void stopCast(Entity& e, uint8_t reason, uint32_t nowMs) { cancelCast(e, reason, nowMs); }
 
@@ -474,6 +486,7 @@ private:
     uint32_t seed_ = 1;
     uint32_t now_ = 0, lastStepMs_ = 0;
     uint64_t tick_ = 0;
+    uint32_t runtimeSerial_ = 0;   // low guid counter of spawnAt() creatures
     bool (*groundFn_)(float, float, float, float*) = nullptr;
 };
 

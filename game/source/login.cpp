@@ -23,6 +23,13 @@ static const char* kOfflineModelPath = "sdmc:/3ds/w3dproto/offline/party.w3nn";
 static const char* kOfflineTracePath = "sdmc:/3ds/w3dproto/offline_trace.txt";
 static const char* kOfflineAutoPath = "sdmc:/3ds/w3dproto/offline_start.txt";
 static const char* kOfflineBuildTag = "offline-2026-11-17-b";
+static const char* kSurvivorsSavePath = "sdmc:/3ds/w3dproto/offline/survivors.w3d";   // its own profile
+static const char* kSurvivorsConfigPath = "sdmc:/3ds/w3dproto/survivors.txt";        // optional tuning (key=value)
+
+// Survivors spawns creatures anywhere around the player: put them on the streamed ground.
+static bool survivorsGround(float x, float y, float zRef, float* out) {
+    return streamerFloorHeight(x, y, zRef + 6.0f, out);
+}
 
 static bool fileExists(const char* path) {
     FILE* f = fopen(path, "rb");
@@ -75,7 +82,9 @@ void LoginFlow::init() {
         FILE* a = fopen(kOfflineAutoPath, "r");
         if (a) { if (!fgets(buf, sizeof buf, a)) buf[0] = 0; fclose(a); }
         offlineTrace("auto-start: %s", buf);
-        if (startOffline()) {
+        if (strstr(buf, "survivors")) {
+            startSurvivors();
+        } else if (startOffline()) {
             ui_.character = 0;
             if (strstr(buf, "world")) enterWorldOffline();
         }
@@ -149,7 +158,11 @@ void LoginFlow::act(GlueAction a) {
             pending_ = Pending::Auth;   // next frame (the dialog is on the screen): the connect starts; polled from then on (6.55)
             break;
         case GlueAction::Offline:
+            survivors_ = false;
             startOffline();
+            break;
+        case GlueAction::Survivors:
+            startSurvivors();
             break;
         case GlueAction::Explore:
             phase_ = Phase::Offline;   // the developer's free-camera flight of the current map
@@ -334,7 +347,26 @@ bool LoginFlow::startOffline() {
         phase_ = Phase::Offline;   // fall back to the free-camera map flight
         return false;
     }
-    offlineSession_.setup(&offlineData_, kOfflineSavePath);
+    if (survivors_) {
+        w3n::offline::survivors::Config cfg;
+        if (FILE* cf = fopen(kSurvivorsConfigPath, "rb")) {
+            std::string text;
+            char b[256];
+            size_t n;
+            while ((n = fread(b, 1, sizeof b, cf)) > 0) text.append(b, n);
+            fclose(cf);
+            offlineTrace("survivors: %d settings from survivors.txt", cfg.parse(text));
+        }
+        survivorsDirector_.setConfig(cfg);
+        if (!survivorsDirector_.prepareData(offlineData_, &err)) {
+            message("Survivors: " + err);
+            survivors_ = false;
+            return false;
+        }
+        offlineTrace("survivors: boss '%s'", survivorsDirector_.bossName().c_str());
+    }
+    offlineSession_.setup(&offlineData_, survivors_ ? kSurvivorsSavePath : kOfflineSavePath);
+    offlineSession_.setSurvivors(survivors_ ? &survivorsDirector_ : nullptr);
     offlineTrace("startOffline: setup done");
     if (!offlineSession_.open(err)) {
         // A corrupt save must not lock the player out: move it aside and start a fresh profile.
@@ -381,6 +413,16 @@ void LoginFlow::enterWorldOffline() {
     waitFixed_ = true;
 }
 
+bool LoginFlow::startSurvivors() {
+    offlineTrace("startSurvivors");
+    survivors_ = true;
+    if (!startOffline()) { survivors_ = false; return false; }
+    // Straight into the world with the first local character (Survivors has its own profile).
+    ui_.character = 0;
+    enterWorldOffline();
+    return true;
+}
+
 void LoginFlow::leaveOffline() {
     if (offline_ && phase_ == Phase::InWorld) {
         offlineSession_.leaveWorld();
@@ -391,6 +433,11 @@ void LoginFlow::leaveOffline() {
     w3n::offline::setNeuralPolicy(nullptr);
     offlinePolicyLoaded_ = false;
     offline_ = false;
+    survivors_ = false;
+    quitSurvivorsPending_ = false;
+    survivorsDirector_.stop();
+    offlineSession_.setSurvivors(nullptr);
+    offlineSession_.setGroundQuery(nullptr);
     world_.offlineSetCharacters(std::vector<w3n::Character>());
     phase_ = Phase::Menu;
     wait_.clear();
@@ -608,6 +655,7 @@ void LoginFlow::networkOffline() {
                 break;
             }
             offlineTrace("networkOffline: world reset at %.1f %.1f %.1f", pos[0], pos[1], pos[2]);
+            if (survivors_) offlineSession_.setGroundQuery(&survivorsGround);
             // The same logical message boundary as a network session: CMSG out, SMSG in.
             world_.packetSink = [this](uint16_t op, const w3n::Bytes& d) {
                 offlineSession_.onClientPacket(op, d, sessionMs());
@@ -658,6 +706,10 @@ void LoginFlow::networkOffline() {
                 perf::event("offline: %u frames, sim avg %.2f ms max %.2f ms | %u packets in / %u out | %d entities | policy %d",
                             offlineFrames_, avg, mx, offlineSession_.stats.packetsIn, offlineSession_.stats.packetsOut, used,
                             offlinePolicyLoaded_ ? 1 : 0);
+                if (survivors_)
+                    perf::event("survivors: %u:%02u, %d alive, level %u, %u kills, phase %d", survivorsDirector_.runMs() / 60000,
+                                (survivorsDirector_.runMs() / 1000) % 60, survivorsDirector_.alive(),
+                                survivorsDirector_.stats().level, survivorsDirector_.stats().kills, (int)survivorsDirector_.phase());
                 offlineSimTicks_ = offlineSimMaxTicks_ = 0;
                 offlineFrames_ = 0;
                 offlineReportMs_ = sessionMs();
@@ -714,6 +766,11 @@ void LoginFlow::fillModel() {
 
 bool LoginFlow::update(u32 down, u32 held, bool touching, int tx, int ty, float dt) {
     if (phase_ == Phase::Offline) return false;
+    if (quitSurvivorsPending_) {
+        offlineTrace("survivors: back to the main menu");
+        leaveOffline();
+        ui_.touched();
+    }
     network();
     if (phase_ == Phase::InWorld) return false;
     fillModel();
@@ -766,6 +823,10 @@ LoginFlow::Scene LoginFlow::scene() const {
 }
 
 bool LoginFlow::requestCharacterList() {
+    if (offline_ && survivors_) {   // Survivors has no character list: back to the main menu
+        if (phase_ == Phase::InWorld) quitSurvivorsPending_ = true;
+        return false;
+    }
     if (offline_) {
         if (phase_ != Phase::InWorld) return false;
         offlineSession_.leaveWorld();

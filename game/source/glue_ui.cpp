@@ -479,6 +479,8 @@ void GlueUi::topLogin(HudList& l, const GlueModel& m) {
     }
     button(l, 150, 204, 100, 24, tr("Login", "Вход"), true, focused(kButton, GlueAction::Login, 0));
     addTop(150, 204, 100, 24, GlueAction::Login, 0, kButton);
+    button(l, 318, 162, 76, 20, "Survivors", true, focused(kButton, GlueAction::Survivors, 0));
+    addTop(318, 162, 76, 20, GlueAction::Survivors, 0, kButton);
     button(l, 318, 186, 76, 20, tr("Offline", "Без сети"), true, focused(kButton, GlueAction::Offline, 0));
     addTop(318, 186, 76, 20, GlueAction::Offline, 0, kButton);
     button(l, 318, 210, 76, 22, tr("Quit", "Выход"), true, focused(kButton, GlueAction::Quit, 0));
@@ -658,6 +660,8 @@ void GlueUi::bottomLogin(HudList& l, const GlueModel& m) {
     }
     button(l, 90, 130, 140, 30, tr("Login", "Войти"), true, false);
     addBottom(90, 130, 140, 30, GlueAction::Login, 0, kButton);
+    button(l, 236, 130, 76, 30, "Survivors", true, false);
+    addBottom(236, 130, 76, 30, GlueAction::Survivors, 0, kButton);
     char p[32], g[32];
     if (m.turtle) snprintf(p, sizeof p, "Turtle 1.18");   // 6.58: Turtle WoW clones (build 7272)
     else snprintf(p, sizeof p, "%s %d", tr("Protocol", "Протокол"), m.protocol);

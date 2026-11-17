@@ -14,6 +14,7 @@
 #include "offline/offline_data.hpp"
 #include "offline/offline_nn.hpp"
 #include "offline/offline_server.hpp"
+#include "offline/survivors.hpp"
 #include "w3d_character.h"
 
 class LoginFlow {
@@ -65,6 +66,10 @@ public:
     // UI, camera and combat consumers all keep working unchanged.
     bool offlineMode() const { return offline_ && phase_ != Phase::Offline; }
     bool offlineWorld() const { return offline_ && phase_ == Phase::InWorld; }
+    // Survivors (main menu > Survivors): an offline world with the wave director attached (survivors_ui.cpp).
+    bool survivorsActive() const { return survivors_ && offlineWorld() && survivorsDirector_.active(); }
+    w3n::offline::survivors::Director& survivors() { return survivorsDirector_; }
+    void quitSurvivors() { quitSurvivorsPending_ = true; }   // back to the main menu at the next update
     // The START menu's "Characters": log out on the server (its timer runs outside inns; the character stays in the world
     // until it ends) and come back to the character list on the same connection. False when not possible now.
     bool requestCharacterList();
@@ -89,6 +94,7 @@ private:
     void enterWorldOffline();
     void networkOffline();
     void leaveOffline();               // save and return to the main menu
+    bool startSurvivors();             // Survivors: the offline world, a solo profile and the director
     void loadDataTables();             // spells.txt, factions.txt, ... (shared with the online path)
 
     Phase phase_ = Phase::Menu;
@@ -101,6 +107,9 @@ private:
     w3n::offline::WorldData offlineData_;
     w3n::offline::NeuralPolicy offlinePolicy_;
     bool offlinePolicyLoaded_ = false;
+    bool survivors_ = false;           // the offline session runs the Survivors mode
+    bool quitSurvivorsPending_ = false;
+    w3n::offline::survivors::Director survivorsDirector_;
     // Offline M8 measurements: time spent in OfflineSession::update, reported to the perf log once a second.
     uint64_t offlineSimTicks_ = 0, offlineSimMaxTicks_ = 0;
     uint32_t offlineFrames_ = 0, offlineReportMs_ = 0;

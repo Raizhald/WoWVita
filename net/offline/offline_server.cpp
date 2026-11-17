@@ -624,6 +624,15 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
     const bool vendorFlag = v && v->alive() && (v->npcFlags & 0x4u);
     const bool isVendor = vendorFlag && data_->vendors.count(v->entry);
     const bool near = v && std::hypot(v->x - p->x, v->y - p->y) < 15.0f;
+    if (trace) {
+        char b[256];
+        const CreatureTemplate* t = v ? data_->creature(v->entry) : nullptr;
+        snprintf(b, sizeof b, "npc op 0x%03X guid %llx: %s entry %u flags 0x%X goods %d dist %.1f (me %.1f %.1f %.1f, it %.1f %.1f %.1f)",
+                 (unsigned)op, (unsigned long long)npc, t ? t->name.c_str() : (v ? "?" : "NOT IN THE WORLD"), v ? v->entry : 0,
+                 v ? v->npcFlags : 0, v && data_->vendors.count(v->entry) ? (int)data_->vendors.at(v->entry).size() : -1,
+                 v ? std::hypot(v->x - p->x, v->y - p->y) : -1.0f, p->x, p->y, p->z, v ? v->x : 0.0f, v ? v->y : 0.0f, v ? v->z : 0.0f);
+        trace(b);
+    }
     switch (op) {
         case CMSG_GOSSIP_HELLO:
         case CMSG_QUESTGIVER_HELLO:
@@ -687,6 +696,7 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
             }
             sendInventory();
             sendSelfFields();
+            saveSoon_ = true;
             return;
         }
         default:
@@ -1352,6 +1362,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 break;
             }
             case SimEvent::LevelUp: {
+                saveSoon_ = true;
                 if (a) sendChat(0x0A, 0, "You have reached level " + std::to_string((int)e.value) + "!");
                 sendSelfFields();
                 break;
@@ -1427,12 +1438,14 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 break;
             case SimEvent::ItemGained:
                 inventoryDirty = true;
+                saveSoon_ = true;
                 if (data_) {
                     const ItemTemplate* it = data_->item((uint32_t)e.b);
                     if (it) sendChat(0x0A, 0, "You receive loot: " + it->name + " x" + std::to_string((int)e.value) + ".");
                 }
                 break;
             case SimEvent::Looted:
+                saveSoon_ = true;
                 sendSelfFields();
                 break;
             case SimEvent::PowerChanged:
@@ -1562,6 +1575,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 for (int i = index; i < std::max<int>(before, world_.playerProfile().bagCount); ++i) destroy(itemGuidFor(false, i));
                 for (int c : changed) if (c >= 0) destroy(itemGuidFor(true, c));
                 sendInventory();
+                saveSoon_ = true;
                 break;
             }
             case CMSG_REPOP_REQUEST: case CMSG_RECLAIM_CORPSE: handleDeath(op, p.second, nowMs); break;
@@ -1583,6 +1597,13 @@ void OfflineSession::update(uint32_t nowMs) {
                 send(0x04D);   // SMSG_LOGOUT_COMPLETE
                 break;
             default:
+                if (trace && std::find(unhandledSeen_.begin(), unhandledSeen_.end(), op) == unhandledSeen_.end() &&
+                    unhandledSeen_.size() < 64) {
+                    unhandledSeen_.push_back(op);
+                    char b[64];
+                    snprintf(b, sizeof b, "unhandled client opcode 0x%03X (%zu bytes)", (unsigned)op, p.second.size());
+                    trace(b);
+                }
                 break;
         }
     }
@@ -1608,10 +1629,18 @@ void OfflineSession::update(uint32_t nowMs) {
             sendPartyStats();
         }
     }
-    if (nowMs - lastSave_ >= 60000) {
+    // WoWVita: every 20 s, and 2 s after anything worth keeping (a purchase, loot, a level) - the Vita is often
+    // closed with the PS button, which never reaches leaveWorld()
+    if (nowMs - lastSave_ >= 20000 || (saveSoon_ && nowMs - lastSave_ >= 2000)) {
         lastSave_ = nowMs;
+        saveSoon_ = false;
         std::string serr;
-        if (!save(&serr)) {
+        const bool ok = save(&serr);
+        if (trace && (!ok || !saveTraced_)) {
+            saveTraced_ = ok;
+            trace(ok ? std::string("save ok: ") + savePath_ : "save FAILED: " + serr);
+        }
+        if (!ok) {
             if (!saveWarned_) {
                 saveWarned_ = true;
                 sendChat(0x0A, 0, "Offline save failed (" + serr + "). The SD card may be full or removed.");

@@ -36,6 +36,9 @@ public:
     void setParty(bool on) { partyEnabled_ = on; }
 
     bool party() const { return partyEnabled_; }
+    // WoWVita: diagnostics (login.cpp writes them to offline_trace.txt): NPC interaction and each opcode the
+    // offline server does not handle (once per opcode)
+    std::function<void(const std::string&)> trace;
     // Load the profile, or create a fresh one. The four companions come from the .w3do templates.
     bool open(std::string& err);
     bool save(std::string* err = nullptr);
@@ -67,6 +70,8 @@ public:
     } stats;
 
 private:
+    std::vector<uint16_t> unhandledSeen_;
+    bool saveSoon_ = false, saveTraced_ = false;
     bool partyEnabled_ = true;   // (the core and its tests: on; the game sets it from offline_party.txt)
     // ---- setup / profile
     void defaultPlayer();

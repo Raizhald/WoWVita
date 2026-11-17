@@ -486,6 +486,17 @@ void GameUi::interactAction(w3n::GameSession& g, const Input& in, Output& out) {
         if (s) { use = s; g.setTarget(s, in.nowMs); }
     }
     std::string why = g.interact(use, in.pos, in.nowMs);
+    if (FILE* tf = fopen("sdmc:/3ds/w3dproto/offline_trace.txt", "r+")) {   // WoWVita: the offline diagnostics
+        fseek(tf, 0, SEEK_END);
+        const w3n::WorldObject* uo = use ? g.objects.find(use) : nullptr;
+        float q[3] = {0, 0, 0};
+        if (uo && uo->hasPos) uo->positionAt(in.nowMs, q);
+        fprintf(tf, "use: target %llx (selected %llx ok %d) entry %u npcflags 0x%X faction %u dist %.1f -> '%s'\n",
+                (unsigned long long)use, (unsigned long long)g.target(), targetOk ? 1 : 0, uo ? uo->entry() : 0,
+                uo ? uo->field(w3n::UF::UNIT_NPC_FLAGS) : 0, uo ? uo->field(w3n::UF::UNIT_FACTIONTEMPLATE) : 0,
+                uo ? dist3(q, in.pos) : -1.0f, why.c_str());
+        fclose(tf);
+    }
     if (!why.empty()) refuse(g, why, in.nowMs);
     else faceTarget(g, in, out);
 }

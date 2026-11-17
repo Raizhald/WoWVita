@@ -158,6 +158,27 @@ int main(int argc, char** argv) {
             }
         }
     }
+    // the purchase survives a restart: the autosave comes 2 s after it (the Vita is often closed with PS)
+    {
+        const uint32_t wornMain = w.playerProfile().equipment[15];
+        const uint32_t moneyNow = p->money;
+        const float px = p->x, py = p->y;
+        run(3000);
+        OfflineSession again;
+        again.setup(&data, savePath);
+        again.setParty(false);
+        std::string e2;
+        CHECK(again.open(e2), "reopen: %s", e2.c_str());
+        float pos2[3];
+        float o2 = 0;
+        CHECK(again.enterWorld(again.characters()[0].guid, now + 100, pos2, &o2), "enter again");
+        const Entity* p2 = again.world().player();
+        CHECK(again.world().playerProfile().equipment[15] == wornMain, "the worn weapon was saved (%u, want %u)",
+              again.world().playerProfile().equipment[15], wornMain);
+        CHECK(p2 && p2->money == moneyNow, "the money was saved (%u, want %u)", p2 ? p2->money : 0, moneyNow);
+        CHECK(p2 && std::hypot(p2->x - px, p2->y - py) < 5.0f, "the place was saved");
+    }
+
     // "Use" on vendors of every kind of NPC flags (vendor only, + quests, + gossip): the client's interact()
     for (uint32_t flags : {0x4004u, 0x6u, 0x5u, 0x87u}) {
         const Spawn* sp = nullptr;

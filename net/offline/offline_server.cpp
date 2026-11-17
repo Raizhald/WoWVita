@@ -54,7 +54,7 @@ enum : uint16_t {
     // WoWVita: vendors (layouts in net/game_vendor.cpp)
     CMSG_GOSSIP_HELLO = 0x17B, CMSG_LIST_INVENTORY = 0x19E, SMSG_LIST_INVENTORY = 0x19F, CMSG_SELL_ITEM = 0x1A0,
     SMSG_SELL_ITEM = 0x1A1, CMSG_BUY_ITEM = 0x1A2, SMSG_BUY_ITEM = 0x1A4, SMSG_BUY_FAILED = 0x1A5,
-    CMSG_AUTOEQUIP_ITEM = 0x10A,
+    CMSG_AUTOEQUIP_ITEM = 0x10A, CMSG_QUESTGIVER_HELLO = 0x184,
 };
 
 constexpr uint8_t kUpdateValues = 0, kUpdateMovement = 1, kUpdateCreate2 = 3;
@@ -621,12 +621,20 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
     const uint64_t npc = r.u64();
     if (r.bad) return;
     const Entity* v = world_.entity(npc);
-    const bool isVendor = v && v->alive() && (v->npcFlags & 0x4u) && data_->vendors.count(v->entry);
-    const bool near = v && std::hypot(v->x - p->x, v->y - p->y) < 12.0f;
+    const bool vendorFlag = v && v->alive() && (v->npcFlags & 0x4u);
+    const bool isVendor = vendorFlag && data_->vendors.count(v->entry);
+    const bool near = v && std::hypot(v->x - p->x, v->y - p->y) < 15.0f;
     switch (op) {
         case CMSG_GOSSIP_HELLO:
+        case CMSG_QUESTGIVER_HELLO:
         case CMSG_LIST_INVENTORY:
-            if (isVendor && near) sendListInventory(npc);
+            if (!v) return;
+            if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
+                if (op != CMSG_LIST_INVENTORY && v->npcFlags) errorLine("This NPC has nothing to say offline yet.", nowMs);
+                return;
+            }
+            if (!near) { errorLine("You are too far away.", nowMs); return; }
+            sendListInventory(npc);   // (a vendor without goods in the pack gets an empty list: "nothing to sell")
             return;
         case CMSG_BUY_ITEM: {
             const uint32_t item = r.u32();
@@ -1533,6 +1541,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 break;
             case CMSG_MESSAGECHAT: handleChat(p.second, nowMs); break;
             case CMSG_GOSSIP_HELLO: case CMSG_LIST_INVENTORY: case CMSG_BUY_ITEM: case CMSG_SELL_ITEM:
+            case CMSG_QUESTGIVER_HELLO:   // (a vendor that also gives quests is opened with this one)
                 handleVendor(op, p.second, nowMs);
                 break;
             case CMSG_AUTOEQUIP_ITEM: {   // WoWVita: u8 bag (255 = the character), u8 slot (23..38 = the backpack)

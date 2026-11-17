@@ -158,6 +158,33 @@ int main(int argc, char** argv) {
             }
         }
     }
+    // "Use" on vendors of every kind of NPC flags (vendor only, + quests, + gossip): the client's interact()
+    for (uint32_t flags : {0x4004u, 0x6u, 0x5u, 0x87u}) {
+        const Spawn* sp = nullptr;
+        for (const Spawn& x : data.spawns) {
+            const CreatureTemplate* t = data.creature(x.entry);
+            if (t && t->npcFlags == flags && data.vendors.count(x.entry)) { sp = &x; break; }
+        }
+        CHECK(sp != nullptr, "a vendor with flags %x", flags);
+        if (!sp) continue;
+        gs.vendor = VendorWindow();
+        w.setPosition(*p, sp->x + 2.0f, sp->y, sp->z, 0);
+        gs.mover.reset(p->x, p->y, p->z, p->o, now);
+        run(1500);   // the spawn grid brings it in, the client gets it
+        Entity* v = nullptr;
+        for (int i = 0; i < kMaxEntities; ++i) {
+            Entity* e = w.byIndex(i);
+            if (e && e->used && e->objType == 3 && e->entry == sp->entry && std::hypot(e->x - sp->x, e->y - sp->y) < 1) v = e;
+        }
+        CHECK(v != nullptr, "flags %x: the vendor is in the world", flags);
+        if (!v) continue;
+        float pos[3] = {p->x, p->y, p->z};
+        const std::string msg = gs.interact(v->guid, pos, now);
+        run(300);
+        const CreatureTemplate* t = data.creature(v->entry);
+        CHECK(gs.vendor.open && !gs.vendor.items.empty(), "flags %x (%s): Use opens the goods (msg '%s')", flags,
+              t ? t->name.c_str() : "?", msg.c_str());
+    }
     remove(savePath);
     std::printf("OFFLINE VENDOR: %d checks, %d failed -> %s\n", checks, failed, failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;

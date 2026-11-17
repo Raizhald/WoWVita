@@ -1,6 +1,7 @@
 // platform.h — what the citro3d replacement (c3d_gl.cpp) needs from the platform: a GL context, the screen layout
 // and presenting a frame. Implemented by platform_vita.cpp (vitaGL) and platform_pc.cpp (EGL, offscreen).
 #pragma once
+#include <stddef.h>
 #include <stdint.h>
 
 #include "gl_inc.h"

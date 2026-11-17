@@ -45,27 +45,20 @@ uint32_t nameTint(const std::string& s) {
 
 ui::Font GameUi::listFont() const { return bigText_ ? Font::Normal : Font::Small; }
 
-bool GameUi::weaponSpell(const w3n::GameSession& g, uint32_t spell, int* which) {
-    int w = -1;
-    switch (spell) {
-        case w3n::kSpellAttack: w = 0; break;
-        case 75: case 3018: case 2480: case 7918: case 7919: case 2764: case 3137: case 10277: case 5019: w = 1; break;
-        default:
-            if (spell && (g.spellNames.combat(spell) & w3n::SpellNames::kCombatRanged)) w = 1;
-    }
-    if (which) *which = w;
-    return w >= 0;
-}
-
 ui::Image GameUi::spellIcon(uint32_t spell) const {
     // 6.99: the weapon in hand first, as the game does - Attack and Shoot have icons of their own in SpellIcon.dbc (a generic
-    // fist / placeholder), which the game never shows while a weapon is held; the spell's own icon only without one
-    if (gameSess_ && (spell == w3n::kSpellAttack || weaponSpell(*gameSess_, spell, nullptr))) {
-        const int w = spell == w3n::kSpellAttack ? 0 : 1;
-        if (weaponIcon_[w].ok()) return weaponIcon_[w];
-    }
+    // fist / placeholder), which the game never shows while a weapon is held; the spell's own icon only without one.
+    // 7.13: only the actual weapon swings take the weapon icon - Arcane Shot, Serpent Sting and the other ranged abilities
+    // keep theirs (the server marks every ranged ability for the shooting animation, not only Auto Shot / Shoot).
+    int w = -1;
+    const bool weaponSwing = gameSess_ && w3n::weaponSwingSpell(gameSess_->spellNames, spell, &w);
+    if (weaponSwing && weaponIcon_[w].ok()) return weaponIcon_[w];
     ui::Image im = assets().spellIcon(spell);
     if (im.ok()) return im;
+    // an old / partial pack without this spell's picture: a ranged ability still shows the ranged weapon rather than nothing
+    if (gameSess_ && spell != w3n::kSpellAttack && weaponIcon_[1].ok() &&
+        (gameSess_->spellNames.combat(spell) & w3n::SpellNames::kCombatRanged))
+        return weaponIcon_[1];
     if (spell == w3n::kSpellAttack) im = assets().namedIcon("attack");
     return im;
 }
@@ -164,6 +157,20 @@ void GameUi::iconBox(int x, int y, int size, const ui::Image& icon, const std::s
     }
     if (dim) list_.rect(x, y, size, size, hudRgba(0, 0, 0, 150));
     list_.outline(x - 1, y - 1, size + 2, size + 2, border);
+}
+
+// 7.17: an item with an enchantment (a lure on the fishing pole, an oil on a weapon) glows green in the bags and on the
+// paper doll, as a hint of the original client's item buttons. The glow goes behind the icon; without the interface
+// pack's glow sprite (made before 7.18) a soft green halo stands in for it.
+void GameUi::itemGlow(const w3n::InvItem& it, int x, int y, int size) {
+    if (!it.enchanted()) return;
+    const ui::Image glow = assets().sprite("enchant_glow");
+    if (glow.ok()) {
+        list_.imageAdd(x - 8, y - 8, size + 16, size + 16, glow, hudRgba(110, 255, 140, 190));
+    } else {   // no 7.18 pack yet: a soft green halo, so the enchantment is still visible
+        for (int k = 0; k < 4; ++k)
+            list_.outline(x - 2 - k, y - 2 - k, size + 4 + 2 * k, size + 4 + 2 * k, hudRgba(70, 250, 100, 140 - 28 * k));
+    }
 }
 
 int GameUi::money(int xRight, int y, uint32_t copper, Font f) {
@@ -272,7 +279,6 @@ std::string GameUi::actionName(w3n::GameSession& g, const ActionSlot& a) const {
 
 // The hotbars of the current page over the content: 4 sets (rows) x 8 buttons; tap a cell (bind armed) or drop on it.
 void GameUi::crossbarPicker(w3n::GameSession& g, const Input& in) {
-    (void)in;
     const ActionLayout* bars = barsView_;
     window(2, kTop + 1, kTouchW - 4, kContentH - 2, true);
     std::string what;
@@ -284,17 +290,20 @@ void GameUi::crossbarPicker(w3n::GameSession& g, const Input& in) {
     list_.textFit(10, kTop + 6, title, 220, kGold, true, Font::Normal);
     if (!drag_.active) btn(kTouchW - 74, kTop + 4, 66, 20, tr("Cancel", "Отмена"), Act::ClosePanel, 0, Style::Normal, Font::Small);
     const std::string kSet[4] = {"", btnName(Btn::ZL), btnName(Btn::ZR), btnText("{ZL}+{ZR}")};
+    const bool old = in.cfg && in.cfg->scheme == PadScheme::Old3DS;   // 7.21: X cycles the sets, the face buttons are fixed
     const int cell = 32, gap = 3, x0 = 40, y0 = kTop + 30;
     for (int set = 0; set < 4; ++set) {
         const int y = y0 + set * (cell + gap);
-        list_.textRight(x0 - 4, y + 10, set ? kSet[set] : std::string("—"), set == shownSet_ ? kGold : kGrey);
+        const std::string setLabel = old ? std::string(btnName(Btn::X)) + std::to_string(set + 1) : set ? kSet[set] : std::string("—");
+        list_.textRight(x0 - 4, y + 10, setLabel, set == shownSet_ ? kGold : kGrey);
         for (int b = 0; b < 8; ++b) {
             const int slot = set * 8 + b, x = x0 + b * (cell + gap);
             if (b == 4) list_.rect(x - 2, y, 1, cell, kFrameDim);   // D-pad | face buttons
-            if (!padSlotBindable(slot)) {
+            if (!padSlotBindable(slot) || (old && b >= 4)) {   // Old 3DS: X / A / B / Y keep their fixed actions in every set
                 list_.rect(x, y, cell, cell, kRowAlt);
                 list_.textCentered(x + cell / 2, y + 2, btnSlotGlyph(b), kGrey);
-                list_.textCentered(x + cell / 2, y + 16, HudList::fit(padFixedName(b), cell - 2), hudRgba(110, 106, 98));
+                const char* nm = padFixedName(b, old);
+                list_.textCentered(x + cell / 2, y + 16, HudList::fit(nm, cell - 2), hudRgba(110, 106, 98));
                 continue;
             }
             const ActionSlot a = bars ? bars->at(slot) : ActionSlot();
@@ -308,7 +317,9 @@ void GameUi::crossbarPicker(w3n::GameSession& g, const Input& in) {
         }
     }
     list_.textCentered(kTouchW / 2, y0 + 4 * (cell + gap) + 1,
-                       drag_.active ? tr("Drop it on a button", "Отпустите на кнопке") : tr("Tap a cell or press the button", "Нажмите ячейку или кнопку"),
+                       drag_.active ? tr("Drop it on a button", "Отпустите на кнопке")
+                       : old ? tr("Tap a D-pad cell (X changes the set)", "Нажмите ячейку крестовины (X меняет набор)")
+                             : tr("Tap a cell or press the button", "Нажмите ячейку или кнопку"),
                        kGrey);
 }
 
@@ -379,17 +390,17 @@ void GameUi::drawPanel(w3n::GameSession& g, const Input& in) {
         case Panel::Trade: drawTrade(g, in); break;
         case Panel::Invite: {
             window(20, kTop + 30, kTouchW - 40, 110, true);
-            const bool fv0 = in.cfg && in.cfg->scheme == PadScheme::Forever;
+            const bool n3 = in.cfg && in.cfg->scheme == PadScheme::New3DS;
             if (g.duel.challenged || g.duel.asked) {   // UI stage 9: a duel - theirs (Accept / Decline) or ours (Cancel)
                 const std::string who = g.duel.opponentName.empty() ? std::string("?") : g.duel.opponentName;
                 list_.textCentered(kTouchW / 2, kTop + 48, who, kGold, true, Font::Large);
                 if (g.duel.challenged) {
                     list_.textCentered(kTouchW / 2, kTop + 72, tr("challenges you to a duel.", "вызывает вас на дуэль."), kText, true, Font::Normal);
-                    btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (fv0 ? (std::string(" (") + btnName(Btn::Y) + ")") : (std::string(" (") + btnName(Btn::A) + ")")), Act::InviteYes, 0, Style::Primary);
-                    btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (fv0 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
+                    btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (n3 ? (std::string(" (") + btnName(Btn::Y) + ")") : (std::string(" (") + btnName(Btn::A) + ")")), Act::InviteYes, 0, Style::Primary);
+                    btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (n3 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
                 } else {
                     list_.textCentered(kTouchW / 2, kTop + 72, tr("Duel requested. Waiting...", "Вызов на дуэль отправлен. Ждём..."), kText, true, Font::Normal);
-                    btn(102, kTop + 100, 116, 28, std::string(tr("Cancel", "Отменить")) + (fv0 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
+                    btn(102, kTop + 100, 116, 28, std::string(tr("Cancel", "Отменить")) + (n3 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
                 }
                 break;
             }
@@ -400,9 +411,8 @@ void GameUi::drawPanel(w3n::GameSession& g, const Input& in) {
                                group ? tr("invites you to a group.", "приглашает вас в группу.")
                                      : std::string(tr("invites you to the guild ", "приглашает вас в гильдию ")) + g.guildInviteName,
                                kText, true, Font::Normal);
-            const bool fv = in.cfg && in.cfg->scheme == PadScheme::Forever;
-            btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (fv ? (std::string(" (") + btnName(Btn::Y) + ")") : (std::string(" (") + btnName(Btn::A) + ")")), Act::InviteYes, 0, Style::Primary);
-            btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (fv ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
+            btn(36, kTop + 100, 116, 28, std::string(tr("Accept", "Принять")) + (n3 ? (std::string(" (") + btnName(Btn::Y) + ")") : (std::string(" (") + btnName(Btn::A) + ")")), Act::InviteYes, 0, Style::Primary);
+            btn(168, kTop + 100, 116, 28, std::string(tr("Decline", "Отказать")) + (n3 ? (std::string(" (") + btnName(Btn::A) + ")") : (std::string(" (") + btnName(Btn::B) + ")")), Act::InviteNo, 0, Style::Normal);
             break;
         }
         case Panel::Binder:
@@ -441,7 +451,7 @@ bool GameUi::draw(w3n::GameSession& g, const Input& in, float fps, uint32_t late
     dirty_ = false;
     lastChat_ = g.chatCount;
     lastDrawMs_ = in.nowMs;
-    if (in.cfg) { ui::g_lang = in.cfg->lang; bigText_ = in.cfg->bigText; }
+    if (in.cfg) { ui::setLanguage(in.cfg->lang); bigText_ = in.cfg->bigText; }
     barsView_ = in.bars;
     list_.clear();
     buttons_.clear();

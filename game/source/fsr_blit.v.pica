@@ -1,0 +1,38 @@
+; PICA FurMark blit / UI vertex shader.
+; Inputs: position (v0), three texture coordinates (v1..v3), colour (v4).
+; The three texture coordinates are pre-offset on the CPU so the TEV filter
+; can perform three independent samples without arithmetic in the shader.
+
+.fvec projection[4]
+
+.constf cconst(0.0, 1.0, 0.0, 0.0)
+.alias  zeros cconst.xxxx
+.alias  ones  cconst.yyyy
+
+.out outpos position
+.out uv0 texcoord0
+.out uv1 texcoord1
+.out uv2 texcoord2
+.out outclr color
+
+.alias inpos v0
+.alias t0 v1
+.alias t1 v2
+.alias t2 v3
+.alias incol v4
+
+.proc main
+    mov r0.xy, inpos
+    mov r0.z,  zeros.x
+    mov r0.w,  ones
+    dp4 outpos.x, projection[0], r0
+    dp4 outpos.y, projection[1], r0
+    dp4 outpos.z, projection[2], r0
+    dp4 outpos.w, projection[3], r0
+
+    mov uv0, t0
+    mov uv1, t1
+    mov uv2, t2
+    mov outclr, incol
+    end
+.end

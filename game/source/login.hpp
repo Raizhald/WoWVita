@@ -11,6 +11,9 @@
 #include "game.hpp"
 #include "glue_data.hpp"
 #include "glue_ui.hpp"
+#include "offline/offline_data.hpp"
+#include "offline/offline_nn.hpp"
+#include "offline/offline_server.hpp"
 #include "w3d_character.h"
 
 class LoginFlow {
@@ -57,6 +60,11 @@ public:
     size_t opcodesSeen() const { return world_.opcodeCounts().size(); }
     const std::string& characterName() const { return charName_; }
     bool online() const { return phase_ == Phase::InWorld; }
+    // The Offline flow: one local realm/profile, four companions, no sockets. When Offline was chosen
+    // and the world is entered, phase() is InWorld like an online session so the existing rendering,
+    // UI, camera and combat consumers all keep working unchanged.
+    bool offlineMode() const { return offline_ && phase_ != Phase::Offline; }
+    bool offlineWorld() const { return offline_ && phase_ == Phase::InWorld; }
     // The START menu's "Characters": log out on the server (its timer runs outside inns; the character stays in the world
     // until it ends) and come back to the character list on the same connection. False when not possible now.
     bool requestCharacterList();
@@ -76,12 +84,26 @@ private:
     void fillModel();
     void enterWorld();
     void selectByName(const std::string& name);
+    // ---- offline
+    bool startOffline();               // load the pack/profile and open the local character list
+    void enterWorldOffline();
+    void networkOffline();
+    void leaveOffline();               // save and return to the main menu
+    void loadDataTables();             // spells.txt, factions.txt, ... (shared with the online path)
 
     Phase phase_ = Phase::Menu;
     std::string server_ = "127.0.0.1:3724", account_, password_, charName_, lastRealm_, lastChar_;
     int protocol_ = 3;
     bool turtle_ = false;   // 6.58: log in as the Turtle WoW 1.18.1 client (build 7272; world 5875)
     bool logOn_ = false;           // login.cfg "log=1": record packets to session.w3dl
+    bool offline_ = false;         // the Offline local session is active
+    w3n::offline::OfflineSession offlineSession_;
+    w3n::offline::WorldData offlineData_;
+    w3n::offline::NeuralPolicy offlinePolicy_;
+    bool offlinePolicyLoaded_ = false;
+    // Offline M8 measurements: time spent in OfflineSession::update, reported to the perf log once a second.
+    uint64_t offlineSimTicks_ = 0, offlineSimMaxTicks_ = 0;
+    uint32_t offlineFrames_ = 0, offlineReportMs_ = 0;
     uint64_t sessionT0_ = 0;
     w3n::GameSession game_;
     w3n::PacketLog log_;

@@ -1,0 +1,7 @@
+offline world pack report
+==========================
+
+counts: creatures=4, spawns=10, items=4, spells=15, bots=4
+
+errors: 0
+warnings: 0

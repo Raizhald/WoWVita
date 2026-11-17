@@ -50,7 +50,7 @@ def movement_info(flags, t, x, y, z, o, pitch=0.0, fall=0, jump=None, transport=
     out = struct.pack("<IIffff", flags, t, x, y, z, o)
     if flags & F_TRANSPORT:
         g, tx, ty, tz, to = transport
-        out += packguid(g) + struct.pack("<ffff", tx, ty, tz, to)
+        out += struct.pack("<Qffff", g, tx, ty, tz, to)
     if flags & F_SWIMMING: out += struct.pack("<f", pitch)
     out += struct.pack("<I", fall)
     if flags & F_JUMPING: out += struct.pack("<ffff", *jump)

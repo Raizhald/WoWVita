@@ -63,7 +63,7 @@ int main() {
         w.u8(0x20);
         w.u32(MoveFlag::OnTransport); w.u32(5000);
         w.f32(9999); w.f32(9999); w.f32(9999); w.f32(0);
-        w.packedGuid(ship); w.f32(2); w.f32(1); w.f32(6.5f); w.f32(0.5f);
+        w.u64(ship); w.f32(2); w.f32(1); w.f32(6.5f); w.f32(0.5f);
         w.u32(0);
         for (int i = 0; i < 6; ++i) w.f32(7.0f);
         fields(w, {{3, 0}});

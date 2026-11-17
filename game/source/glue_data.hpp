@@ -63,11 +63,15 @@ public:
     bool outfit(uint8_t race, uint8_t cls, uint8_t sex, uint32_t display[19], uint8_t inv[19]) const;
     const std::string* zone(uint32_t areaId) const;
     uint32_t zoneParent(uint32_t areaId) const;   // the zone of a subzone (0 = it is a zone, or glue.txt is older)
+    // 7.18: the game language from glue.txt ("L ruRU"), what the server localizes its quests, NPC names and gossip by.
+    // Empty on an older glue.txt: the client then announces enUS as before.
+    const std::string& gameLocale() const { return gameLocale_; }
     void addText(const std::string& key, const std::string& v) { texts_[key] = v; }
     void addZone(uint32_t id, const std::string& v) { zones_[id] = v; }
     void addOutfit(uint8_t race, uint8_t cls, uint8_t sex, const std::vector<std::pair<uint32_t, uint8_t>>& items);
 private:
     bool loaded_ = false;
+    std::string gameLocale_;
     std::unordered_map<std::string, std::string> texts_;
     std::unordered_map<uint32_t, std::string> zones_;
     std::unordered_map<uint32_t, uint32_t> zoneParents_;

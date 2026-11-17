@@ -8,11 +8,47 @@
 #include "conv.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <set>
 #include <unordered_map>
 
 namespace w3d {
+
+namespace {
+// 7.14: the order of the eight text columns in a 1.12 DBC (enUS first).
+const char* const kLocaleCodes[8] = {"enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX"};
+std::string g_localeDir = "enUS";
+int g_localeIndex = 0;
+}  // namespace
+
+int gameLocaleIndex() { return g_localeIndex; }
+const std::string& gameLocaleDir() { return g_localeDir; }
+
+void setGameLocale(const std::string& code) {
+    std::string c = code;
+    for (char& ch : c) ch = (char)std::tolower((unsigned char)ch);
+    if (c.empty() || c == "auto") {
+        g_localeDir = c.empty() ? "enUS" : "auto";
+        g_localeIndex = 0;
+        return;
+    }
+    struct Entry { const char* code; int index; const char* dir; };
+    static const Entry kMap[] = {
+        {"enus", 0, "enUS"}, {"engb", 0, "enGB"}, {"kokr", 1, "koKR"}, {"frfr", 2, "frFR"},
+        {"dede", 3, "deDE"}, {"zhcn", 4, "zhCN"}, {"zhtw", 5, "zhTW"}, {"eses", 6, "esES"},
+        {"esmx", 7, "esMX"}, {"ruru", 0, "ruRU"},   // ruRU fan clients replace the English column
+    };
+    for (const Entry& e : kMap)
+        if (c == e.code) {
+            g_localeDir = e.dir;
+            g_localeIndex = e.index;
+            return;
+        }
+    std::fprintf(stderr, "locale: unknown '%s', using enUS\n", code.c_str());
+    g_localeDir = "enUS";
+    g_localeIndex = 0;
+}
 
 bool DbcTable::load(const DataDir& data, const char* name) {
     std::string path = std::string("DBFilesClient\\") + name;
@@ -44,6 +80,20 @@ std::string DbcTable::str(uint32_t r, uint32_t f) const {
     size_t n = 0;
     while (off + n < strSize && s[n]) ++n;
     return std::string(s, n);
+}
+
+std::string DbcTable::loc(uint32_t r, uint32_t base, uint32_t count) const {
+    // 7.14: the selected language's column, else the first non-empty one (a DBC may lack a translation).
+    const int li = gameLocaleIndex();
+    if (li >= 0 && (uint32_t)li < count) {
+        std::string s = str(r, base + (uint32_t)li);
+        if (!s.empty()) return s;
+    }
+    for (uint32_t c = 0; c < count; ++c) {
+        std::string s = str(r, base + c);
+        if (!s.empty()) return s;
+    }
+    return {};
 }
 
 namespace {
@@ -97,9 +147,9 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
     for (uint32_t r = 0; r < spell.records; ++r) {
         uint32_t id = spell.u32(r, 0);
         if (!id || (haveSla && !wanted.count(id))) continue;
-        std::string name = spell.str(r, (uint32_t)nameCol);
+        std::string name = spell.loc(r, (uint32_t)nameCol);
         if (name.empty()) continue;
-        std::string rank = (uint32_t)rankCol < spell.fields ? spell.str(r, (uint32_t)rankCol) : std::string();
+        std::string rank = spell.loc(r, (uint32_t)rankCol);
         for (char& ch : name) if (ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
         for (char& ch : rank) if (ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
         out += std::to_string(id) + '\t' + name + '\t' + rank + '\n';
@@ -125,8 +175,8 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
                 uint32_t t = spell.u32(r, trigCol + k);
                 auto it = rowOf.find(t);
                 if (!wanted.count(t) || it == rowOf.end()) continue;
-                std::string name = spell.str(it->second, (uint32_t)nameCol);
-                std::string rank = (uint32_t)rankCol < spell.fields ? spell.str(it->second, (uint32_t)rankCol) : std::string();
+                std::string name = spell.loc(it->second, (uint32_t)nameCol);
+                std::string rank = spell.loc(it->second, (uint32_t)rankCol);
                 if (name.empty()) continue;
                 for (char& ch : name) if (ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
                 for (char& ch : rank) if (ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
@@ -149,7 +199,7 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
             bool aura = false;
             for (uint32_t k = 0; k < 3; ++k) aura = aura || spell.u32(r, effCol + k) == 6 || spell.u32(r, effCol + k) == 35;
             if (!aura) continue;
-            std::string name = spell.str(r, (uint32_t)nameCol);
+            std::string name = spell.loc(r, (uint32_t)nameCol);
             if (name.empty()) continue;
             for (char& ch : name) if (ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
             out += std::to_string(id) + '\t' + name + "\t\n";
@@ -194,17 +244,56 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
             out += line;
             ++ground;
             if (id == 10 || id == 2120 || id == 5740 || id == 1510 || id == 16914 || id == 4064)
-                known += " " + std::to_string(id) + "(" + spell.str(r, (uint32_t)nameCol) + ")";
+                known += " " + std::to_string(id) + "(" + spell.loc(r, (uint32_t)nameCol) + ")";
         }
         std::printf("  ground-targeted spells: %zu (known among them:%s)\n", ground, known.empty() ? " none" : known.c_str());
     }
+    // 7.16: items used on another item (Shiny Bauble on the fishing pole, a weapon oil or a sharpening stone on a weapon,
+    // a poison): "@item<TAB>id<TAB>itemClass<TAB>subclassMask<TAB>inventoryTypeMask<TAB>mainHand". The spell's Targets mask
+    // (name - 107) asks for an item (TARGET_FLAG_ITEM 0x10); the item requirements are Spell.dbc EquippedItemClass -62
+    // (-1 = any), EquippedItemSubClassMask -61 and EquippedItemInventoryTypeMask -60 (the same columns recipes.txt uses).
+    // mainHand = SPELL_ATTR_HELD_ITEM_ONLY (Attributes 0x200, name - 114): the original client puts the item from the main
+    // hand in the cast by itself (vMaNGOS Spell::CheckCast requires that slot).
+    size_t itemCasts = 0;
+    if (nameCol >= 114) {
+        const uint32_t tgtCol = (uint32_t)nameCol - 107, attrCol = (uint32_t)nameCol - 114, effCol = (uint32_t)nameCol - 59;
+        std::string known;
+        for (uint32_t r = 0; r < spell.records; ++r) {
+            const uint32_t id = spell.u32(r, 0);
+            if (!id) continue;
+            const int32_t cls = (int32_t)spell.u32(r, (uint32_t)nameCol - 62);
+            const uint32_t sub = spell.u32(r, (uint32_t)nameCol - 61), inv = spell.u32(r, (uint32_t)nameCol - 60);
+            const bool mainHand = (spell.u32(r, attrCol) & 0x200) != 0;
+            // The Targets mask is what the client uses to pick the cursor. Some item spells leave it 0 and only mark the
+            // held item: their item requirements (a real class, not -1) and an enchant effect (53 permanent, 54 temporary,
+            // 92 held item) tell them from ordinary spells (Fishing also names the main hand but summons a bobber).
+            bool enchantsItem = false;
+            for (uint32_t k = 0; k < 3; ++k) {
+                const uint32_t e = spell.u32(r, effCol + k);
+                if (e == 53 || e == 54 || e == 92) enchantsItem = true;
+            }
+            if (!(spell.u32(r, tgtCol) & 0x10) && !(mainHand && cls >= 0 && enchantsItem)) continue;
+            char line[96];
+            std::snprintf(line, sizeof line, "@item\t%u\t%d\t%u\t%u\t%u\n", (unsigned)id, (int)cls, (unsigned)sub, (unsigned)inv,
+                          (unsigned)(mainHand ? 1 : 0));
+            out += line;
+            ++itemCasts;
+            if (id == 8087) known += " " + std::to_string(id) + "(" + spell.loc(r, (uint32_t)nameCol) + ")";
+        }
+        std::printf("  item-targeted spells: %zu (Shiny Bauble among them:%s)\n", itemCasts, known.empty() ? " no" : known.c_str());
+    }
     // 5.48: spells that need no unit target: "@self<TAB>id". Every effect's ImplicitTargetA/B (vMaNGOS SpellTarget) is the
-    // caster (1), its party / the friends or hostiles around it (20, 30, 33, 34, 36) - Battle Shout, Thorns-like self buffs,
-    // Thunder Clap. Spells with any single-unit target (6 chain damage, 21 friend ...) or an unknown one are left out.
+    // caster (1), its party / the friends or hostiles around it (20, 30, 33, 34, 36) or an area at the caster's own
+    // position (15: enemies around the source, 22: the source itself) - Battle Shout, Thunder Clap, Frost Nova, Arcane
+    // Explosion. 7.21: 15 and 22 were missing, so Thunder Clap was sent at the selected enemy; the server expects no unit
+    // target for it and refused the cast (it worked only with nothing selected). Spells with any single-unit target (6
+    // chain damage, 21 friend ...) or an unknown one are left out.
     size_t selfCasts = 0;
     if (nameCol >= 107) {
         const uint32_t effC = (uint32_t)nameCol - 59, aC = (uint32_t)nameCol - 38, bC = (uint32_t)nameCol - 35;
-        auto selfKind = [](uint32_t t) { return t == 1 || t == 20 || t == 30 || t == 33 || t == 34 || t == 36; };
+        auto selfKind = [](uint32_t t) {
+            return t == 1 || t == 15 || t == 20 || t == 22 || t == 30 || t == 33 || t == 34 || t == 36;
+        };
         for (uint32_t r = 0; r < spell.records; ++r) {
             const uint32_t id = spell.u32(r, 0);
             if (!id) continue;
@@ -263,7 +352,7 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
             out += line;
             ++cds;
             if (id == 871 || id == 2139 || id == 1953 || id == 100 || id == 20271)
-                known += " " + std::to_string(id) + "(" + spell.str(r, (uint32_t)nameCol) + " " + std::to_string(rec ? rec : catRec) + " ms)";
+                known += " " + std::to_string(id) + "(" + spell.loc(r, (uint32_t)nameCol) + " " + std::to_string(rec ? rec : catRec) + " ms)";
         }
         std::printf("  spell cooldowns: %zu (known among them:%s)\n", cds, known.empty() ? " none" : known.c_str());
     }
@@ -398,6 +487,48 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
 // factions.txt: "T" = FactionTemplate.dbc (14 fields: id, faction, flags, our/friendly/hostile masks, 4 enemies,
 // 4 friends), "F" = Faction.dbc (1.12: 37 fields: id, reputation index, race masks 2-5, class masks 6-9, base
 // standings 10-13, flags 14-17, parent 18, names 19-26 (8 locales), name flags 27, descriptions 28-36).
+// 7.16: language detection for the GUI. Spell.dbc's eight text columns are (enUS, koKR, frFR, deDE, zhCN, zhTW,
+// esES, esMX). A column counts when it has real translated names; the base column is ruRU when it is mostly Cyrillic
+// (a Russian fan client replaced English). Data\<code>\ folders are added by the caller (main.cpp).
+static bool hasCyrillic(const std::string& s) {
+    for (size_t i = 0; i + 1 < s.size(); ++i) {
+        const unsigned char a = (unsigned char)s[i], b = (unsigned char)s[i + 1];
+        if ((a == 0xD0 || a == 0xD1) && b >= 0x80 && b <= 0xBF) return true;
+    }
+    return false;
+}
+
+std::vector<std::string> availableLocales(const DataDir& data) {
+    std::vector<std::string> out;
+    DbcTable spell;
+    if (!spell.load(data, "Spell.dbc")) return out;
+    const int nameCol = spellNameColumn(spell);
+    if (nameCol < 0 || (uint32_t)nameCol >= spell.fields) return out;
+    const int cols = std::min(8, (int)(spell.fields - (uint32_t)nameCol));
+    if (cols <= 0) return out;
+    uint32_t baseRows = 0, cyrRows = 0;
+    std::vector<uint32_t> diff((size_t)cols, 0);
+    for (uint32_t r = 0; r < spell.records; ++r) {
+        const std::string base = spell.str(r, (uint32_t)nameCol);
+        if (!base.empty()) {
+            ++baseRows;
+            if (hasCyrillic(base)) ++cyrRows;
+        }
+        for (int c = 1; c < cols; ++c) {
+            const std::string s = spell.str(r, (uint32_t)(nameCol + c));
+            if (!s.empty() && s != base) ++diff[(size_t)c];
+        }
+    }
+    if (baseRows) out.push_back(cyrRows * 10 > baseRows ? "ruRU" : "enUS");
+    static const char* const kOther[7] = {"koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX"};
+    // A handful of translated names is enough (custom clients may only translate part of the data); avoid counting
+    // rows where a locale column merely repeats the English fallback.
+    const uint32_t need = std::max<uint32_t>(5, baseRows / 100);
+    for (int c = 1; c < cols && c <= 7; ++c)
+        if (diff[(size_t)c] >= need) out.push_back(kOther[c - 1]);
+    return out;
+}
+
 bool exportFactions(const DataDir& data, const std::string& path, bool verbose) {
     Table ft, fa;
     if (!ft.load(data, "FactionTemplate.dbc") || ft.fields < 14) {
@@ -421,8 +552,7 @@ bool exportFactions(const DataDir& data, const std::string& path, bool verbose) 
             out += "F\t" + std::to_string(fa.u32(r, 0)) + "\t" + std::to_string((int32_t)fa.u32(r, 1));
             for (uint32_t c = 2; c < 18; ++c)
                 out += "\t" + (c >= 10 && c < 14 ? std::to_string((int32_t)fa.u32(r, c)) : std::to_string(fa.u32(r, c)));
-            std::string name;
-            for (uint32_t c = 19; c < 27 && c < fa.fields && name.empty(); ++c) name = fa.str(r, c);   // first locale set
+            std::string name = fa.loc(r, 19, 8);   // 7.14: the selected language
             for (char& ch : name) if (ch == '\t' || ch == '\n' || ch == '\r') ch = ' ';
             out += "\t" + name + "\n";
             ++nf;

@@ -1,5 +1,5 @@
-// PC check of the controller schemes (stage 5.11): pad.cpp against the WoW: Forever layout described in
-// pad.hpp, and the classic layout of stages 5.1-5.10.
+// PC check of the controller schemes (stage 5.11): pad.cpp against the New 3DS layout described in
+// pad.hpp, and the Old 3DS layout of stages 5.1-5.10 (7.23: the D-pad is the hotbar).
 #include <math.h>
 #include <cstdio>
 
@@ -23,7 +23,7 @@ static PadOut press(Pad& p, const PadConfig& c, u32 held, u32 down, float lx = 0
 }
 
 int main() {
-    PadConfig f;   // Forever defaults
+    PadConfig f;   // New 3DS defaults
     Pad p;
     // fixed face buttons in set 0
     CHECK(press(p, f, 0, KEY_B).jump, "B jumps");
@@ -85,11 +85,11 @@ int main() {
     CHECK(!press(p, f, 0, 0, 0, 0, 0, 0, false, 0, KEY_SELECT).freeCamera, "...and no free camera after the combo");
     {
         PadConfig cl;
-        cl.scheme = PadScheme::Classic;
+        cl.scheme = PadScheme::Old3DS;
         Pad pc;
         press(pc, cl, 0, KEY_SELECT);
         o = press(pc, cl, KEY_SELECT, KEY_DLEFT);
-        CHECK(o.tabDelta == -1 && fabsf(o.camYaw) < 1e-6f, "classic: SELECT + D-left is a tab, not a look");
+        CHECK(o.tabDelta == -1 && fabsf(o.camYaw) < 1e-6f, "old 3ds: SELECT + D-left is a tab, not a look");
     }
     // movement: face movement out of combat
     o = press(p, f, 0, 0, 0.0f, 1.0f);
@@ -124,24 +124,74 @@ int main() {
     // camera
     o = press(p, f, 0, 0, 0, 0, 1.0f, 0.0f);
     CHECK(o.camYaw < 0 && !o.aiming, "C-Stick right turns the camera right");
-    // classic scheme
+    // Old 3DS scheme
     PadConfig c;
-    c.scheme = PadScheme::Classic;
+    c.scheme = PadScheme::Old3DS;
     CHECK(press(p, c, 0, KEY_B).jump && press(p, c, 0, KEY_L).nextTarget && press(p, c, 0, KEY_R).toggleAttack &&
-          press(p, c, 0, KEY_Y).chat && press(p, c, 0, KEY_A).interact && press(p, c, 0, KEY_X).nextSet, "classic keys");
+          press(p, c, 0, KEY_A).interact, "old 3ds keys");
+    {   // 7.25: X is the next set on a tap, the target's menu on a hold
+        Pad px;
+        press(px, c, 0, KEY_X);
+        PadOut xo = press(px, c, 0, 0, 0, 0, 0, 0, false, 0, KEY_X);
+        CHECK(xo.set == 1 && !xo.context, "old 3ds X tap: next set");
+        Pad ph;
+        press(ph, c, 0, KEY_X);
+        bool menu = false;
+        for (int k = 0; k < 14; ++k) { xo = press(ph, c, KEY_X, 0); menu = menu || xo.context; }
+        CHECK(menu && xo.set == 0, "old 3ds X hold: target menu, no set change");
+        xo = press(ph, c, 0, 0, 0, 0, 0, 0, false, 0, KEY_X);
+        CHECK(!xo.context && xo.set == 0, "...and the release does not change the set");
+    }
     o = press(p, c, 0, 0, 0.0f, 1.0f);
-    CHECK(o.dir == MoveFlag::Forward && !o.walk, "classic forward runs");
+    CHECK(o.dir == MoveFlag::Forward && !o.walk, "old 3ds forward runs");
     o = press(p, c, 0, 0, 1.0f, 0.0f);
-    CHECK(o.dir == 0 && o.camYaw < 0, "classic: stick right turns");
-    CHECK(press(p, c, KEY_DDOWN, 0).zoom > 0, "classic D-down zoom out");
+    CHECK(o.dir == 0 && o.camYaw < 0, "old 3ds: stick right turns");
+    Pad pd;
+    CHECK(press(pd, c, 0, KEY_DDOWN).slot == 2, "old 3ds D-down is hotbar slot 2");
+    // 7.23: the D-pad is always the hotbar; hold Y to look with the Circle Pad
+    {
+        PadConfig os;
+        os.scheme = PadScheme::Old3DS;
+        Pad ps;
+        o = press(ps, os, 0, 0, 0, 0, 0, 0, false, 0, KEY_Y);
+        CHECK(!o.clearTarget, "old 3ds D-pad: a Y release without a press does not clear the target");
+        CHECK(press(ps, os, 0, KEY_DUP).slot == 0 && press(ps, os, 0, KEY_DLEFT).slot == 3, "old 3ds D-pad: D-up / D-left");
+        CHECK(press(ps, os, KEY_DUP, 0).zoom == 0, "old 3ds D-pad: the D-pad does not zoom by itself");
+        press(ps, os, 0, KEY_X);
+        press(ps, os, 0, 0, 0, 0, 0, 0, false, 0, KEY_X);   // a tap: the set changes on release
+        CHECK(press(ps, os, 0, KEY_DDOWN).slot == 8 + 2, "old 3ds D-pad: X taps to the next set of slots");
+        o = press(ps, os, KEY_Y, 0, 1.0f, 0.0f);
+        CHECK(o.camYaw < 0 && o.dir == 0 && !o.clearTarget, "old 3ds D-pad: hold Y, stick looks around (no walking)");
+        o = press(ps, os, 0, 0, 1.0f, 0.0f, 0, 0, false, 0, KEY_Y);
+        CHECK(!o.clearTarget, "old 3ds D-pad: Y used for looking does not clear the target on release");
+        o = press(ps, os, KEY_Y, KEY_DUP);
+        CHECK(o.zoom < 0 && o.slot < 0, "old 3ds D-pad: hold Y + D-up zooms, it is not a slot");
+        o = press(ps, os, KEY_Y, KEY_DLEFT);
+        CHECK(o.camYaw > 0 && o.slot < 0 && o.dir == 0, "old 3ds D-pad: hold Y + D-left looks, it is not a slot");
+        press(ps, os, 0, 0, 0, 0, 0, 0, false, 0, KEY_Y);
+        press(ps, os, 0, KEY_Y);
+        o = press(ps, os, 0, 0, 0, 0, 0, 0, false, 0, KEY_Y);
+        CHECK(o.clearTarget, "old 3ds D-pad: a tap of Y clears the target");
+        CHECK(press(ps, os, 0, KEY_L).nextTarget, "old 3ds D-pad: L is still next target");
+        // 7.26: L + Y aims the target ring with the Circle Pad; releasing Y takes the aimed unit
+        o = press(ps, os, KEY_L | KEY_Y, 0, 1.0f, 0.0f, 0, 0, false, 1.0f);
+        CHECK(o.mode == PadOut::Enemy && o.aiming &&
+              fabsf(remainderf(o.aimYaw - (1.0f - 1.5707963f), 6.2831853f)) < 1e-4f,
+              "old 3ds L+Y aims the target ring with the Circle Pad (%f)", o.aimYaw);
+        CHECK(!o.nextTarget && o.dir == 0 && o.turn == 0 && o.camYaw == 0 && o.camPitch == 0,
+              "old 3ds L+Y: no next target, no walking, no camera turn");
+        o = press(ps, os, KEY_L, 0, 0, 0, 0, 0, false, 0, KEY_Y);
+        CHECK(o.mode == PadOut::None && o.released == PadOut::Enemy && !o.clearTarget && !o.nextTarget,
+              "old 3ds L+Y release: take the aimed unit, no clear, no next target");
+    }
     // config round trip
     PadConfig w = f;
-    w.scheme = PadScheme::Classic; w.runThreshold = 0.3f; w.faceMovement = false; w.toggleModifiers = true; w.invertY = true;
+    w.scheme = PadScheme::Old3DS; w.runThreshold = 0.3f; w.faceMovement = false; w.toggleModifiers = true; w.invertY = true;
     w.save("/tmp/w3d_pad_test.txt");
     PadConfig r;
     r.load("/tmp/w3d_pad_test.txt");
-    CHECK(r.scheme == PadScheme::Classic && fabsf(r.runThreshold - 0.3f) < 1e-3f && !r.faceMovement && r.toggleModifiers && r.invertY,
-          "pad.txt round trip");
+    CHECK(r.scheme == PadScheme::Old3DS && fabsf(r.runThreshold - 0.3f) < 1e-3f && !r.faceMovement && r.toggleModifiers &&
+          r.invertY, "pad.txt round trip");
     // 6.51: the doodad distance keys (defaults, round trip, out-of-range values ignored)
     {
         PadConfig d;

@@ -38,7 +38,7 @@ add_custom_target(shaders DEPENDS ${SHBIN_HEADERS})
 
 # ------------------------------------------------------------------ sources
 file(GLOB GAME_SOURCES ${ROOT}/game/source/*.cpp)
-file(GLOB NET_SOURCES ${ROOT}/net/*.cpp)
+file(GLOB NET_SOURCES ${ROOT}/net/*.cpp ${ROOT}/net/offline/*.cpp)   # net/offline: the offline world core (upstream 0.9)
 file(GLOB MATHS_SOURCES ${COMPAT}/src/maths/*.c)
 set(COMPAT_SOURCES
   ${COMPAT}/src/c3d_gl.cpp ${COMPAT}/src/ctru_common.cpp ${COMPAT}/src/ndsp.cpp ${COMPAT}/src/paths.cpp
@@ -85,6 +85,9 @@ if(VITA)
     NAME ${VITA_APP_NAME}
     # a small synthetic test region (built by converter: w3dconv --synthetic)
     FILE ${ROOT}/data/synth.w3dp synth.w3dp
+    FILE ${ROOT}/data/lang_deDE.txt lang_deDE.txt
+    FILE ${ROOT}/data/lang_esES.txt lang_esES.txt
+    FILE ${ROOT}/data/lang_frFR.txt lang_frFR.txt
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png

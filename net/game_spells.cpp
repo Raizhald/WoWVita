@@ -14,6 +14,25 @@
 
 namespace w3n {
 
+// 7.13: the action-bar icon of a weapon swing is the weapon's (Attack -> main hand, Auto Shot / Shoot / Throw -> ranged).
+// The server marks every ranged ability (Arcane Shot, Serpent Sting ...) as ranged for the shooting animation, so the
+// subclass alone must not decide this: only the weapon-swing spells themselves do.
+bool weaponSwingSpell(const SpellNames& names, uint32_t spell, int* which) {
+    int w = -1;
+    switch (spell) {
+        case kSpellAttack: w = 0; break;
+        case 75: case 3018: case 2480: case 7918: case 7919: case 2764: case 3137: case 10277: case 5019: w = 1; break;
+        default: {
+            // Custom servers may use another id for the same shots: the spell book carries the English names.
+            const std::string n = names.name(spell);
+            if (n == "Auto Shot" || n == "Throw" || n == "Throw Weapon" || n.rfind("Shoot", 0) == 0) w = 1;
+            break;
+        }
+    }
+    if (which) *which = w;
+    return w >= 0;
+}
+
 namespace {
 enum : uint16_t {
     CMSG_SET_ACTION_BUTTON = 0x128, SMSG_ACTION_BUTTONS = 0x129, SMSG_INITIAL_SPELLS = 0x12A,
@@ -23,6 +42,7 @@ enum : uint16_t {
     SMSG_SPELL_START = 0x131, SMSG_SPELL_GO = 0x132, SMSG_SPELL_FAILURE = 0x133, SMSG_SPELL_COOLDOWN = 0x134,
     SMSG_COOLDOWN_EVENT = 0x135, SMSG_SPELLHEALLOG = 0x150, SMSG_CLEAR_COOLDOWN = 0x1DE, SMSG_ITEM_COOLDOWN = 0x0B0,
     SMSG_REMOVED_SPELL = 0x203, SMSG_SPELLNONMELEEDAMAGELOG = 0x250, SMSG_PERIODICAURALOG = 0x24E,
+    SMSG_SPELLDAMAGESHIELD = 0x24F,
     CMSG_CANCEL_AURA = 0x136, SMSG_UPDATE_AURA_DURATION = 0x137,
 };
 constexpr uint16_t TARGET_FLAG_UNIT = 0x0002;
@@ -31,6 +51,23 @@ constexpr uint16_t TARGET_FLAG_UNIT = 0x0002;
 uint64_t guidBySize(Reader& r, size_t tail) {
     if (r.left() == 8 + tail) return r.u64();
     return r.packedGuid();
+}
+
+// 7.21: the floating combat text of the HUD reads GameSession::hits, which used to hold melee swings only. Spell damage,
+// damage-over-time ticks and damage shields go into the same list now, so Fireball, Thunder Clap, a wand or a DoT shows
+// its number like a sword blow does.
+void addHit(std::deque<MeleeHit>& hits, uint32_t nowMs, uint64_t attacker, uint64_t victim, int32_t damage,
+            uint32_t hitInfo, uint32_t spell) {
+    if (damage <= 0) return;
+    MeleeHit h;
+    h.ms = nowMs;
+    h.attacker = attacker;
+    h.victim = victim;
+    h.damage = damage;
+    h.hitInfo = hitInfo;
+    h.spell = spell;
+    hits.push_back(h);
+    while (hits.size() > 32) hits.pop_front();
 }
 }  // namespace
 
@@ -72,6 +109,26 @@ bool SpellNames::load(const char* path) {
             unsigned id = 0;
             float range = 0, radius = 0;
             if (sscanf(line + 8, "%u %f %f", &id, &range, &radius) == 3 && id) addGround(id, range, radius);
+            continue;
+        }
+        if (!strncmp(line, "@item\t", 6)) {   // 7.16: "@item id class subclassMask inventoryTypeMask mainHand"
+            unsigned id = 0, sub = 0, inv = 0, mh = 0;
+            int cls = -1;
+            if (sscanf(line + 6, "%u %d %u %u %u", &id, &cls, &sub, &inv, &mh) >= 4 && id)
+                addItemTarget(id, ItemTarget{(int32_t)cls, sub, inv, mh != 0});
+            continue;
+        }
+        if (!strncmp(line, "@enchant\t", 9)) {   // 7.16: "@enchant id name" - an applied item enchantment
+            char* p = line + 9;
+            char* tab = strchr(p, '\t');
+            if (!tab) continue;
+            *tab = 0;
+            char* name = tab + 1;
+            while (*name && (*name == ' ' || *name == '\t')) ++name;
+            std::string nm = name;
+            while (!nm.empty() && (nm.back() == '\n' || nm.back() == '\r')) nm.pop_back();
+            const uint32_t id = (uint32_t)strtoul(p, nullptr, 10);
+            if (id && !nm.empty()) addEnchant(id, nm);
             continue;
         }
         if (!strncmp(line, "@school\t", 8)) {   // 6.40: "@school id school"
@@ -264,11 +321,18 @@ bool GameSession::castsOnSelf(uint32_t spell) const {
     return !t || !t->isUnitLike() || t->dead() || enemyLike(*t);
 }
 
+bool GameSession::corpseSpell(uint32_t spell) const {
+    // 20577 is Cannibalize; the name covers a server that teaches a renamed/ranked copy from spells.txt.
+    return spell == 20577 || spellNames.name(spell) == "Cannibalize";
+}
+
 bool GameSession::castSpell(uint32_t spell, uint32_t nowMs) {
+    attackAfterCast_ = 0;   // 7.19: a new action drops a pending charge attack (see combatAfterCast)
     if (spell == kSpellAttack) {
         if (attackWanted_) stopAttack(nowMs); else startAttack(nowMs);
         return true;
     }
+    const bool corpse = corpseSpell(spell);   // 7.13: Cannibalize - the server finds the corpse, no unit target is sent
     if (!spells.empty() && !knowsSpell(spell)) {
         fail("You do not know " + spellNames.name(spell), nowMs);
         return false;
@@ -288,7 +352,7 @@ bool GameSession::castSpell(uint32_t spell, uint32_t nowMs) {
     // 6.87: range, as the original client checks it before sending (vMaNGOS Spell::CheckRange measures between the bounding
     // spheres: centre distance - both UNIT_BOUNDINGRADIUS; a player gets 1.25 yd of leeway on max range)
     const bool onSelf = castsOnSelf(spell);
-    if (target_ && target_ != self_ && !spellNames.selfCast(spell) && !onSelf) {
+    if (!corpse && target_ && target_ != self_ && !spellNames.selfCast(spell) && !onSelf) {
         const SpellNames::Range* rg = spellNames.range(spell);
         const WorldObject* t = objects.find(target_);
         const WorldObject* me = selfObject();
@@ -305,7 +369,9 @@ bool GameSession::castSpell(uint32_t spell, uint32_t nowMs) {
     }
     Writer w;
     w.u32(spell);
-    if (onSelf && self_) {
+    if (corpse) {
+        w.u16(0);   // Cannibalize: the server picks an edible corpse near us (vMaNGOS Spell::EffectDummy 20577)
+    } else if (onSelf && self_) {
         w.u16(TARGET_FLAG_UNIT);
         w.packedGuid(self_);
     } else if (target_ && !spellNames.selfCast(spell)) {
@@ -315,9 +381,9 @@ bool GameSession::castSpell(uint32_t spell, uint32_t nowMs) {
         w.u16(0);   // self / no explicit target
     }
     send(CMSG_CAST_SPELL, w.b, nowMs);
-    predictCast(spell, onSelf ? self_ : target_ && !spellNames.selfCast(spell) ? target_ : 0, nowMs);
+    predictCast(spell, corpse ? 0 : onSelf ? self_ : target_ && !spellNames.selfCast(spell) ? target_ : 0, nowMs);
     lastCastSpell_ = spell;
-    lastCastTarget_ = target_;
+    lastCastTarget_ = corpse ? 0 : target_;
     combatAfterCast(spell, nowMs);
     return true;
 }
@@ -329,9 +395,24 @@ bool GameSession::castSpell(uint32_t spell, uint32_t nowMs) {
 void GameSession::combatAfterCast(uint32_t spell, uint32_t nowMs) {
     const uint8_t k = spellNames.combat(spell);
     if (k & SpellNames::kCombatStops) { attackWanted_ = false; return; }
-    if (!(k & SpellNames::kCombatMelee) || attackWanted_ || !target_) return;
+    // 7.19: Charge carries us to the target (8-25 yd), so the swing must wait until we are there. Whether the data calls
+    // it a melee ability or not (the name is the fallback, a localised spells.txt may keep another one), the spell is
+    // remembered here; game.cpp's update() starts the auto-attack once the target is in reach and a refused or
+    // interrupted cast drops it.
+    const bool gapCloser = spellNames.name(spell) == "Charge";
+    if (!(k & SpellNames::kCombatMelee) && !gapCloser) return;
+    if (attackWanted_ || !target_) return;
     const WorldObject* t = objects.find(target_);
     if (!t || !t->isUnitLike() || t->dead() || !enemyLike(*t)) return;
+    // Starting the attack together with the cast made the server answer "out of range"; as no swing ever began, the wish
+    // stayed on, and inCombat() counts it: the client then kept the combat stance, the combat controls and the Combat tab
+    // for good (a relog was the only way out).
+    const SpellNames::Range* rg = spellNames.range(spell);
+    if (gapCloser || (rg && rg->max > 8.0f)) {
+        attackAfterCast_ = spell;
+        attackAfterCastMs_ = nowMs ? nowMs : 1;
+        return;
+    }
     startAttack(nowMs);
 }
 
@@ -570,6 +651,7 @@ bool GameSession::handleSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
             }
             if (caster != self_) { unitCasts_.erase(caster); return true; }
             if (cast.spell == spell) cast = CastState();
+            if (lastCastSpell_ == spell) lastCastRetry_ = 0;   // 7.21: the cast worked: a later refusal may retry again
             ++spellCount;
             {   // UI stage 12: our cooldown starts now (the 1.12 server leaves it to the client)
                 uint32_t itemEntry = 0;
@@ -587,6 +669,8 @@ bool GameSession::handleSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
             // The server sends status 0 after every cast that worked: that is not a failure (it must neither
             // clear the cast bar of a spell with a cast time nor print anything).
             if (status == 0) return true;
+            // 7.19: the cast never went off (Charge while moving, out of line of sight ...): no sword work either
+            if (attackAfterCast_ == spell) attackAfterCast_ = 0;
             uint8_t res = r.u8();
             if (r.bad) return true;
             if (cast.spell == spell) cast = CastState();
@@ -602,6 +686,20 @@ bool GameSession::handleSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
                     send(CMSG_CAST_SPELL, w.b, nowMs);
                     return true;
                 }
+            }
+            // 7.21: a harmful spell refused "invalid target" while an enemy was selected may be an area centred on the
+            // caster (Thunder Clap, Frost Nova, Arcane Explosion). An old spells.txt without its "@self" line made the
+            // client send the enemy as a unit target, which the server does not expect: retry once with no target. Only
+            // for spells without "@range" data (instant / melee reach); a ranged spell refused this way is a real wrong
+            // target and a second refusal would only add a second error line.
+            if (res == 10 && !spellNames.friendly(spell) && !spellNames.range(spell) && spell == lastCastSpell_ && lastCastTarget_ &&
+                lastCastTarget_ != self_ && lastCastRetry_ != spell) {
+                lastCastRetry_ = spell;
+                Writer w;
+                w.u32(spell);
+                w.u16(0);
+                send(CMSG_CAST_SPELL, w.b, nowMs);
+                return true;
             }
             lastCastRetry_ = 0;
             lastCastFail = res;
@@ -630,6 +728,7 @@ bool GameSession::handleSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
             }
             if (g != self_) { unitCasts_.erase(g); return true; }
             uint8_t res = r.u8();
+            if (attackAfterCast_ == spell) attackAfterCast_ = 0;   // 7.19: an interrupted charge starts no auto-attack
             if (cast.active && cast.spell == spell) {
                 cast = CastState();
                 lastCastFail = res;
@@ -693,16 +792,39 @@ bool GameSession::handleSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
         case SMSG_SPELLNONMELEEDAMAGELOG: {
             uint64_t victim = r.packedGuid(), caster = r.packedGuid();
             uint32_t spell = r.u32(), dmg = r.u32();
-            if (!r.bad) {   // 6.95: the sound of the blow, for everyone near (the school byte follows the damage)
+            if (r.bad) return true;
+            const uint8_t school = r.left() >= 1 ? r.u8() : 0;
+            // The 1.12 body after the school byte: absorbed, resisted, a periodic flag, an unused byte, blocked, hit type
+            // flags (bit 0x2 is a critical hit). Older/short bodies are tolerated: the number is drawn anyway.
+            uint8_t periodic = 0;
+            uint32_t hitType = 0;
+            if (r.left() >= 4 + 4 + 1 + 1 + 4 + 4) {
+                r.skip(8);         // absorbed, resisted
+                periodic = r.u8();
+                r.skip(1);         // unused
+                r.skip(4);         // blocked
+                hitType = r.u32();
+            }
+            {   // 6.95: the sound of the blow, for everyone near
                 WorldSound w;
                 w.kind = WorldSound::SpellDamage;
                 w.src = caster;
                 w.dst = victim;
                 w.spell = spell;
-                w.victimState = r.left() >= 1 ? r.u8() : 0;
+                w.victimState = school;
+                w.hitInfo = periodic ? 1u : 0u;
                 worldSound(w);
             }
-            if (r.bad || (caster != self_ && victim != self_)) return true;
+            // 7.21: the floating number (Fireball, Thunder Clap, a wand shot ...), as a melee swing gets. A next-melee
+            // ability (Heroic Strike, Cleave) sends the same blow twice - SMSG_ATTACKERSTATEUPDATE with its id and this
+            // log - so a hit of that id just seen is not added a second time.
+            bool alreadyCounted = false;
+            if (spell && dmg > 0)
+                for (auto it = hits.rbegin(); it != hits.rend() && nowMs >= it->ms && nowMs - it->ms <= 1000 && !alreadyCounted; ++it)
+                    alreadyCounted = it->spell == spell && it->attacker == caster && it->victim == victim && it->damage == (int32_t)dmg;
+            if (!alreadyCounted && (caster == self_ || victim == self_))
+                addHit(hits, nowMs, caster, victim, (int32_t)dmg, (hitType & 0x2) ? 0x80u : 0u, spell);
+            if (caster != self_ && victim != self_) return true;
             std::string c = caster == self_ ? "Your" : objects.nameOf(caster) + "'s";
             std::string v = victim == self_ ? "you" : objects.nameOf(victim);
             if (c == "'s") c = "?'s";
@@ -710,22 +832,30 @@ bool GameSession::handleSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
             addLocal(c + " " + spellNames.name(spell) + " hits " + v + " for " + std::to_string(dmg) + ".", nowMs);
             return true;
         }
-        case SMSG_PERIODICAURALOG: {   // 6.95: damage-over-time ticks: only their sound (packed victim, packed caster, spell, count, then per tick: aura type 3 = damage, school, ...)
+        case SMSG_PERIODICAURALOG: {   // 6.95: damage-over-time ticks: their sound and 7.21 their floating numbers (packed victim, packed caster, spell, count, then per tick: aura type 3 = damage, amount, school, absorb, resist)
             const uint64_t victim = r.packedGuid(), caster = r.packedGuid();
             const uint32_t spell = r.u32(), count = r.u32();
             if (r.bad || count == 0 || count > 8) return true;
             const uint32_t type = r.u32();
             if (r.bad || (type != 3 && type != 89)) return true;   // PERIODIC_DAMAGE (89 = percent damage); heals stay silent
             const uint32_t dmg = r.u32();
-            (void)dmg;
             WorldSound w;
             w.kind = WorldSound::SpellDamage;
             w.src = caster;
             w.dst = victim;
             w.spell = spell;
-            w.victimState = r.left() >= 4 ? r.u32() : 0;
+            w.victimState = r.left() >= 4 ? r.u32() : 0;   // school, for the sound
             w.hitInfo = 1;
             worldSound(w);
+            if (caster == self_ || victim == self_) addHit(hits, nowMs, caster, victim, (int32_t)dmg, 0, spell);
+            return true;
+        }
+        case SMSG_SPELLDAMAGESHIELD: {   // 7.21: Thorns / Retribution Aura: u64 the shield's owner (the attacker), u64 the unit that struck it (the victim), u32 damage, u32 school (no spell id in 1.12)
+            const uint64_t owner = r.u64(), striker = r.u64();
+            const uint32_t dmg = r.u32();
+            (void)r.u32();   // school
+            if (r.bad) return true;
+            if (owner == self_ || striker == self_) addHit(hits, nowMs, owner, striker, (int32_t)dmg, 0, 0);
             return true;
         }
         case SMSG_SPELLHEALLOG: {

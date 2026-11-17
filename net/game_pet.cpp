@@ -271,11 +271,18 @@ bool GameSession::petRename(const std::string& name, uint32_t nowMs) {
 std::vector<InvItem> GameSession::petFoodCandidates() {
     std::vector<InvItem> out;
     for (const InvItem& it : inventory()) {
-        if (it.equipped() || it.isBagSlot()) continue;
-        const ItemInfo* info = itemInfoIfKnown(it.entry);
+        if (it.equipped() || it.isBagSlot() || !it.entry) continue;
+        // itemInfo (not itemInfoIfKnown): the food list can be the first thing that asks about a bag item, and the answer
+        // arrives a frame later (vMaNGOS sends every consumable's subclass as 0 to the 1.12 client).
+        const ItemInfo* info = itemInfo(it.entry);
         if (!info || info->missing) continue;
-        // Consumable / Food & Drink, or Trade Goods / Meat: the pet's diet (family) is checked by the server
-        if ((info->cls == 0 && info->subclass == 5) || (info->cls == 7 && info->subclass == 8)) out.push_back(it);
+        // 7.13: the 1.12 server writes subclass 0 for every consumable ("client known only 0 subclass" in vMaNGOS), so
+        // Food & Drink can no longer be told by subclass 5: list every consumable and let the server check the pet's diet
+        // (it answers SPELL_FAILED_WRONG_PET_FOOD / FOOD_LOWLEVEL).
+        // 7.19: meat and fish are Trade Goods and their subclass comes as 0 as well (the fish that feeds the pet in the PC
+        // client was missing here), so a Trade Good with subclass Meat (8) or with no subclass is offered too - the
+        // server decides; anything the pet will not eat comes back as a line, never as a silent no.
+        if (info->cls == 0 || (info->cls == 7 && (info->subclass == 8 || info->subclass == 0))) out.push_back(it);
     }
     return out;
 }

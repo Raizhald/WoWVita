@@ -22,7 +22,7 @@ enum class GlueAction : uint8_t {
     EditServer, EditAccount, EditPassword, Login, Offline, Quit, ToggleProtocol, ToggleLog,   // login
     CancelWait, DismissMessage,                                                             // dialogs
     RealmAccept, RealmCancel,                                                               // realm list
-    EnterWorld, CreateNew, DeleteCharacter, ChangeRealm, Back,                              // character list
+    EnterWorld, CreateNew, DeleteCharacter, ChangeRealm, Back, Explore,                    // character list
     EditName, CreateAccept, CreateBack,                                                     // creation
 };
 
@@ -44,6 +44,7 @@ struct GlueModel {
     glue::Appearance appearance;   // character creation: what the chosen race / sex has
     bool appearanceKnown = false;  // false while its CHRS entry loads (or the pack has none)
     bool sceneDrawn = false;       // a 3D scene is behind the top screen (else a backdrop is painted)
+    bool offline = false;          // the local offline profile: "Explore" instead of "Change Realm"
 };
 
 struct GlueInput {

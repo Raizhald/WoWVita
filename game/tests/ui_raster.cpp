@@ -150,8 +150,15 @@ void Canvas::draw(const HudList& l) {
                         float fv = q.v0 + ((y - q.y0) + 0.5f) * (float)(q.v1 - q.v0) / (float)(q.y1 - q.y0);
                         int u = std::clamp((int)floorf(fu), 0, t->w - 1), v = std::clamp((int)floorf(fv), 0, t->h - 1);
                         const uint8_t* s = &t->rgba[((size_t)v * t->w + u) * 4];
-                        if (q.mode == kHudImage) { r = r * s[0] / 255; g = g * s[1] / 255; b = b * s[2] / 255; }
+                        if (q.mode == kHudImage || q.mode == kHudAdd) { r = r * s[0] / 255; g = g * s[1] / 255; b = b * s[2] / 255; }
                         a = a * s[3] / 255;
+                        if (q.mode == kHudAdd) {   // 7.17: added to what is under it (the enchanted item's glow)
+                            uint8_t* o = &rgba[((size_t)y * w + x) * 4];
+                            o[0] = (uint8_t)std::min(255, o[0] + r * a / 255);
+                            o[1] = (uint8_t)std::min(255, o[1] + g * a / 255);
+                            o[2] = (uint8_t)std::min(255, o[2] + b * a / 255);
+                            continue;
+                        }
                     }
                 }
                 uint8_t* o = &rgba[((size_t)y * w + x) * 4];

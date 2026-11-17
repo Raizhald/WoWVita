@@ -1,0 +1,117 @@
+{
+  "samples": 21588,
+  "train": 18349,
+  "validation": 3239,
+  "float_accuracy": 0.9922815683853041,
+  "int8_accuracy": 0.9919728311207163,
+  "shifts": [
+    1,
+    0
+  ],
+  "seed": 7,
+  "epochs": 40,
+  "lr": 0.12,
+  "actions": [
+    "attack",
+    "ability",
+    "defensive",
+    "heal",
+    "interrupt",
+    "reposition",
+    "retreat",
+    "hold"
+  ],
+  "teacher_action_counts": [
+    3640,
+    5270,
+    3268,
+    2345,
+    39,
+    1107,
+    1568,
+    1112
+  ],
+  "confusion_teacher_rows": [
+    [
+      616,
+      0,
+      0,
+      16,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      898,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      596,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      442,
+      0,
+      8,
+      1,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      9,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      177,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      268,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      208
+    ]
+  ],
+  "note": "The legal-action mask and emergency rules always override the model at runtime."
+}

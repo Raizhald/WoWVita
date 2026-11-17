@@ -257,6 +257,12 @@ bool WorldClient::start(const std::string& hostPort, const std::string& account,
 }
 
 void WorldClient::send(uint32_t opcode, const Bytes& payload) {
+    if (packetSink) {   // offline / test: the internal server-equivalent consumes it
+        ++packetsOut_;
+        bytesOut_ += payload.size() + 4;
+        packetSink((uint16_t)opcode, payload);
+        return;
+    }
     if (!sock_.isOpen()) return;
     Bytes pkt(6);
     uint16_t size = (uint16_t)(payload.size() + 4);
@@ -308,6 +314,27 @@ void WorldClient::login(uint64_t guid) {
     state_ = State::WaitLogin;
     deadline_ = nowMs() + 30000;
 }
+
+// ---------------------------------------------------------------- offline / test bootstrap
+void WorldClient::beginOffline(uint64_t playerGuid, std::vector<Character> chars, uint32_t mapId, const float pos[3],
+                               float orient) {
+    sock_.close();
+    err_.clear();
+    inBuf_.clear();
+    cipher_ = HeaderCipher{};
+    headerDecrypted_ = 0;
+    chars_ = std::move(chars);
+    playerGuid_ = playerGuid;
+    map_ = mapId;
+    pos_[0] = pos[0]; pos_[1] = pos[1]; pos_[2] = pos[2];
+    orient_ = orient;
+    wardenSeen_ = false;
+    lastPing_ = nowMs();
+    deadline_ = 0;
+    state_ = State::InWorld;
+}
+
+void WorldClient::offlineSetCharacters(std::vector<Character> chars) { chars_ = std::move(chars); }
 
 void WorldClient::logout(bool toCharacters) {
     if (state_ != State::InWorld) { sock_.close(); state_ = State::Done; return; }

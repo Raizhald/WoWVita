@@ -87,6 +87,14 @@ int main(int argc, char** argv) {
     }
     glue::Texts texts;
     if (argc > 3 && argv[3][0]) texts.load(argv[3]);
+    {   // 7.18: glue.txt's L line is the game language the client announces to the server
+        const std::string p = r.dir + "/glue_locale.txt";
+        FILE* f = fopen(p.c_str(), "w");
+        CHECK(f != nullptr);
+        if (f) { fputs("L\truRU\nT\tKEY\tValue\n", f); fclose(f); }
+        glue::Texts t;
+        CHECK(t.load(p.c_str()) && t.gameLocale() == "ruRU");
+    }
     texts.addZone(12, "Elwynn Forest");
     texts.addZone(141, "Teldrassil");
     ui::g_lang = argc > 4 ? std::atoi(argv[4]) : 0;

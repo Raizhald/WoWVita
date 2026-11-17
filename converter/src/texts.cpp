@@ -6,6 +6,7 @@
 //   taxi.txt     "N id map x y z name" per TaxiNodes.dbc row (ID, map, X, Y, Z, Name[8] 5-12) and
 //                "P from to cost" per TaxiPath.dbc row (ID, from, to, cost)
 #include "conv.h"
+#include "../../common/w3d_transport_periods.h"
 
 #include <algorithm>
 #include <cctype>
@@ -19,11 +20,8 @@ std::string clean(std::string s) {
     return s;
 }
 std::string firstLocale(const DbcTable& t, uint32_t r, uint32_t c0, uint32_t c1) {
-    for (uint32_t c = c0; c < c1 && c < t.fields; ++c) {
-        std::string s = t.str(r, c);
-        if (!s.empty()) return clean(s);
-    }
-    return {};
+    // 7.14: the selected language's column, else the first translated column (the DBC may lack it).
+    return clean(t.loc(r, c0, c1 > c0 ? c1 - c0 : 0));
 }
 bool writeText(const std::string& path, const std::string& s) {
     FILE* f = std::fopen(path.c_str(), "wb");
@@ -82,6 +80,45 @@ bool exportSkills(const DataDir& data, const std::string& path, bool verbose) {
     }
     if (!writeText(path, out)) return false;
     std::printf("  skills: %zu skill lines written to %s\n", n, path.c_str());
+    (void)verbose;
+    return true;
+}
+
+// Item enchantments (7.16): what an applied enchant shows on an item card. "@enchant<TAB>id<TAB>name" from
+// SpellItemEnchantment.dbc (1.12: ID 0, effects 1-3, min 4-6, max 7-9, effect args 10-12, names 13-20; 24 fields).
+// Shiny Bauble applies 263 ("Fishing Lure +25"), a sharpening stone 13 ("Sharpened +3").
+bool exportEnchants(const DataDir& data, const std::string& path, bool verbose) {
+    DbcTable t;
+    if (!t.load(data, "SpellItemEnchantment.dbc") || t.fields < 14) {
+        std::fprintf(stderr, "enchants: SpellItemEnchantment.dbc not found (no @enchant lines)\n");
+        return false;
+    }
+    uint32_t nameCol = 13;
+    // calibration: the row of Fishing Lure +25 (263) has "Fishing" in the English name column (some custom clients
+    // insert an extra column); fall back to 13.
+    for (uint32_t r = 0; r < t.records; ++r) {
+        if (t.u32(r, 0) != 263) continue;
+        for (uint32_t c = 13; c < t.fields; ++c)
+            if (t.str(r, c).find("Fishing") != std::string::npos) { nameCol = c; break; }
+        break;
+    }
+    std::string out;
+    size_t n = 0;
+    for (uint32_t r = 0; r < t.records; ++r) {
+        const uint32_t id = t.u32(r, 0);
+        if (!id) continue;
+        std::string name = firstLocale(t, r, nameCol, nameCol + 8);
+        if (name.empty()) continue;
+        out += "@enchant\t" + std::to_string(id) + "\t" + name + "\n";
+        ++n;
+    }
+    // append to spells.txt (SpellNames::load reads both the names and the @enchant lines)
+    FILE* f = std::fopen(path.c_str(), "ab");
+    if (!f) { std::fprintf(stderr, "cannot append enchantments to %s\n", path.c_str()); return false; }
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    std::printf("  item enchantments: %zu names appended to %s (SpellItemEnchantment.dbc %u records, name column %u)\n", n,
+                path.c_str(), t.records, nameCol);
     (void)verbose;
     return true;
 }
@@ -200,9 +237,24 @@ bool exportTransports(const DataDir& data, const std::string& path, bool verbose
         return false;
     }
     if (!haveNodes) std::fprintf(stderr, "transports: TaxiPathNode.dbc not found (no ships; elevators only)\n");
-    std::string out = "# wow3ds transports: T path node map x y z flags delay | A entry timeMs x y z | M display deckZ x0 y0 x1 y1 | S display deckZ x0 y0 x1 y1\n";
+    std::string out = "# wow3ds transports: T path node map x y z flags delay | P entry serverPeriodMs | A entry timeMs x y z | M display deckZ x0 y0 x1 y1 | S display deckZ x0 y0 x1 y1\n";
     size_t nt = 0, nm = 0;
     char b[160];
+    std::map<uint32_t, uint32_t> periods;
+    for (const auto& p : kW3dClassicTransportPeriods) periods[p.entry] = p.periodMs;
+    // Keep explicit server-specific overrides when regenerating the file.
+    if (FILE* old = std::fopen(path.c_str(), "rb")) {
+        while (std::fgets(b, sizeof b, old)) {
+            unsigned entry = 0, period = 0;
+            if (b[0] == 'P' && b[1] == '\t' && std::sscanf(b + 2, "%u %u", &entry, &period) == 2 && entry && period)
+                periods[entry] = period;
+        }
+        std::fclose(old);
+    }
+    for (const auto& [entry, period] : periods) {
+        std::snprintf(b, sizeof b, "P\t%u\t%u\n", entry, period);
+        out += b;
+    }
     for (uint32_t r = 0; haveNodes && r < nodes.records; ++r) {
         if (!nodes.u32(r, 1)) continue;
         std::snprintf(b, sizeof b, "T\t%u\t%u\t%u\t%.2f\t%.2f\t%.2f\t%u\t%u\n", nodes.u32(r, 1), nodes.u32(r, 2), nodes.u32(r, 3),
@@ -327,10 +379,14 @@ bool exportAreaTriggers(const DataDir& data, const std::string& path, bool verbo
 // glue.txt (stage 5.29): what the login and character screens need besides pictures.
 //   T KEY<TAB>text      every string of Interface\GlueXML\GlueStrings.lua (race / class descriptions RACE_INFO_*,
 //                       CLASS_INFO_*, ...); "\n" stays as the two characters
+//   L code              the game language (7.18): the client sends it at login, so the server answers in it
 //   O race class sex disp inv ... (12 pairs)   CharStartOutfit.dbc: the clothes a new character is shown in
 //   Z area name parent  AreaTable.dbc: the area names (the character list, the zone banner); parent = the zone of a subzone
 bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose) {
     std::string out = "# wow3ds glue screens: T key text | O race class sex (display invtype) x N | Z area name\n";
+    std::string loc = gameLocaleDir();   // 7.18: the game language; the client announces it at login (server texts)
+    if (loc.empty() || loc == "auto") loc = "enUS";
+    out += "L\t" + loc + "\n";
     size_t nt = 0, no = 0, nz = 0;
     // ---- GlueStrings.lua: NAME = "text";  (Lua escapes \" \\ \n)
     std::vector<uint8_t> lua;
@@ -416,7 +472,7 @@ bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose)
         }
         if (best)
             for (uint32_t r = 0; r < at.records; ++r) {
-                std::string v = clean(at.str(r, best));
+                std::string v = clean(at.loc(r, best, 8));   // 7.14: best is the English column; +locale inside loc()
                 if (v.empty()) continue;
                 out += "Z\t" + std::to_string(at.u32(r, 0)) + "\t" + v + "\t" + std::to_string(at.u32(r, 2)) + "\n";   // + the parent zone (0 = a zone)
                 ++nz;

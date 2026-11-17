@@ -523,6 +523,7 @@ void GameSession::setStandState(uint8_t state, uint32_t nowMs) {   // CMSG_STAND
 // ------------------------------------------------------------------ target and melee
 void GameSession::setTarget(uint64_t guid, uint32_t nowMs) {
     if (guid == target_) return;
+    attackAfterCast_ = 0;   // 7.19: a pending charge attack belongs to the old target
     // 6.87: as in the original, auto-attack follows the selection: a new enemy is attacked in turn (CMSG_ATTACKSWING at it),
     // anything else (a friend, nothing) ends it
     const bool follow = attackWanted_;
@@ -730,6 +731,20 @@ bool GameSession::inCombat() const {
     return attackWanted_ || attackOn_ || (me && (me->field(UF::UNIT_FLAGS) & 0x80000));   // UNIT_FLAG_IN_COMBAT
 }
 
+// 7.19: inside the server's melee reach (vMaNGOS ATTACK_DISTANCE 5 yd, between the bounding spheres).
+bool GameSession::targetInMelee() const {
+    const WorldObject* t = target_ ? objects.find(target_) : nullptr;
+    const WorldObject* me = selfObject();
+    if (!t || !t->isUnitLike() || !t->hasPos) return false;
+    float p[3];
+    t->positionAt(now_, p);
+    const MovementInfo& m = mover.info();
+    const float dx = p[0] - m.x, dy = p[1] - m.y, dz = p[2] - m.z;
+    const float d = std::sqrt(dx * dx + dy * dy + dz * dz) - t->fieldF(UF::UNIT_BOUNDINGRADIUS) -
+                    (me ? me->fieldF(UF::UNIT_BOUNDINGRADIUS) : 0.0f);
+    return d <= 5.0f;
+}
+
 uint64_t GameSession::targetOf(uint64_t guid) const {
     const WorldObject* o = objects.find(guid);
     if (!o) return 0;
@@ -744,12 +759,28 @@ void GameSession::startAttack(uint32_t nowMs) {
     if (t && factions.loaded() && !canAttack(*t)) { error("You cannot attack that target", Vocal::InvalidTarget, nowMs); return; }
     attackWanted_ = true;
     attackError_ = 0;
+    attackRetryMs_ = nowMs ? nowMs : 1;
+    Writer w;
+    w.u64(target_);
+    send(CMSG_ATTACKSWING, w.b, nowMs);
+}
+
+// 7.19: the 1.12 server starts melee only on CMSG_ATTACKSWING, and one sent from out of reach is lost
+// (SMSG_ATTACKSWING_NOTINRANGE - the server keeps no wish of its own). Charge is exactly that: the attack that went out
+// with the cast was 20 yd short, so the swing is started here as soon as the target is within reach.
+void GameSession::retryAttack(uint32_t nowMs) {
+    if (!attackWanted_ || attackOn_ || !target_) return;
+    if (attackRetryMs_ && nowMs - attackRetryMs_ < 1000) return;
+    if (!targetInMelee()) return;
+    attackRetryMs_ = nowMs ? nowMs : 1;
     Writer w;
     w.u64(target_);
     send(CMSG_ATTACKSWING, w.b, nowMs);
 }
 
 void GameSession::stopAttack(uint32_t nowMs) {
+    attackAfterCast_ = 0;   // 7.19: stopping the attack also drops a pending charge attack
+    attackRetryMs_ = 0;
     if (!attackWanted_ && !attackOn_) return;
     attackWanted_ = false;
     send(CMSG_ATTACKSTOP, {}, nowMs);
@@ -1018,6 +1049,13 @@ bool GameSession::handleSocial(uint16_t op, const Bytes& data, uint32_t nowMs) {
             r.pos += (size_t)n * 20;   // per school: u32 school, f32 damage, u32 damage, u32 absorb, u32 resist
             h.victimState = r.u32();
             if (r.bad) return true;
+            // 7.21: the 1.12 body continues with attackerState and meleeSpellId (the next-melee ability the swing
+            // belongs to: Heroic Strike, Cleave ...). The same blow also arrives as SMSG_SPELLNONMELEEDAMAGELOG;
+            // the id lets the floating numbers tell the two packets apart instead of drawing the blow twice.
+            if (r.left() >= 8) {
+                r.u32();            // attackerState
+                h.spell = r.u32();  // meleeSpellId (0 = a plain swing)
+            }
             if (WorldObject* o = objects.find(h.attacker)) {
                 o->swingMs = nowMs ? nowMs : 1;
                 o->meleeVictim = h.victim;

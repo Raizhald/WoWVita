@@ -5,7 +5,7 @@
 //
 // Wire layout (vMaNGOS MovementInfo::Write, WoWee ClassicPacketParsers):
 //   u32 flags, u32 time, f32 x, y, z, o,
-//   [ONTRANSPORT: packed guid, f32 x, y, z, o], [SWIMMING: f32 pitch], u32 fallTime,
+//   [ONTRANSPORT: FULL u64 guid, f32 x, y, z, o], [SWIMMING: f32 pitch], u32 fallTime,
 //   [JUMPING: f32 zspeed, sin, cos, xyspeed], [SPLINE_ELEVATION: f32]
 // Client -> server movement packets carry no GUID prefix in vanilla; the
 // server relays other players' movement as packed guid + MovementInfo.
@@ -57,7 +57,8 @@ struct MovementInfo {
 };
 
 void writeMovementInfo(Writer& w, const MovementInfo& m);
-bool readMovementInfo(Reader& r, MovementInfo& m);
+// Turtle's incoming layout uses a packed transport GUID plus transport time; Vanilla does not.
+bool readMovementInfo(Reader& r, MovementInfo& m, bool turtleTransport = false);
 
 struct MoveSpeeds {
     float walk = 2.5f, run = 7.0f, runBack = 4.5f, swim = 4.722222f, swimBack = 2.5f, turn = 3.141594f;

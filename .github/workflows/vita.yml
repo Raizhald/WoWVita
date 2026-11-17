@@ -43,7 +43,7 @@ jobs:
           cmake --build build-net -j"$(nproc)"
           cp build-net/w3dlogin.vpk build-net/netcheck.vpk
       - name: Publish to the builds branch
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/io-fast-test'
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/io-fast-test' || github.ref == 'refs/heads/upstream-0.9-test'
         shell: bash
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -666,6 +666,7 @@ void rendererSetProjection(float drawDist);   // also rebuilds the fog LUT
 void rendererSetHorizon(float yards);         // 6.34b: 0 = off; else the ground / far shells to this distance (then call rendererSetProjection)
 void rendererSetViewer(const float* pos);    // 6.42: the character's position (seeds the portal walk too), null: none
 void rendererSetEye(float iod);               // stereoscopic 3D: the projection of one eye (-iod left, +iod right, 0 = mono)
+void rendererSetOffscreen(bool offscreen);    // 7.27: FSR scene texture (landscape): untilted projection; false: the sideways screen
 void rendererSetGhostFog(float share);   // 6.80: sight in the spirit world as a share of the zone's fog distance (0.25..1)
 void rendererSetGhost(float amount);   // 6.62: 0 alive .. 1 ghost: the sky and the fog go grey
 void rendererSetSkyModel(Model* m);   // 6.61: the zone's sky model over the dome (kept acquired by the caller), null: none

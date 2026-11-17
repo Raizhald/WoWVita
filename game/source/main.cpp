@@ -11,7 +11,7 @@
 //
 // Controls offline / free camera: Circle Pad move, C-Stick/D-Pad look, L/R down/up (fly), hold B fast,
 //           SELECT walk/fly, X draw distance, A doodads, ZR fog, ZL doodad detail, Y 40 s streaming benchmark,
-//           START quit. Online walking: the controller scheme of pad.hpp (Forever or Classic, START menu).
+//           START quit. Online walking: the controller scheme of pad.hpp (New 3DS or Old 3DS, START menu).
 #include <unordered_map>
 #include "audio.hpp"
 #include "buttons.hpp"
@@ -42,6 +42,7 @@
 #include "ui_style.hpp"
 #include "ui_assets.hpp"
 #include "ui_render.hpp"
+#include "fsr_scene.hpp"
 #include "crash.hpp"
 #include "perflog.hpp"
 #include "pvs.hpp"
@@ -51,8 +52,10 @@
 #include <math.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include <algorithm>
+#include <utility>
 #include <vector>
 
 #include <malloc.h>  // after <stdlib.h> (pulled in above): newlib declares calloc twice
@@ -270,8 +273,9 @@ static void collectCreatures(w3n::GameSession& g, uint32_t nowMs, const float ca
             if (c.lookParts.race) c.look = w3d_look_key(&c.lookParts);
         }
         if (!c.displayId && !c.look) continue;
-        const bool taxi = o.taxiFlight() && o.pathActive;   // on a flight the server's spline is the truth, for us too
-        if (o.self && !taxi) {   // our own position is the one we send, not the table's
+        // On a taxi / Charge the server's spline is the truth, for us too; otherwise our own position is the one we send.
+        const bool serverMove = o.self && o.pathActive;
+        if (o.self && !serverMove) {
             const w3n::MovementInfo& me = g.mover.info();
             c.pos[0] = me.x; c.pos[1] = me.y; c.pos[2] = me.z;
             c.yaw = me.o;
@@ -284,8 +288,9 @@ static void collectCreatures(w3n::GameSession& g, uint32_t nowMs, const float ca
         c.farFade = farFadeAt(d2);
         float scale = o.fieldF(w3n::UF::OBJECT_SCALE_X);
         c.scale = (scale > 0.05f && scale < 20.0f) ? scale : 1.0f;
-        c.speed = o.self && !taxi ? ((g.mover.info().flags & w3n::MoveFlag::MaskMoving) ? g.mover.speeds.forFlags(g.mover.info().flags) : 0.0f)
-                         : o.groundSpeedAt(nowMs);
+        c.speed = o.self && !serverMove
+                      ? ((g.mover.info().flags & w3n::MoveFlag::MaskMoving) ? g.mover.speeds.forFlags(g.mover.info().flags) : 0.0f)
+                      : o.groundSpeedAt(nowMs);
         fillUnitState(g, o, nowMs, c);   // the animation stage: everything the unit is doing
         if (!o.self && o.type == w3n::ObjType::Unit && !snapToGround(o, c, nowMs)) continue;   // 6.83
         // 6.62: ghosts (PLAYER_FLAGS_GHOST: we ourselves, or another ghost we can see) and spirit healers / guides are translucent
@@ -298,6 +303,7 @@ static void collectCreatures(w3n::GameSession& g, uint32_t nowMs, const float ca
     for (auto& [guid, pose] : g.objects.transportPoses()) {
         const w3n::WorldObject* o = g.objects.find(guid);
         if (!o || !o->displayId()) continue;
+        if (o->isPathTransport() && pose.map != g.mapId()) continue;
         CreatureSeen c;
         c.guid = guid;
         c.displayId = 0x80000000u | o->displayId();
@@ -307,6 +313,25 @@ static void collectCreatures(w3n::GameSession& g, uint32_t nowMs, const float ca
         float d2 = dx * dx + dy * dy + dz * dz;
         if (d2 > 4 * kCreatureRange * kCreatureRange) continue;
         float scale = o->fieldF(w3n::UF::OBJECT_SCALE_X);
+        c.scale = (scale > 0.05f && scale < 20.0f) ? scale : 1.0f;
+        cand.push_back({d2, c});
+    }
+    // 7.26: a transport whose progress has no usable pose this frame (a stop between path segments, or a path that does
+    // not cover the current progress) still has the server's position. Draw it there instead of hiding it until it
+    // departs. Objects without transport progress are already drawn by the ordinary game-object loop below.
+    for (auto& [guid, o] : g.objects.all()) {
+        if (o.type != w3n::ObjType::GameObject || o.goType() != 15 || !o.hasTransportProgress || !o.hasPos || !o.displayId()) continue;
+        if (o.transportOutOfRange) continue;   // only a computed pose can place a retained ship
+        if (g.objects.transportPose(guid)) continue;
+        CreatureSeen c;
+        c.guid = guid;
+        c.displayId = 0x80000000u | o.displayId();
+        c.pos[0] = o.mv.x; c.pos[1] = o.mv.y; c.pos[2] = o.mv.z;
+        c.yaw = o.mv.o;
+        float dx = c.pos[0] - camPos[0], dy = c.pos[1] - camPos[1], dz = c.pos[2] - camPos[2];
+        float d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > 4 * kCreatureRange * kCreatureRange) continue;
+        float scale = o.fieldF(w3n::UF::OBJECT_SCALE_X);
         c.scale = (scale > 0.05f && scale < 20.0f) ? scale : 1.0f;
         cand.push_back({d2, c});
     }
@@ -666,13 +691,15 @@ static void writeReport(const Bench* b, float drawDist, const RenderSettings& rs
                     ++shown;
                     const w3n::ObjectTable::GoInfo* gi = g.objects.goInfo(o.entry());
                     const w3n::TransportPose* tp = g.objects.transportPose(guid);
+                    const bool cdsp = o.displayId() && streamerHasDisplay(0x80000000u | o.displayId());
+                    const bool owmo = o.displayId() && streamerHasObjWmo(0x80000000u | o.displayId());
+                    const char* model = cdsp ? (owmo ? "CDSP+OWMO" : "CDSP") : owmo ? "OWMO" : "NO";
                     fprintf(f, "  transport entry %u display %u: progress %s (%u), template %s (type %u, path %u), path in transports.txt %s, "
                                "pose %s, model in the pack %s, files %s\n",
                             (unsigned)o.entry(), (unsigned)o.displayId(), o.hasTransportProgress ? "yes" : "NO", (unsigned)o.transportProgress,
                             gi ? "yes" : "NO", gi ? (unsigned)gi->type : 0u, gi ? (unsigned)gi->data[0] : 0u,
                             gi && g.objects.transports.loaded() && g.objects.transports.path(gi->data[0], (float)gi->data[1], (float)gi->data[2]) ? "yes" : "NO",
-                            tp ? "yes" : "NO", o.displayId() && streamerHasDisplay(0x80000000u | o.displayId()) ? "yes" : "NO",
-                            g.objects.transports.loaded() ? "loaded" : "transports.txt NOT loaded");
+                            tp ? "yes" : "NO", model, g.objects.transports.loaded() ? "loaded" : "transports.txt NOT loaded");
                 }
                 if (!shown) fprintf(f, "  transports: none known (no GO of type 15 / with transport progress seen yet)\n");
             }
@@ -776,19 +803,89 @@ static uint64_t unitAtScreen(w3n::GameSession& g, const Camera& cam, int x, int 
     return best ? best : near;
 }
 #endif
+// A common-time snapshot of server-announced ships, including their REAL GUIDs. Validate its clock against a ship
+// announced this session before restoring missing ones. Legacy T lines have stale times and no GUID: do not use them.
+using TransportCacheLine = w3n::ObjectTable::TransportMemory;
+static const char* kTransportCachePath = "sdmc:/3ds/w3dproto/transport_cache.txt";
+static uint32_t cacheSavedAt = 0, cacheSaveMs = 0;
+static std::vector<TransportCacheLine> cacheLines;
+static bool cacheApplied = false, cacheTrusted = true;
+
+static void loadTransportCache() {
+    cacheLines.clear();
+    cacheSavedAt = 0;
+    FILE* f = fopen(kTransportCachePath, "rb");
+    if (!f) return;
+    char line[200];
+    while (fgets(line, sizeof line, f)) {
+        if (line[0] == 'S') {
+            unsigned t = 0;
+            if (sscanf(line + 1, "%u", &t) == 1) cacheSavedAt = t;
+        } else if (line[0] == 'R') {
+            unsigned e = 0, d = 0, p = 0;
+            unsigned long long guid = 0;
+            // Ignore the obsolete guessed phase-correction column from the previous build.
+            if (sscanf(line + 1, "%u %u %u %llx", &e, &d, &p, &guid) == 4 && e && d && (guid >> 48) == 0x1FC0u)
+                cacheLines.push_back(TransportCacheLine{e, d, p, (uint64_t)guid});
+        }
+    }
+    fclose(f);
+}
+
+static void saveTransportCache(w3n::GameSession* g) {
+    if (!g) return;
+    const auto items = g->objects.transportMemory(g_login.sessionMs());
+    if (items.empty()) return;   // a failed login must not wipe what we remember
+    FILE* f = fopen(kTransportCachePath, "wb");
+    if (!f) return;
+    fprintf(f, "S %u\n", (unsigned)time(nullptr));
+    for (const auto& m : items) fprintf(f, "R %u %u %u %llx\n", (unsigned)m.entry, (unsigned)m.display,
+                                      (unsigned)m.progress, (unsigned long long)m.guid);
+    fclose(f);
+}
 
 // 6.59: game objects whose model is a building (OWMO entries: Turtle WoW's houses, towers, ruins) - their parts (groups and furniture)
 // at the object's place, turn and scale, drawn through the scene models with the world's building light. Up to the draw distance
 // (+ the building's radius); unused ones are let go by the streamer after 30 s.
 static void addObjectBuildings(w3n::GameSession& g, uint32_t nowMs, const float camPos[3], float drawDist, std::vector<SceneModel>& out) {
     streamerObjWmoTick(nowMs);
+    // 7.27: one line per transport per second - where the client puts it, whether its model is in the pack and loaded,
+    // and how far it is from us. (7.26 wrote one line a second shared by all of them: only the first transport in the
+    // table's order ever reached the log, which made a transport look absent when it was not.)
+    static uint32_t lastDump = 0;
+    const bool dumpNow = nowMs - lastDump > 1000;
+    if (dumpNow) lastDump = nowMs;
     for (auto& [guid, o] : g.objects.all()) {
         if (o.type != w3n::ObjType::GameObject || !o.hasPos || !o.displayId()) continue;
         const uint32_t did = 0x80000000u | o.displayId();
-        if (!streamerHasObjWmo(did)) continue;
+        const bool owmo = streamerHasObjWmo(did);
+        const w3n::TransportPose* shipPose = g.objects.transportPose(guid);
+        if (o.isPathTransport() && shipPose && shipPose->map != g.mapId()) continue;
+        if (o.transportOutOfRange && !shipPose) continue;
         float p[3], yaw;
         o.positionAt(nowMs, p, &yaw);
-        const ObjWmo* w = streamerObjWmo(did, p, nowMs);
+        const ObjWmo* w = owmo ? streamerObjWmo(did, p, nowMs) : nullptr;   // also starts the load
+        if (o.predicted) {   // 7.28: our own guess - only in the map its phase puts it in
+            const w3n::TransportPose* tp = g.objects.transportPose(guid);
+            if (!tp || tp->map != g.mapId()) continue;
+        }
+        if (dumpNow && o.hasTransportProgress) {
+            const float dx = p[0] - camPos[0], dy = p[1] - camPos[1], dz = p[2] - camPos[2];
+            const w3n::TransportPose* tp = g.objects.transportPose(guid);
+            uint32_t period = 0, generatedPeriod = 0;
+            if (const w3n::ObjectTable::GoInfo* gi = g.objects.goInfo(o.entry()))
+                if (const w3n::TransportPath* path = g.objects.transports.path(gi->data[0], (float)gi->data[1], (float)gi->data[2])) {
+                    generatedPeriod = path->period();
+                    period = g.objects.transports.period(o.entry(), generatedPeriod);
+                }
+            const uint32_t phase = period ? (o.transportProgress + (nowMs - o.posMs)) % period : 0;
+            perf::event("transport %llx entry %u display %u at %.1f %.1f %.1f, pose map %u (we are %u), phase %u of %u, "
+                        "%.0f yd, moving %d, model %s, generated period %u",
+                        (unsigned long long)guid, (unsigned)o.entry(), (unsigned)o.displayId(), p[0], p[1], p[2],
+                        tp ? (unsigned)tp->map : 0u, (unsigned)g.mapId(), (unsigned)phase,
+                        (unsigned)period, sqrtf(dx * dx + dy * dy + dz * dz), tp && tp->moving ? 1 : 0, !w ? "NONE" : "loaded",
+                        (unsigned)generatedPeriod);
+        }
         if (!w) continue;
         float scale = o.fieldF(w3n::UF::OBJECT_SCALE_X);
         if (!(scale > 0.05f && scale < 20.0f)) scale = 1.0f;
@@ -836,6 +933,7 @@ int main() {
     C3D_RenderTarget* bottomT = C3D_RenderTargetCreate(240, 320, GPU_RB_RGBA8, C3D_DEPTHTYPE(-1));
     if (bottomT) C3D_RenderTargetSetOutput(bottomT, GFX_BOTTOM, GFX_LEFT, BOTTOM_TRANSFER_FLAGS);
     uiRenderInit();
+    fsrScene::init();   // 7.27: FSR-lite blit shader (no VRAM until a mode is chosen)
     portrait::init();   // UI stage 8: the unit frames' portraits (two 64x64 textures in VRAM, before the streamer fills it)
     {
         char uiPath[96];
@@ -856,6 +954,7 @@ int main() {
     if (ok) hlod::load(index.path, index.buildId);   // 6.57
     if (!ok) {
         fail(err);
+        fsrScene::shutdown();
         rendererShutdown();
         C3D_Fini();
         romfsExit();
@@ -896,7 +995,7 @@ int main() {
     bool walk = false;
     // Online character state (stage 5): feet position, jump, last held direction.
     float pl[3] = {0, 0, 0}, plVz = 0;
-    float fallFromZ = 0; bool airborne = false, jumped = false, wasOnlineWalk = false, onFloor = false, wasFlight = false, wasFlightSent = false;
+    float fallFromZ = 0; bool airborne = false, jumped = false, wasOnlineWalk = false, onFloor = false, wasServerMove = false, wasServerMoveSent = false;
     swim::State swimState;           // stage 5.26: momentum of a plunge, floating back up
     bool wallHit = false;          // a wall stopped/deflected this frame's step (HUD)
     std::vector<W3dBlockBox> doorBoxes;   // stage 5.41: closed doors near us
@@ -918,6 +1017,9 @@ int main() {
     // Riding a ship or zeppelin (stage 5.21): offset on the transport; the world position is derived from it every frame.
     struct Ride { uint64_t guid = 0; float lx = 0, ly = 0, lz = 0, lo = 0, shipO = 0; } ride;
     uint32_t rideSeenStamp = 0;
+    // 7.24: a zeppelin that carries us to another continent sends the position ON the transport in SMSG_NEW_WORLD. The
+    // transport object arrives in the new map a little later; until it does, the ride is parked here and the world waits.
+    struct PendingTransport { bool active = false; uint32_t entry = 0; float lx = 0, ly = 0, lz = 0, lo = 0; uint64_t oldGuid = 0; } pendingTransport;
     std::vector<Marker> markers;
     markers.reserve(260);
     CreatureView creatureView;
@@ -960,20 +1062,20 @@ int main() {
     std::vector<SceneModel> spellModels;
     g_spellViewPtr = &spellView;
     std::vector<SoundReq> soundReqs;
-    // Controller (stage 5.11): scheme + settings from pad.txt (Old 3DS without ZL/ZR/C-Stick defaults to Classic),
-    // hotbars per character, the character's own facing (Forever: separate from the camera).
+    // Controller (stage 5.11): scheme + settings from pad.txt (an Old 3DS without ZL/ZR/C-Stick defaults to Old 3DS),
+    // hotbars per character, the character's own facing (New 3DS: separate from the camera).
     PadConfig padCfg;
     {
         bool isNew = true;
         APT_CheckNew3DS(&isNew);
-        if (!isNew) padCfg.scheme = PadScheme::Classic;
+        if (!isNew) padCfg.scheme = PadScheme::Old3DS;
     }
     char padPath[96];
     snprintf(padPath, sizeof padPath, "%s/pad.txt", kOutDir);
     padCfg.load(padPath);
     rendererSetHorizon(kHorizons[std::clamp(padCfg.horizon, 0, 2)]);   // 6.34b
     rendererSetProjection(cam.drawDist);
-    ui::g_lang = padCfg.lang;   // 6.20: the language from the first frame on (the main menu too)
+    ui::setLanguage(padCfg.lang);   // 6.20: the language from the first frame on (the main menu too); 7.15: loads lang_<code>.txt
     rs.effects = padCfg.effects;
     perf::init(kOutDir, padCfg.perfLog);   // stage 6: perf.csv (a row a second) + perf_events.txt
     perf::event("PVS: %s", pvs::status());   // 6.54
@@ -1069,8 +1171,39 @@ int main() {
             }
         }
     };
+    // 7.27: FSR-lite scene target. The chosen width is in the 400-wide HUD
+    // space; the wide 800x240 mode doubles it so the extra horizontal samples
+    // are kept. A mode change is applied on the fly (outside C3D_FrameBegin).
+    auto fsrUpdate = [&]() -> bool {
+        const int mode = std::clamp(padCfg.fsr, 0, 4);
+        if (mode == 0) {
+            fsrScene::release();
+            return false;
+        }
+        if (!fsrScene::init()) {
+            netNote = "FSR: shader failed";
+            return false;
+        }
+        static const int kLogical[5] = {0, 400, 320, 240, 200};   // sharp, 320, 240, 200
+        const int logical = kLogical[mode];
+        const int mul = topModeNow == 1 ? 2 : 1;   // wide: twice the horizontal samples, same aspect
+        const int w = logical * mul, h = logical * 3 / 5;
+        if (fsrScene::ensure(w, h)) return true;
+        u32 blocks[2];
+        fsrScene::vramBlocks(w, h, blocks);
+        const uint32_t moved = streamerEvictVram(blocks, 2);
+        if (fsrScene::ensure(w, h)) {
+            perf::event("FSR %dx%d (%s): %lu KB of textures moved to linear memory", w, h,
+                        topModeNow == 1 ? "wide" : "normal", (unsigned long)(moved / 1024));
+            return true;
+        }
+        perf::event("FSR %dx%d: not enough VRAM after moving %lu KB - direct rendering", w, h, (unsigned long)(moved / 1024));
+        netNote = "FSR: not enough VRAM";
+        return false;
+    };
     applyTopMode(padCfg.topMode);
-    // Sound: sdmc:/3ds/w3dproto/sound/ from w3dconv --sound (else built-in blips); needs the DSP firmware dump
+    fsrUpdate();
+    // Sound: sdmc:/3ds/w3dproto/sound/ from w3dconv --sound (else built-in blips); the DSP firmware is OpenDSP, linked in
     audio::init((std::string(kOutDir) + "/sound").c_str());
     audio::setVolumes(padCfg.musicVol, padCfg.sfxVol, padCfg.ambVol);
     soundWorld.load(audio::soundsTxt());
@@ -1224,6 +1357,7 @@ int main() {
     static FramePacer pacer;   // 6.71
     static AutoDetail autoDetail;   // 6.72
     static u64 pacedAt = 0;    // the blank the last paced frame began on
+    loadTransportCache();      // 7.28: where the ships were last time
     while (aptMainLoop()) {
         u64 frameStart = svcGetSystemTick();
         float frameMs = (float)ticksToMs(frameStart - lastTick);
@@ -1264,6 +1398,8 @@ int main() {
             const float* p = g_login.worldPosition();
             memcpy(pl, p, sizeof pl);   // the character, whether or not its tile is in the pack
             charYaw = g_login.orientation();
+            perf::event("login spawn: map %lu at %.1f %.1f %.1f, facing %.2f", (unsigned long)g_login.mapId(),
+                        p[0], p[1], p[2], g_login.orientation());
             pad.reset();
             barsPath = std::string(kOutDir) + "/bars_" + g_login.characterName() + ".txt";
             bars.clear();
@@ -1316,17 +1452,17 @@ int main() {
             // the button on, the next tap off - no rear touch, no finger held on the screen
             static bool latchZL = false, latchZR = false;
             const u32 latchedBefore = (latchZL ? KEY_ZL : 0) | (latchZR ? KEY_ZR : 0);
-            if (padCfg.scheme == PadScheme::Classic) latchZL = latchZR = false;   // (Classic has no sets on ZL / ZR)
+            if (padCfg.scheme == PadScheme::Old3DS) latchZL = latchZR = false;   // (Classic has no sets on ZL / ZR)
             {   // a tap on the world selects the unit under the finger; a tap on the selected one interacts
                 // (the buttons' boxes, generous for a finger: top-screen pixels around 2..34 / 366..398 x 151..166)
                 const bool onZL = worldTap && worldTapX < 52 && worldTapY >= 136 && worldTapY < 180;
                 const bool onZR = worldTap && worldTapX >= kHudW - 52 && worldTapY >= 136 && worldTapY < 180;
-                if (padCfg.scheme != PadScheme::Classic && (onZL || onZR)) {
+                if (padCfg.scheme != PadScheme::Old3DS && (onZL || onZR)) {
                     if (onZL) latchZL = !latchZL;
                     else latchZR = !latchZR;
                 } else if (worldTap) {
                     const uint64_t hit = unitAtScreen(gs, cam, worldTapX, worldTapY, g_login.sessionMs());
-                    if (hit && hit == gs.target()) down |= padCfg.scheme == PadScheme::Classic ? KEY_A : KEY_Y;
+                    if (hit && hit == gs.target()) down |= padCfg.scheme == PadScheme::Old3DS ? KEY_A : KEY_Y;
                     else if (hit) gs.setTarget(hit, g_login.sessionMs());
                 }
             }
@@ -1362,8 +1498,14 @@ int main() {
                 uiIn.zone = zone;
                 uiIn.zoneAtPoint = zoneAtPoint;
             }
-            {   // UI stage 10: the ground spells' ring - the C-Stick (with its dead zone), the camera, the ground
-                const float sx = csRaw.dx / 156.0f, sy = csRaw.dy / 156.0f;
+            {   // UI stage 10: the ground spells' ring - the C-Stick (with its dead zone), the camera, the ground.
+                // 7.21: the Old 3DS has no C-Stick: while a ring is being aimed the Circle Pad moves it instead (and the
+                // character stands still, so the stick is not also walking; the camera is already frozen by uiOut.placing).
+                const bool oldAim = padCfg.scheme == PadScheme::Old3DS && gameUi.placing();
+                circlePosition aim = oldAim ? cpRaw : csRaw;
+                const int aimDead = oldAim ? 18 : 24;
+                if (aim.dx * aim.dx + aim.dy * aim.dy < aimDead * aimDead) { aim.dx = 0; aim.dy = 0; }
+                const float sx = aim.dx / 156.0f, sy = aim.dy / 156.0f;
                 const bool live = sx * sx + sy * sy > padCfg.stickDead * padCfg.stickDead;
                 uiIn.stickX = live ? std::clamp(sx, -1.0f, 1.0f) : 0.0f;
                 uiIn.stickY = live ? std::clamp(sy, -1.0f, 1.0f) * (padCfg.invertY ? -1.0f : 1.0f) : 0.0f;
@@ -1371,6 +1513,7 @@ int main() {
                 uiIn.groundAt = [](float x, float y, float zRef, float* z) { return streamerFloorHeight(x, y, zRef, z); };
             }
             uiOut = gameUi.update(gs, uiIn, walk);
+            if (uiOut.placing && padCfg.scheme == PadScheme::Old3DS) { po.dir = 0; po.turn = 0; }   // the Circle Pad aims, not walks
             for (const char* e : uiOut.sounds) audio::play(e);
             if (uiOut.soundChanged) audio::setVolumes(padCfg.musicVol, padCfg.sfxVol, padCfg.ambVol);
             audio::setPlace(g_login.mapId(), pl[0], pl[1], true);
@@ -1393,6 +1536,7 @@ int main() {
                 rs.doodads = padCfg.doodads;
                 rs.effects = padCfg.effects;
                 applyTopMode(padCfg.topMode);
+                fsrUpdate();   // 7.27: FSR mode or the top-screen mode changed - live
             }
             if (bars.empty() && !gs.spells.empty() && bars.autofill(gs)) uiOut.layoutChanged = true;
             if (uiOut.layoutChanged && !barsPath.empty()) bars.save(barsPath.c_str());
@@ -1471,6 +1615,7 @@ int main() {
         if (online) {   // the server announced a map change (instance door, portal, ship to another continent)
             uint32_t pendingMap;
             if (game->takeTransferPending(&pendingMap) && pendingMap != curMap && !loadingWorld) {
+                pendingTransport = PendingTransport();   // 7.24: a new transfer supersedes one whose transport never came
                 portal.setPicture(ui::assets().loadingScreen(pendingMap));
                 portal.setProgress(0.0f);
                 portalText = "Loading...";
@@ -1479,7 +1624,79 @@ int main() {
         }
         if (portal.phase() == PortalFx::Phase::Hold && !loadingWorld) portalHold += dt;
         else portalHold = 0;
-        if (portalHold > 25.0f) { portal.finish(); portalHold = 0; }   // the transfer never arrived (aborted)
+        // 7.24: a transport transfer is finished in two steps - the new world tells the offset on the transport, and the
+        // transport object arrives in the new map a little later. Both helpers are used by the teleport below.
+        auto transportFor = [&](uint32_t entry, uint64_t prefer) -> std::pair<uint64_t, const w3n::TransportPose*> {
+            auto destinationPose = [&](uint64_t guid) -> const w3n::TransportPose* {
+                const auto* go = game->objects.find(guid);
+                if (!go || go->entry() != entry) return nullptr;
+                const auto* p = game->objects.transportPose(guid);
+                return p && p->map == game->mapId() ? p : nullptr;
+            };
+            if (prefer) {
+                if (const auto* p = destinationPose(prefer)) return {prefer, p};
+            }
+            for (auto& [g, o] : game->objects.all()) {
+                if (o.type != w3n::ObjType::GameObject || o.entry() != entry) continue;
+                if (const auto* p = destinationPose(g)) return {g, p};
+            }
+            return {0, nullptr};
+        };
+        auto applyServerTeleport = [&](const float tp[3], float to, bool keepTransport, uint64_t guid, float lx, float ly, float lz, float lo,
+                                       const w3n::TransportPose* pose) {
+            const bool mapChange = game->mapId() != curMap;
+            // 7.03: perf log - a server teleport drops the ride (a server that does not take our place on a zeppelin puts us back)
+            perf::event("teleport by the server: map %lu -> %lu, %.1f %.1f %.1f -> %.1f %.1f %.1f, riding %llx (keep %d)",
+                        (unsigned long)curMap, (unsigned long)game->mapId(), pl[0], pl[1], pl[2], tp[0], tp[1], tp[2],
+                        (unsigned long long)ride.guid, keepTransport ? 1 : 0);
+            if (mapChange) {   // close the loading screen over the old world first, then swap the pack under it
+                portal.setPicture(ui::assets().loadingScreen(game->mapId()));
+                portal.setProgress(0.0f);
+                portal.start();
+                portalText = "Loading...";
+                portalTick = svcGetSystemTick();
+                perf::Scope perfScope(perf::kMapLoad);
+                while (aptMainLoop() && !portal.closed()) drawPortalFrame(portalDt());
+            }
+            ensureMap(game->mapId(), tp);   // a new map: its pack and streamer (no-op within the same map)
+            if (mapChange || !(streamerTileReadyAt(tp[0], tp[1]) && streamerCollisionReadyAt(tp[0], tp[1])))
+                beginLoading(game->mapId(), false);   // the destination is not streamed yet: wait for it
+            if (keepTransport && guid && pose) {   // 7.24: the world position came from the transport's own pose
+                ride = Ride{guid, lx, ly, lz, lo, pose->o};
+                game->mover.reset(tp[0], tp[1], tp[2], to, netMs);   // forgets the old transport and queued packets
+                game->mover.setTransport(guid, lx, ly, lz, lo, netMs);
+            } else {
+                game->mover.reset(tp[0], tp[1], tp[2], to, netMs);
+                ride.guid = 0;
+            }
+            memcpy(pl, tp, sizeof pl);
+            charYaw = to;
+            game->confirmMover(netMs);   // a teleport can leave the server without our mover: it would drop all movement
+            safeValid = false;   // 6.14/6.16: the safe place of the fall rescue was in the old place
+            groundedFor = 0;
+            swimState = swim::State();   // (the mover's reset dropped the swimming flag: the water there decides again)
+            airborne = jumped = false;
+            plVz = 0;
+            heldDir = 0;
+            eyeValid = false;
+            if (walk) {
+                cam.yaw = to;
+                cam.pos[0] = pl[0];
+                cam.pos[1] = pl[1];
+                cam.pos[2] = pl[2] + 1.7f;
+            }
+            pendingTransport = PendingTransport();
+        };
+        if (portalHold > 25.0f) {   // the transfer never arrived (aborted)
+            if (pendingTransport.active) {   // an offset on a missing ship is NEVER a world-space fallback
+                perf::event("transport transfer: still waiting for entry %u on map %u; keeping passenger offset (not world coordinates)",
+                            (unsigned)pendingTransport.entry, (unsigned)game->mapId());
+                portalText = "Waiting for transport...";
+            } else {
+                portal.finish();
+            }
+            portalHold = 0;
+        }
         if (loadingWorld) {   // wait for the ground and its collision under the character
             const float* lp = walk ? pl : cam.pos;
             loadElapsed += dt;
@@ -1496,7 +1713,9 @@ int main() {
             bool heldHere = false;   // (6.16: "keep the height" is not a floor to wait for)
             const bool groundOk = streamerFloorHeight(lp[0], lp[1], lp[2] + 0.5f, &gz, nullptr, &heldHere) && !heldHere &&
                                   std::fabs(gz - lp[2]) < 4.0f;
-            if ((tileOk && collOk && (quiet || loadElapsed > 3.0f) && (groundOk || loadElapsed > 10.0f)) || loadElapsed > 25.0f) {
+            // 7.24: on a zeppelin the deck at the feet is the floor (the terrain may be the sea far below it)
+            const bool onDeck = ride.guid && game->objects.transportPose(ride.guid) != nullptr;
+            if ((tileOk && collOk && (quiet || loadElapsed > 3.0f) && (groundOk || onDeck || loadElapsed > 10.0f)) || loadElapsed > 25.0f) {
                 loadingWorld = false;
                 portal.setProgress(1.0f);
                 portal.finish();
@@ -1506,39 +1725,106 @@ int main() {
         }
         portal.update(dt);
         if (online) game->objects.tickTransports(netMs);   // ships and zeppelins along their paths, their passengers with them
+        if (!online) cacheApplied = false;
+        if (online && !cacheApplied) {   // 7.28: transports of the last session that the server has not sent us yet
+            const uint32_t nowSec = (uint32_t)time(nullptr);
+            if (cacheTrusted && !cacheLines.empty() && cacheSavedAt && nowSec >= cacheSavedAt && nowSec - cacheSavedAt < 6 * 3600) {
+                const uint32_t syncMs = g_login.sessionMs();   // a loading stall may have made netMs stale
+                const uint32_t elapsedMs = (nowSec - cacheSavedAt) * 1000u;
+                bool validated = false;
+                for (const auto& m : cacheLines) {
+                    const auto* live = game->objects.find(m.guid);
+                    if (!live || live->entry() != m.entry || !live->hasTransportProgress || live->restoredTransport || live->predicted) continue;
+                    const int32_t off = (int32_t)((live->transportProgress + (syncMs - live->posMs)) - (m.progress + elapsedMs));
+                    if (off > 10000 || off < -10000) {
+                        perf::event("transport cache: clock mismatch for entry %u (%ld ms); ignoring snapshot",
+                                    (unsigned)m.entry, (long)off);
+                        cacheTrusted = false;
+                        break;
+                    }
+                    validated = true;
+                }
+                if (!cacheTrusted) cacheApplied = true;
+                else if (validated) {
+                    cacheApplied = true;
+                    for (auto m : cacheLines) {
+                        m.progress += elapsedMs;
+                        if (game->objects.restoreTransport(m, syncMs))
+                            perf::event("transport restored: real guid %llx entry %u display %u progress %u (snapshot clock validated)",
+                                        (unsigned long long)m.guid, (unsigned)m.entry, (unsigned)m.display, (unsigned)m.progress);
+                    }
+                }
+            } else cacheApplied = true;
+            if (cacheApplied) cacheSaveMs = netMs;
+        }
+        if (online && cacheApplied && netMs - cacheSaveMs > 30000) {   // 7.28: remember where everything is, for next time
+            cacheSaveMs = netMs;
+            saveTransportCache(game);
+        }
+        if (online) {   // 7.27: when the client got or lost a transport object (perf log, not the renderer)
+            static const char* kTransportEvent[5] = {"create", "out of range", "destroyed", "replaced", "retained out of range"};
+            for (const auto& e : game->objects.takeTransportEvents()) {
+                const float dx = e.x - pl[0], dy = e.y - pl[1], dz = e.z - pl[2];
+                perf::event("transport %s: guid %llx entry %u display %u progress %u at %.1f %.1f %.1f, %.0f yd from us",
+                            kTransportEvent[e.kind < 5 ? e.kind : 1], (unsigned long long)e.guid, (unsigned)e.entry, (unsigned)e.display,
+                            (unsigned)e.progress, e.x, e.y, e.z, sqrtf(dx * dx + dy * dy + dz * dz));
+                if (!cacheTrusted || (e.kind != 0 && e.kind != 3) || !cacheSavedAt) continue;
+                for (const auto& m : cacheLines) {   // 7.28: a realm restart resets the progress - drop the memory
+                    if (m.entry != e.entry) continue;
+                    const uint32_t nowSec = (uint32_t)time(nullptr);
+                    const uint32_t expect = m.progress + (nowSec > cacheSavedAt ? (nowSec - cacheSavedAt) * 1000u : 0u);
+                    const uint32_t observed = e.progress + (g_login.sessionMs() - e.ms);
+                    const int32_t off = (int32_t)(observed - expect);
+                    if (e.guid != m.guid || off > 10000 || off < -10000) {
+                        perf::event("transport: entry %u is where the last session cannot explain it (server %u, expected %u) - "
+                                    "the realm restarted, dropping the guess",
+                                    (unsigned)e.entry, (unsigned)e.progress, (unsigned)expect);
+                        cacheTrusted = false;
+                        game->objects.dropPredictedTransports(0);
+                        game->objects.dropRestoredTransports();
+                    }
+                    break;
+                }
+            }
+        }
+        if (online) {   // 7.28: what each SMSG_UPDATE_OBJECT really carried (block by block)
+            static const char* kBlock[5] = {"values", "movement", "create", "out of range", "near"};
+            for (const auto& b : game->objects.takeBlockNotes()) {
+                if (b.kind == 1)
+                    perf::event("update packet: %u blocks, %u bytes", (unsigned)b.entry, (unsigned)b.size);
+                else if (b.type == 2)
+                    perf::event("update create: guid %llx type %u entry %u display %u",
+                                (unsigned long long)b.guid, (unsigned)b.objType, (unsigned)b.entry, (unsigned)b.display);
+                else
+                    perf::event("update block: %s guid %llx", kBlock[b.type & 7], (unsigned long long)b.guid);
+            }
+        }
         if (online) {   // the server moved us (teleport / new map), in any camera mode
             float tp[3], to;
-            if (game->takeTeleport(tp, &to)) {
-                const bool mapChange = game->mapId() != curMap;
-                // 7.03: perf log - a server teleport drops the ride (a server that does not take our place on a zeppelin puts us back)
-                perf::event("teleport by the server: map %lu -> %lu, %.1f %.1f %.1f -> %.1f %.1f %.1f, riding %llx", (unsigned long)curMap,
-                            (unsigned long)game->mapId(), pl[0], pl[1], pl[2], tp[0], tp[1], tp[2], (unsigned long long)ride.guid);
-                if (mapChange) {   // close the loading screen over the old world first, then swap the pack under it
-                    portal.setPicture(ui::assets().loadingScreen(game->mapId()));
-                    portal.setProgress(0.0f);
-                    portal.start();
-                    portalText = "Loading...";
-                    portalTick = svcGetSystemTick();
-                    perf::Scope perfScope(perf::kMapLoad);
-                    while (aptMainLoop() && !portal.closed()) drawPortalFrame(portalDt());
-                }
-                ensureMap(game->mapId(), tp);   // a new map: its pack and streamer (no-op within the same map)
-                if (mapChange || !(streamerTileReadyAt(tp[0], tp[1]) && streamerCollisionReadyAt(tp[0], tp[1])))
-                    beginLoading(game->mapId(), false);   // the destination is not streamed yet: wait for it
-                ride.guid = 0;
-                memcpy(pl, tp, sizeof pl);
-                safeValid = false;   // 6.14/6.16: the safe place of the fall rescue was in the old place
-                groundedFor = 0;
-                swimState = swim::State();   // (the mover's reset dropped the swimming flag: the water there decides again)
-                airborne = jumped = false;
-                plVz = 0;
-                heldDir = 0;
-                eyeValid = false;
-                if (walk) {
-                    cam.yaw = to;
-                    cam.pos[0] = pl[0];
-                    cam.pos[1] = pl[1];
-                    cam.pos[2] = pl[2] + 1.7f;
+            if (game->takeTeleport(tp, &to)) applyServerTeleport(tp, to, false, 0, 0, 0, 0, 0, nullptr);
+            // 7.24: a transport carried us to another map. The new world gave the offset on it; the transport object
+            // itself arrives a little later, and only then is there a world position to load the ground around.
+            w3n::GameSession::TransportSpawn ts;
+            if (game->takeTransportSpawn(&ts)) {
+                pendingTransport = PendingTransport{true, ts.entry, ts.lx, ts.ly, ts.lz, ts.lo, ride.guid};
+                perf::event("transport transfer: map %lu, entry %u, offset on it %.1f %.1f %.1f, old ride %llx",
+                            (unsigned long)game->mapId(), (unsigned)ts.entry, ts.lx, ts.ly, ts.lz, (unsigned long long)ride.guid);
+                uiOut.blockMove = true;
+                uiOut.blockJump = true;
+            }
+            if (pendingTransport.active) {
+                auto [guid, pose] = transportFor(pendingTransport.entry, pendingTransport.oldGuid);
+                if (guid && pose) {
+                    float w[3], wo;
+                    w3n::transportToWorld(*pose, pendingTransport.lx, pendingTransport.ly, pendingTransport.lz, pendingTransport.lo, w, &wo);
+                    perf::event("transport transfer: entry %u is %llx at %.1f %.1f %.1f; offset %.1f %.1f %.1f -> world %.1f %.1f %.1f",
+                                (unsigned)pendingTransport.entry, (unsigned long long)guid, pose->x, pose->y, pose->z,
+                                pendingTransport.lx, pendingTransport.ly, pendingTransport.lz, w[0], w[1], w[2]);
+                    applyServerTeleport(w, wo, true, guid, pendingTransport.lx, pendingTransport.ly, pendingTransport.lz,
+                                        pendingTransport.lo, pose);
+                } else {
+                    uiOut.blockMove = true;   // the portal is down: the character waits, not walks in the old world
+                    uiOut.blockJump = true;
                 }
             }
         }
@@ -1593,7 +1879,7 @@ int main() {
                 }
                 if (po.zoom) camDist = std::clamp(camDist + po.zoom * 8.0f * dt, 0.0f, 15.0f);
                 if (po.centerCamera) { cam.yaw = charYaw; cam.pitch = -0.1f; }
-                if (padCfg.scheme == PadScheme::Classic) {
+                if (padCfg.scheme == PadScheme::Old3DS) {
                     charYaw = cam.yaw;                       // the camera is the character
                 } else if (po.faceYaw && !uiOut.blockMove) {   // turn towards the stick / camera, quickly but not in one frame
                     float d = remainderf(po.yaw - charYaw, 6.2831853f);
@@ -1622,18 +1908,16 @@ int main() {
                 doorBoxes.clear();
                 staticDecksNear.clear();
             }
-            // Taxi flight (stage 5.20): the server flies us along a spline (SMSG_MONSTER_MOVE with the flying flag) with
-            // UNIT_FLAG_TAXI_FLIGHT set; we send no movement, follow the spline and look around from behind the mount.
-            bool flightNow = false;
+            // Server-driven movement (stage 5.20 taxi, 7.13 Charge): the server flies / charges us along a spline
+            // (SMSG_MONSTER_MOVE on our own object). We send no movement, follow the spline; a taxi also puts the camera
+            // behind the mount. Charge uses the normal third-person camera.
+            bool serverMoveNow = false, taxiNow = false;
             float fpos[3] = {0, 0, 0}, fyaw = 0;
-            if (onlineWalk) {
-                const w3n::WorldObject* me = game->objects.find(game->selfGuid());
-                if (me && me->taxiFlight() && me->pathActive) {
-                    flightNow = true;
-                    me->positionAt(netMs, fpos, &fyaw);
-                }
-            }
-            if (wasFlight && !flightNow && onlineWalk) {   // landed: stand on the ground where the flight ended
+            if (onlineWalk) serverMoveNow = game->selfServerMove(netMs, fpos, &fyaw, &taxiNow);
+            if (wasServerMove && !serverMoveNow && onlineWalk) {   // landed / charge ended: stand on the ground where it ended
+                game->endSelfServerMove(pl, charYaw, netMs);   // puts the mover at the exact end of the spline
+                const w3n::MovementInfo& end = game->mover.info();
+                pl[0] = end.x; pl[1] = end.y; pl[2] = end.z; charYaw = end.o;
                 float gz;
                 if (streamerFloorHeight(pl[0], pl[1], pl[2] + 3.0f, &gz)) pl[2] = gz;
                 game->mover.reset(pl[0], pl[1], pl[2], charYaw, netMs);
@@ -1642,56 +1926,75 @@ int main() {
                 heldDir = 0;
                 eyeValid = false;
             }
-            wasFlight = flightNow;
+            wasServerMove = serverMoveNow;
+            const w3n::TransportPose* ridePose = onlineWalk && ride.guid ? game->objects.transportPose(ride.guid) : nullptr;
+            const w3n::WorldObject* rideObject = ridePose ? game->objects.find(ride.guid) : nullptr;
+            const bool transportMapWait = onlineWalk && (pendingTransport.active ||
+                (rideObject && rideObject->isPathTransport() && ridePose->map != game->mapId()));
+            static bool wasTransportMapWait = false;
+            if (transportMapWait && !wasTransportMapWait)
+                perf::event("ride: waiting for server map transfer, guid %llx, client map %u, path map %u; keeping passenger offset",
+                            (unsigned long long)ride.guid, (unsigned)game->mapId(), ridePose ? (unsigned)ridePose->map : 0u);
+            wasTransportMapWait = transportMapWait;
             // Stage 5.28: walking into a dungeon door / the tram entrance / any area trigger tells the server (CMSG_AREATRIGGER);
             // not while a map is loading, not on a taxi (the server ignores those anyway), not under the transfer screen.
-            if (game && onlineWalk && !flightNow && !loadingWorld && portal.phase() == PortalFx::Phase::Idle) game->checkAreaTriggers(pl, netMs);
-            if (flightNow) {
-                if (!wasFlightSent) { game->mover.stopAll(netMs); wasFlightSent = true; game->stopFollow(netMs, false); }
+            if (game && onlineWalk && !serverMoveNow && !transportMapWait && !loadingWorld && portal.phase() == PortalFx::Phase::Idle) game->checkAreaTriggers(pl, netMs);
+            if (serverMoveNow) {
+                if (!wasServerMoveSent) { game->mover.stopAll(netMs); wasServerMoveSent = true; game->stopFollow(netMs, false); }
                 pl[0] = fpos[0]; pl[1] = fpos[1]; pl[2] = fpos[2];
                 charYaw = fyaw;
                 airborne = jumped = false;
                 plVz = 0;
                 heldDir = 0;
-                eye[0] = pl[0]; eye[1] = pl[1]; eye[2] = pl[2] + 2.2f;   // above the mount's back
+                eye[0] = pl[0]; eye[1] = pl[1]; eye[2] = pl[2] + (taxiNow ? 2.2f : 1.7f);   // above the mount's back / our head
                 eyeValid = true;
-                const float d = std::max(camDist, 9.0f);
+                const float d = taxiNow ? std::max(camDist, 9.0f) : camDist;
                 float fw[3] = {cosf(cam.pitch) * cosf(cam.yaw), cosf(cam.pitch) * sinf(cam.yaw), sinf(cam.pitch)};
                 cam.pos[0] = eye[0] - fw[0] * d;
                 cam.pos[1] = eye[1] - fw[1] * d;
                 cam.pos[2] = eye[2] - fw[2] * d + 0.4f;
                 audio::setListener(pl[0], pl[1], pl[2], cam.yaw);
             } else {
-                wasFlightSent = false;
+                wasServerMoveSent = false;
             }
-            if (flightNow) {
+            if (serverMoveNow) {
                 // handled above
+            } else if (transportMapWait) {
+                // A path changing continent is NOT permission to relocate the player. Wait for SMSG_NEW_WORLD,
+                // without falling through the now-hidden deck, clearing ONTRANSPORT, or sending remote-map XYZ
+                // as movement in the old world. The network/UI keep running.
+                airborne = jumped = false;
+                plVz = 0;
+                heldDir = 0;
             } else if (onlineWalk) {
                 soundReqs.clear();   // this frame's sounds (the movement below may add a splash)
-                // --- ships: the server may have put us on one (login, a zeppelin transfer); we carry our offset with it
-                if (!ride.guid) {
-                    const w3n::WorldObject* me = game->objects.find(game->selfGuid());
-                    if (me && (me->mv.flags & w3n::MoveFlag::OnTransport) && me->mv.time != rideSeenStamp && me->mv.transportGuid &&
-                        game->objects.transportPose(me->mv.transportGuid)) {
-                        rideSeenStamp = me->mv.time;
-                        ride.guid = me->mv.transportGuid;
-                        ride.lx = me->mv.tx; ride.ly = me->mv.ty; ride.lz = me->mv.tz; ride.lo = me->mv.to;
-                        ride.shipO = game->objects.transportPose(ride.guid)->o;
-                        game->mover.setTransport(ride.guid, ride.lx, ride.ly, ride.lz, ride.lo, netMs);
+                // --- ships: the server may have put us on one (login, a zeppelin transfer); we carry our offset with it.
+                // 7.24: while a transport map change waits for the transport object, the old ride is meaningless.
+                if (!pendingTransport.active) {
+                    if (!ride.guid) {
+                        const w3n::WorldObject* me = game->objects.find(game->selfGuid());
+                        if (me && (me->mv.flags & w3n::MoveFlag::OnTransport) && me->mv.time != rideSeenStamp && me->mv.transportGuid &&
+                            game->objects.transportPose(me->mv.transportGuid)) {
+                            rideSeenStamp = me->mv.time;
+                            ride.guid = me->mv.transportGuid;
+                            ride.lx = me->mv.tx; ride.ly = me->mv.ty; ride.lz = me->mv.tz; ride.lo = me->mv.to;
+                            ride.shipO = game->objects.transportPose(ride.guid)->o;
+                            game->mover.setTransport(ride.guid, ride.lx, ride.ly, ride.lz, ride.lo, netMs);
+                        }
                     }
-                }
-                if (ride.guid) {
-                    const w3n::TransportPose* tp = game->objects.transportPose(ride.guid);
-                    if (!tp) {   // the ship is gone (out of range, zoned): stay where we are
-                        perf::event("ride: transport %llx has no pose any more - off it", (unsigned long long)ride.guid);
-                        ride.guid = 0;
-                        game->mover.clearTransport(netMs);
-                    } else {
-                        float w[3], wo;
-                        w3n::transportToWorld(*tp, ride.lx, ride.ly, ride.lz, ride.lo, w, &wo);
-                        pl[0] = w[0]; pl[1] = w[1]; pl[2] = w[2];
-                        charYaw += tp->o - ride.shipO;   // the ship turns, we turn with it
-                        ride.shipO = tp->o;
+                    if (ride.guid) {
+                        const w3n::TransportPose* tp = game->objects.transportPose(ride.guid);
+                        if (!tp) {   // the ship is gone (out of range, zoned): stay where we are
+                            perf::event("ride: transport %llx has no pose any more - off it", (unsigned long long)ride.guid);
+                            ride.guid = 0;
+                            game->mover.clearTransport(netMs);
+                        } else {
+                            float w[3], wo;
+                            w3n::transportToWorld(*tp, ride.lx, ride.ly, ride.lz, ride.lo, w, &wo);
+                            pl[0] = w[0]; pl[1] = w[1]; pl[2] = w[2];
+                            charYaw += tp->o - ride.shipO;   // the ship turns, we turn with it
+                            ride.shipO = tp->o;
+                        }
                     }
                 }
                 // Ground under (x, y): a deck at about the feet height first (also from the quay: boarding), else the world.
@@ -1701,7 +2004,9 @@ int main() {
                 auto floorQ = [&](float x, float y, float zref, float* g, bool* onF = nullptr) -> bool {
                     for (auto& [guid, pose] : game->objects.transportPoses()) {
                         const w3n::WorldObject* go = game->objects.find(guid);
-                        const w3n::DeckInfo* dk = go ? game->objects.transports.deck(go->displayId()) : nullptr;
+                        if (!go || go->predicted) continue;   // 7.28: a guess is drawn, not walked on
+                        if (go->isPathTransport() && pose.map != game->mapId()) continue;
+                        const w3n::DeckInfo* dk = game->objects.transports.deck(go->displayId());
                         if (!dk) continue;
                         float l[3];
                         w3n::worldToTransport(pose, x, y, zref, 0, l, nullptr);
@@ -1842,6 +2147,36 @@ int main() {
                     // jump's height (2.4 yd) of the ground ahead (bunny-hopping up a cliff): the walker slides along the slope
                     if (!ride.guid) wallHit |= streamerSlopeMove(pl[0], pl[1], pl[2], &nx, &ny, airborne ? 2.4f : -1.0f);
                     wallUs += (float)(ticksToMs(svcGetSystemTick() - w0) * 1000.0);
+                    // 7.12c: a step whose ground is far ABOVE the feet (more than a step + 1 yd) has nothing to stand on at the feet's height:
+                    // only a cave's roof or the hill over it (a gap in a cave's wall: the walker slipped through it along the wall and was
+                    // lifted onto the hillside). Such a point is a wall: the move slides along it (x or y alone) or stops. Only from a
+                    // place with proper ground under the feet - a walker already under everything (fallen through) still gets lifted.
+                    // 7.12d: nor a step onto a point where the height is only HELD (7.12b: nothing under the feet, a building's floor
+                    // near): through a gap in a cave's wall that held the walker inside the rock - out of the server's line of sight,
+                    // nobody could hit anybody (melee, ranged), the mobs could not reach it. A walker already held may step out.
+                    const float liftMax = kStepHeight + 1.0f;
+                    auto badStep = [&](float x, float y, float* g) {
+                        if (!floorW(x, y, pl[2], g)) return false;   // (an unloaded tile: the old rule below)
+                        if (*g > pl[2] + liftMax) return true;
+                        bool held = false;
+                        float gs = 0;
+                        streamerFloorHeight(x, y, pl[2], &gs, nullptr, &held);
+                        return held && fabsf(*g - pl[2]) < 1e-3f;   // (an object's platform there is a real floor)
+                    };
+                    float gHere = 0;
+                    if (!ride.guid && badStep(nx, ny, &ground) && !badStep(pl[0], pl[1], &gHere)) {
+                        float g1 = 0;
+                        if (!badStep(nx, pl[1], &g1)) ny = pl[1];
+                        else if (!badStep(pl[0], ny, &g1)) nx = pl[0];
+                        else { nx = pl[0]; ny = pl[1]; }
+                        wallHit = true;
+                        static uint32_t lastLiftLog = 0;
+                        if (netMs - lastLiftLog > 3000) {
+                            lastLiftLog = netMs;
+                            perf::event("step refused: nothing to stand on at the feet's height there (ground %.1f yd above the feet, 0 = height only held), z %.1f at %.1f %.1f",
+                                        ground - pl[2], pl[2], pl[0], pl[1]);
+                        }
+                    }
                     if (floorW(nx, ny, pl[2], &ground)) { pl[0] = nx; pl[1] = ny; }
                     else if (!airborne) dir = 0;   // never walk onto an unloaded tile
                 }
@@ -2015,7 +2350,7 @@ int main() {
                 }
                 }   // not swimming
                 // Which ship are we on? (standing on a deck, or still in the air above the one we were on)
-                {
+                if (!pendingTransport.active) {   // 7.24: while the transport object of the new map is missing, the old ride is stale
                     uint64_t on = 0;
                     const w3n::TransportPose* onPose = nullptr;
                     // 7.08: the ship's own floor holds us (its model's collision, placed where the ship is): we are on it. The deck box of
@@ -2035,15 +2370,18 @@ int main() {
                     if (!on)
                     for (auto& [guid, pose] : game->objects.transportPoses()) {
                         const w3n::WorldObject* go = game->objects.find(guid);
-                        const w3n::DeckInfo* dk = go ? game->objects.transports.deck(go->displayId()) : nullptr;
-                        if (!dk) {   // 7.03: perf log, once per display - nobody can stand on it (no M line in transports.txt)
+                        if (!go || go->predicted) continue;   // 7.28: a guess is drawn, but nobody stands on it
+                        if (go->isPathTransport() && pose.map != game->mapId()) continue;
+                        const w3n::DeckInfo* dk = game->objects.transports.deck(go->displayId());
+                        if (!dk) {   // no rectangular deck; WMO floor ownership above may still allow boarding
                             static std::vector<uint32_t> told;
                             const float ddx = pose.x - pl[0], ddy = pose.y - pl[1];
                             if (go && ddx * ddx + ddy * ddy < 900.0f &&
                                 std::find(told.begin(), told.end(), go->displayId()) == told.end()) {
                                 told.push_back(go->displayId());
-                                perf::event("ride: transport %llx display %u entry %u has NO DECK in transports.txt", (unsigned long long)guid,
-                                            (unsigned)go->displayId(), (unsigned)go->entry());
+                                perf::event("ride: transport %llx display %u entry %u has no rectangular deck (WMO collision may provide floor; pose %.1f %.1f %.1f, %.0f yd)",
+                                            (unsigned long long)guid, (unsigned)go->displayId(), (unsigned)go->entry(),
+                                            pose.x, pose.y, pose.z, sqrtf(ddx * ddx + ddy * ddy));
                             }
                             continue;
                         }
@@ -2093,14 +2431,24 @@ int main() {
                         }
                     }
                     if (ride.guid && onPose) {
+                        const float beforeX = ride.lx, beforeY = ride.ly, beforeZ = ride.lz;
                         float l[3], lo;
                         w3n::worldToTransport(*onPose, pl[0], pl[1], pl[2], charYaw, l, &lo);
                         ride.lx = l[0]; ride.ly = l[1]; ride.lz = l[2]; ride.lo = lo;
                         if (game->mover.onTransport()) game->mover.setTransportOffset(l[0], l[1], l[2], lo);
                         else game->mover.setTransport(ride.guid, l[0], l[1], l[2], lo, netMs);   // after a reset
+                        // A carried walker must keep its offset exactly: a few hundredths per frame is a slide
+                        // across the deck that ends in the sea after a minute of flight.
+                        static uint32_t lastRideLog = 0;
+                        const float drift = std::fabs(l[0] - beforeX) + std::fabs(l[1] - beforeY) + std::fabs(l[2] - beforeZ);
+                        if (netMs - lastRideLog > 1000 || drift > 0.25f) {
+                            lastRideLog = netMs;
+                            perf::event("ride: local %.2f %.2f %.2f (this frame moved %.3f), world %.1f %.1f %.1f, dir %u, airborne %d",
+                                        l[0], l[1], l[2], drift, pl[0], pl[1], pl[2], (unsigned)dir, (int)airborne);
+                        }
                     }
                 }
-                game->mover.update(dir, pl[0], pl[1], pl[2], charYaw, netMs);
+                if (!pendingTransport.active) game->mover.update(dir, pl[0], pl[1], pl[2], charYaw, netMs);
                 // Sounds of the world around the character (heard from the character, facing the camera's way)
                 audio::setListener(pl[0], pl[1], pl[2], cam.yaw);
                 int inWater = game->mover.swimming() ? 2 : 0;
@@ -2137,14 +2485,20 @@ int main() {
                     // 6.16: the terrain is the ground only where it is not far above the character's head (10 yd). Inside a city under a
                     // mountain (Ironforge: the tram exit, Tinker Town), a cave, a cellar, the terrain is the mountain's surface
                     // high above: the camera was put up there. Then the floor under the camera is what it must stay above.
+                    // 7.12: and not at all while the character itself is under the terrain (a cave, a crypt, a cellar: the terrain over
+                    // the character more than 2 yd above the feet, or a hole in it): a shallow cave is less than 10 yd under the surface,
+                    // the old rule put the camera up on the hill over it, looking down through the rock.
+                    float tc;
+                    bool tcHole = false;
+                    const bool charUnder = !streamerGroundHeightEx(pl[0], pl[1], &tc, &tcHole) || tcHole || tc > pl[2] + 2.0f;
                     float g;
                     bool gHole = false;   // (6.17: the membrane over a terrain hole - Ironforge's gate - is not ground either)
-                    if (streamerGroundHeightEx(cp3[0], cp3[1], &g, &gHole) && !gHole && g < eye[2] + 10.0f) {   // (a hill behind us still holds it up)
+                    if (!charUnder && streamerGroundHeightEx(cp3[0], cp3[1], &g, &gHole) && !gHole && g < eye[2] + 10.0f) {   // (a hill behind us still holds it up)
                         if (cp3[2] < g + 0.5f) cp3[2] = g + 0.5f;
                     } else {
                         float fz;
                         bool fOn = false, fHeld = false;
-                        if (streamerFloorHeight(cp3[0], cp3[1], std::min(cp3[2], eye[2]), &fz, &fOn, &fHeld) && fOn && !fHeld &&
+                        if (streamerFloorHeight(cp3[0], cp3[1], std::min(cp3[2], eye[2]), &fz, &fOn, &fHeld) && (fOn || charUnder) && !fHeld &&
                             fz <= eye[2] + 0.5f && cp3[2] < fz + 0.5f)
                             cp3[2] = fz + 0.5f;
                     }
@@ -2302,7 +2656,12 @@ int main() {
                 for (int b = 0; b < kPadButtons; ++b) {
                     int slot = pv.set * kPadButtons + b;
                     HudBarCell& c = pv.cells[b];
-                    if (pv.set == 0 && b >= 4) { c.name = padFixedName(b); c.fixed = true; continue; }
+                    // set 0 of the New 3DS scheme, and every set of the Old 3DS scheme: the face buttons are the fixed actions
+                    if (b >= 4 && (padCfg.scheme == PadScheme::Old3DS || pv.set == 0)) {
+                        c.name = padFixedName(b, padCfg.scheme == PadScheme::Old3DS);
+                        c.fixed = true;
+                        continue;
+                    }
                     const ActionSlot& a = bars.at(slot);
                     if (a.type == ActionSlot::Empty) continue;
                     c.name = bars.label(*game, slot);
@@ -2369,6 +2728,8 @@ int main() {
                     pv.soft = game->softInteract(pl, charYaw, netMs, &pv.softVerb);
             }
             hi.pad = &pv;
+            hi.old3ds = padCfg.scheme == PadScheme::Old3DS;   // 7.21: the control hints follow the scheme
+            hi.interactKey = btnName(hi.old3ds ? Btn::A : Btn::Y);   // WoWVita: the Vita button names
             hi.questTracker = padCfg.questTracker;
             hi.followed = &gameUi.followedQuests();   // 6.63
             hi.dim = padCfg.dimHud;
@@ -2834,21 +3195,45 @@ int main() {
 #if defined(W3D_COMPAT)
             rs.gpuKick = false;   // WoWVita: the early kick is a glFlush mid-frame on vitaGL - no gain, it cost FPS on the Vita
 #endif
+            // 7.27: FSR-lite. The scene goes into fsrScene's smaller texture and is upscaled to the top screen before the HUD,
+            // so the UI stays at 400/800x240. The wide mode doubles the internal width (see fsrUpdate), the 3D mode keeps it.
+            #if defined(W3D_COMPAT)
+            const bool fsrOn = false;   // WoWVita: the world is drawn at the Vita's own resolution - no FSR upscale
+#else
+            const bool fsrOn = padCfg.fsr > 0 && fsrScene::ready();
+#endif
+            const int fsrOutW = topModeNow == 1 ? 800 : 400;
+            const u32 clearRgba = loginUi ? 0x05080CFF : rendererClearColor(rs);
+            rendererSetOffscreen(fsrOn);   // 7.27: the scene texture is landscape; the screen target is sideways (no tilt)
             for (int eye = 0; eye < (stereo ? 2 : 1); ++eye) {
                 C3D_RenderTarget* t = eye == 0 ? left : topRight;
                 if (!t) continue;   // (6.49b: no top target after a failed mode switch)
                 if (stereo) rendererSetEye(eye == 0 ? -iod : iod);
-                C3D_RenderTargetClear(t, C3D_CLEAR_ALL, topClearColor(loginUi ? 0x05080CFF : rendererClearColor(rs)), 0);
-                C3D_FrameDrawOn(t);
+                if (fsrOn) {   // RGBA8 scene target: the colour is used as it is (no RGB8 shift)
+                    C3D_RenderTargetClear(fsrScene::target(), C3D_CLEAR_ALL, clearRgba, 0);
+                    fsrScene::beginPass();
+                } else {
+                    C3D_RenderTargetClear(t, C3D_CLEAR_ALL, topClearColor(clearRgba), 0);
+                    C3D_FrameDrawOn(t);
+                }
                 if (loginUi) {   // the login screens: their scene, then their frames
                     perf::mark("glue: scene draw");
                     if (glueScene) rendererDrawScene(glueCam, glueFov, glueNear, glueFar, glueModels, &glueCreatures, fc);
+                    if (fsrOn) {
+                        C3D_FrameDrawOn(t);
+                        fsrScene::upscale(t, fsrOutW, kHudH, padCfg.fsr == 1);
+                    }
                     perf::lap(perf::kWorld);
                     perf::mark("glue: top screen UI");
                     uiDraw(g_login.glueTop(), kHudW);
                 } else {
                     perf::mark("rendererDraw");
-                    rendererDraw(t, cam, rs, fc, &markers, &creatures, &spellModels);
+                    rendererDraw(fsrOn ? fsrScene::target() : t, cam, rs, fc, &markers, &creatures, &spellModels);
+                    if (fsrOn) {
+                        perf::mark("FSR upscale");
+                        C3D_FrameDrawOn(t);
+                        fsrScene::upscale(t, fsrOutW, kHudH, padCfg.fsr == 1);
+                    }
                     perf::mark("HUD draw");
                     perf::lap(perf::kWorld);
                     if (cinPlay.s) {   // 7.04: no HUD over the intro, only how to skip it
@@ -3034,7 +3419,7 @@ int main() {
             pc.yaw = cam.yaw;
             pc.pitch = cam.pitch;
             const bool swimming = online && game->mover.swimming();
-            pc.move = !walk ? "fly" : wasFlight ? "taxi" : ride.guid ? "ship" : swimming ? "swim" : onFloor ? "floor" : "walk";
+            pc.move = !walk ? "fly" : wasServerMove ? "spline" : ride.guid ? "ship" : swimming ? "swim" : onFloor ? "floor" : "walk";
             pc.drawDist = cam.drawDist;
             pc.doodadRange = rs.doodadRange;
             pc.doodads = rs.doodads;
@@ -3046,7 +3431,7 @@ int main() {
                 pc.crowdCap = kCrowd[std::clamp(padCfg.crowd, 0, 3)];
             }
             pc.topMode = topModeNow;
-            pc.scheme = padCfg.scheme == PadScheme::Classic ? 1 : 0;
+            pc.scheme = padCfg.scheme == PadScheme::Old3DS ? 1 : 0;
             pc.slider = osGet3DSliderState();
             pc.stereo = topModeNow == 2 && topRight && pc.slider > 0.02f;
             pc.gpuKick = padCfg.gpuKick;
@@ -3095,6 +3480,7 @@ int main() {
 
     perf::event("streamer: %s", streamerIoStatus());   // WoWVita: the reads of the session
     perf::event("quit");
+    if (g_login.online()) saveTransportCache(&g_login.game());   // 7.28: where the ships were, for the next session
     perf::shutdown();
     writeReport(bench.frameMs.empty() ? nullptr : &bench, cam.drawDist, rs);
     g_login.shutdown();
@@ -3105,6 +3491,7 @@ int main() {
     audio::shutdown();
     portrait::shutdown();
     uiRenderShutdown();
+    fsrScene::shutdown();
     rendererShutdown();
     C3D_Fini();
     romfsExit();

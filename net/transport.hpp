@@ -2,7 +2,8 @@
 // The server simulates them from TaxiPathNode.dbc (key frames, stops, acceleration; vMaNGOS Transports/TransportMgr.cpp
 // and ShipTransport::Update) but only sends the position at creation and the path progress; the 1.12 client animates the
 // object by itself. This is a port of that simulation: TransportPath::at(progressMs) gives the pose the server computes.
-// transports.txt (converter/src/texts.cpp exportTransports): "T pathId nodeIndex map x y z flags delay" per node.
+// transports.txt (converter/src/texts.cpp exportTransports): "T pathId nodeIndex map x y z flags delay" per node,
+// "P entry periodMs" from the server transports table. Millisecond period errors compound over server uptime.
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -35,7 +36,9 @@ public:
     bool build(const std::vector<TaxiPathNode>& nodes, float speed, float accel);
     uint32_t period() const { return period_; }   // ms of one full round
     // progressMs: path progress (any value; taken modulo the period).
-    TransportPose at(uint32_t progressMs) const;
+    // Server DB periods can differ slightly from the generated spline duration. Use them for modulo only,
+    // never rescale the whole timeline (in particular, the fixed stop delays).
+    TransportPose at(uint32_t progressMs, uint32_t serverPeriodMs = 0) const;
     size_t frames() const { return kf_.size(); }
     bool built() const { return !kf_.empty() && period_ != 0; }
 
@@ -113,6 +116,10 @@ public:
     const std::vector<TaxiPathNode>* nodes(uint32_t pathId) const;
     // The built path for a GO template (cached); null when unknown / unbuildable.
     const TransportPath* path(uint32_t pathId, float speed, float accel);
+    uint32_t period(uint32_t goEntry, uint32_t generatedPeriod) const {
+        auto it = periods_.find(goEntry);
+        return it == periods_.end() ? generatedPeriod : it->second;
+    }
     const ElevatorAnim* elevator(uint32_t goEntry) const {
         auto it = elevators_.find(goEntry);
         return it == elevators_.end() ? nullptr : &it->second;
@@ -138,6 +145,7 @@ private:
     std::map<uint32_t, DeckInfo> decks_;
     std::map<uint32_t, DeckInfo> staticDecks_;
     std::map<uint32_t, ElevatorAnim> elevators_;
+    std::map<uint32_t, uint32_t> periods_;   // P entry periodMs: server transports table, not TaxiPathNode geometry
     std::map<std::pair<uint32_t, uint64_t>, std::unique_ptr<TransportPath>> built_;
 };
 

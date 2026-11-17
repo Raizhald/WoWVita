@@ -29,7 +29,7 @@ const char* compass(float dx, float dy) {
     float a = atan2f(-dy, dx);
     int k = (int)floorf(a / 0.785398f + 0.5f);
     k = (k % 8 + 8) % 8;
-    return g_lang ? ru[k] : en[k];
+    return tr(en[k], ru[k]);
 }
 
 // Quest text: paragraphs kept, $B already turned into line breaks by the session.
@@ -53,10 +53,10 @@ std::vector<std::string> paragraphs(const std::string& text, int width, Font f) 
 
 std::string timeLeft(uint32_t ms) {
     uint32_t m = ms / 60000;
-    if (m >= 60 * 12) return g_lang ? "очень долго" : "very long";
-    if (m >= 120) return g_lang ? "долго" : "long";
-    if (m >= 30) return g_lang ? "средне" : "medium";
-    return g_lang ? "коротко" : "short";
+    if (m >= 60 * 12) return tr("very long", "очень долго");
+    if (m >= 120) return tr("long", "долго");
+    if (m >= 30) return tr("medium", "средне");
+    return tr("short", "коротко");
 }
 
 }  // namespace
@@ -65,8 +65,8 @@ std::string timeLeft(uint32_t ms) {
 void GameUi::drawDeath(w3n::GameSession& g, const Input& in) {
     window(8, kTop + 4, kTouchW - 16, kContentH - 8, true);
     const w3n::Life life = g.life();
-    const bool forever = in.cfg && in.cfg->scheme == PadScheme::Forever;
-    const std::string useKeyS = std::string(" (") + btnName(forever ? Btn::Y : Btn::A) + ")";
+    const bool new3ds = in.cfg && in.cfg->scheme == PadScheme::New3DS;
+    const std::string useKeyS = std::string(" (") + btnName(new3ds ? Btn::Y : Btn::A) + ")";
     const char* useKey = useKeyS.c_str();
     char b[96];
     int y = kTop + 10;
@@ -349,13 +349,15 @@ void GameUi::drawItemInfo(w3n::GameSession& g) {
     if (!info) {
         list_.text(14, kTop + 14, tr("(asking the server...)", "(запрос к серверу...)"), kGrey, true, Font::Normal);
     } else {
+        if (infoItem_.guid) g.refreshItem(infoItem_);   // 7.16: the enchant timers count down while the card is open
+        itemGlow(infoItem_, 12, kTop + 10, 32);
         iconBox(12, kTop + 10, 32, itemIcon(g, infoEntry_), info->name, qualityColor(info->quality));
         std::vector<std::string> lines = w3n::itemTooltip(*info, infoItem_.guid ? &infoItem_ : nullptr, g.spellNames, &g.spellDesc);
         int y = kTop + 10;
         for (size_t i = 0; i < lines.size(); ++i) {
             const std::string& l = lines[i];
             uint32_t c = i == 0 ? qualityColor(info->quality)
-                       : l.rfind("Use:", 0) == 0 || l.rfind("Equip:", 0) == 0 || l.rfind("Chance", 0) == 0 ? kGreen
+                       : l.rfind("Use:", 0) == 0 || l.rfind("Equip:", 0) == 0 || l.rfind("Chance", 0) == 0 || l.rfind("Enchant:", 0) == 0 ? kGreen
                        : l[0] == '"' ? kYellow : l.rfind("Sell", 0) == 0 || l.rfind("No sell", 0) == 0 ? kGrey
                        : l.rfind("Requires", 0) == 0 && g.selfObject() && info->requiredLevel > g.selfObject()->level() ? kRed : kText;
             Font f = i == 0 ? Font::Normal : Font::Small;
@@ -380,12 +382,13 @@ void GameUi::drawItemCard(w3n::GameSession& g) {
     if (!info) {
         rows.push_back({tr("(asking the server...)", "(запрос к серверу...)"), kGrey, Font::Normal});
     } else {
+        if (infoItem_.guid) g.refreshItem(infoItem_);   // 7.16: the enchant timers count down while the card is open
         std::vector<std::string> lines = w3n::itemTooltip(*info, infoItem_.guid ? &infoItem_ : nullptr, g.spellNames, &g.spellDesc);
         for (size_t i = 0; i < lines.size(); ++i) {
             const std::string& l = lines[i];
             if (l.empty()) continue;
             const uint32_t c = i == 0 ? qualityColor(info->quality)
-                             : l.rfind("Use:", 0) == 0 || l.rfind("Equip:", 0) == 0 || l.rfind("Chance", 0) == 0 ? kGreen
+                             : l.rfind("Use:", 0) == 0 || l.rfind("Equip:", 0) == 0 || l.rfind("Chance", 0) == 0 || l.rfind("Enchant:", 0) == 0 ? kGreen
                              : l[0] == '"' ? kYellow : l.rfind("Sell", 0) == 0 || l.rfind("No sell", 0) == 0 ? kGrey
                              : l.rfind("Requires", 0) == 0 && g.selfObject() && info->requiredLevel > g.selfObject()->level() ? kRed : kText;
             const Font f = i == 0 ? Font::Normal : Font::Small;
@@ -401,6 +404,7 @@ void GameUi::drawItemCard(w3n::GameSession& g) {
     list_.rect(0, 0, kTouchW, kTouchH, hudRgba(0, 0, 0, 120));   // the dimmed screen under it
     window(x, y, cw, h, true);
     list_.outline(x, y, cw, h, info ? qualityColor(info->quality) : kFrame);
+    itemGlow(infoItem_, x + 8, y + 8, 32);
     iconBox(x + 8, y + 8, 32, itemIcon(g, infoEntry_), info ? info->name : std::string(), info ? qualityColor(info->quality) : kFrame);
     int ty = y + 6;
     for (const Row& r : rows) {
@@ -604,6 +608,7 @@ void GameUi::drawBank(w3n::GameSession& g, const Input& in) {
         const w3n::InvItem& it = items[idx];
         const int x = 6 + (k % cols) * cell, y = kTop + 24 + (k / cols) * cell;
         const w3n::ItemInfo* info = g.itemInfo(it.entry);
+        itemGlow(it, x + 1, y + 1, cell - 4);
         iconBox(x + 1, y + 1, cell - 4, itemIcon(g, it.entry), g.itemName(it.entry), qualityColor(info ? info->quality : 1));
         if (it.count > 1) list_.textRight(x + cell - 4, y + cell - 14, std::to_string(it.count), kWhite, true);
         if (idx == bankSel_) list_.outline(x - 1, y - 1, cell, cell, kGold);
@@ -815,6 +820,7 @@ void GameUi::drawAuction(w3n::GameSession& g, const Input& in) {
         const w3n::InvItem& it = items[idx];
         const int x = 6 + (k % cols) * (cell + 4), y = kTop + 26 + (k / cols) * (cell + 4);
         const w3n::ItemInfo* info = g.itemInfo(it.entry);
+        itemGlow(it, x, y, cell);
         iconBox(x, y, cell, itemIcon(g, it.entry), g.itemName(it.entry), qualityColor(info ? info->quality : 1));
         if (it.count > 1) list_.textRight(x + cell - 1, y + cell - 11, std::to_string(it.count), kWhite, true);
         if (idx == auctionSellItem_) list_.outline(x - 2, y - 2, cell + 4, cell + 4, kGold);
@@ -893,6 +899,7 @@ void GameUi::drawTrade(w3n::GameSession& g, const Input& in) {
         for (const w3n::InvItem& o : t.myItems) offered = offered || (o.guid && o.guid == it.guid);
         const int x = 6 + (k % cols) * (cell + 8), y = kTop + 100;
         const w3n::ItemInfo* info = g.itemInfo(it.entry);
+        itemGlow(it, x, y, cell);
         iconBox(x, y, cell, itemIcon(g, it.entry), g.itemName(it.entry), qualityColor(info ? info->quality : 1), offered);
         if (idx == tradeSel_) list_.outline(x - 2, y - 2, cell + 4, cell + 4, kGold);
         Button& b = region(x - 1, y - 1, cell + 2, cell + 2, Act::TradePick, idx);
@@ -926,6 +933,10 @@ void GameUi::drawPet(w3n::GameSession& g, const Input& in) {
     const int by = kTabY - 28;
     if (petFeedList_) {   // the food list
         std::vector<w3n::InvItem> food = g.petFoodCandidates();
+        // 7.19: keep the guids of exactly this order: an item query that lands while the list is open can change it,
+        // and the tap must feed the row that was on the screen
+        petFeedShown_.clear();
+        for (const w3n::InvItem& f : food) petFeedShown_.push_back(f.guid);
         list_.text(10, kTop + 6, tr("Feed Pet: pick the food", "Кормление: выберите еду"), kGold, true, Font::Normal);
         if (food.empty()) list_.text(10, kTop + 24, tr("No food in the bags.", "В сумках нет еды."), kGrey);
         const int per = 6, rowH = 23;

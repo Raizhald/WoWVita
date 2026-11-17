@@ -49,6 +49,8 @@ nine   button_down  Interface\Buttons\UI-Panel-Button-Down.blp 0 0 0.625 0.6875 
 nine   button_off   Interface\Buttons\UI-Panel-Button-Disabled.blp 0 0 0.625 0.6875 80 22 10 6 10 6
 sprite slot         Interface\Buttons\UI-Quickslot2.blp 0 0 1 1 64 64
 sprite slot_empty   Interface\PaperDoll\UI-Backpack-EmptySlot.blp 0 0 1 1 40 40
+# 7.17: the green glow of an item with an enchantment (drawn additively behind its icon, as a hint of the original client)
+sprite enchant_glow Interface\Buttons\CheckButtonGlow.blp 0 0 1 1 64 64
 sprite bar          Interface\TargetingFrame\UI-StatusBar.blp 0 0 1 1 64 8
 sprite gossip_0     Interface\GossipFrame\GossipGossipIcon.blp 0 0 1 1 16 16
 sprite gossip_1     Interface\GossipFrame\VendorGossipIcon.blp 0 0 1 1 16 16

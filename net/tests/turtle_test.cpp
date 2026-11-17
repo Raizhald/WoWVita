@@ -26,7 +26,8 @@ static void unitCreate(Writer& w, uint64_t guid, float x, float y, float z, uint
     w.u32(1000);
     w.f32(x); w.f32(y); w.f32(z); w.f32(1.0f);
     if (flags & MoveFlag::OnTransport) {
-        w.packedGuid(0x1F00000000000001ull);
+        if (turtleTime) w.packedGuid(0x1F00000000000001ull);
+        else w.u64(0x1F00000000000001ull);
         w.f32(1); w.f32(2); w.f32(3); w.f32(0);
         if (turtleTime) w.u32(123456);
     }

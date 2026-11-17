@@ -5,6 +5,13 @@
 #include "audio.hpp"
 
 #include <3ds.h>
+#if defined(W3D_COMPAT)
+// WoWVita: the platform's software mixer stands behind ndsp (platform/src/ndsp.cpp); there is no 3DS DSP to load
+static inline Result opendspInit(void) { return -1; }   // -> the plain ndspInit path below
+static inline void opendspExit(void) {}
+#else
+#include <opendsp.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -21,7 +28,7 @@
 namespace audio {
 
 namespace {
-constexpr int kMusicCh = 0, kAmbCh = 1, kSfxCh0 = 2, kSfxChN = 8, kWorldCh0 = 8, kWorldChN = 24;
+constexpr int kMusicCh = 0, kAmbCh = 1, kSfxCh0 = 2, kSfxChN = 8, kWorldCh0 = 8, kWorldChN = 24;   // 24 DSP channels: 2 music/ambience, 6 sfx [2,8), 16 world [8,24)
 constexpr size_t kWorldCacheBytes = 3u << 20;   // decoded world sounds kept in linear memory
 constexpr int kBufs = 4, kBufFrames = 4096;
 
@@ -36,6 +43,12 @@ struct Voice {
 };
 
 bool g_ok = false;
+bool g_opendsp = false;
+#if defined(W3D_COMPAT)
+const char* const kNdspName = "Vita";
+#else
+const char* const kNdspName = "dspfirm";
+#endif   // 7.24: OpenDSP's embedded firmware; false = the old dspfirm.cdc fallback
 uint64_t g_t0 = 0;
 Thread g_thread = nullptr;
 std::atomic<bool> g_quit{false};
@@ -322,9 +335,16 @@ void threadMain(void*) {
 
 bool init(const char* soundDir) {
     g_t0 = osGetTime();
-    if (R_FAILED(ndspInit())) {
-        snprintf(g_status, sizeof g_status, "sound: off (no sdmc:/3ds/dspfirm.cdc - run DSP1)");
-        return false;
+    // 7.24: OpenDSP links an open-source DSP firmware into the app: no dspfirm.cdc dump is needed. If it cannot start
+    // (an unusual CFW / hardware), fall back to libctru's ndsp and the user's own dspfirm.cdc as before.
+    if (R_FAILED(opendspInit())) {
+        if (R_FAILED(ndspInit())) {
+            snprintf(g_status, sizeof g_status, "sound: off (OpenDSP could not start and no dspfirm.cdc)");
+            return false;
+        }
+        g_opendsp = false;
+    } else {
+        g_opendsp = true;
     }
     g_ok = true;
     ndspSetOutputMode(NDSP_OUTPUT_STEREO);
@@ -343,8 +363,8 @@ bool init(const char* soundDir) {
         g_voice[i].loop = i == 1;
         g_voice[i].mem = (int16_t*)linearAlloc((size_t)kBufs * kBufFrames * 2 * sizeof(int16_t));
     }
-    snprintf(g_status, sizeof g_status, "sound: %s %u, world %u, music %s", pack ? "sfx" : "built-in", (unsigned)g_sfx.count(),
-             (unsigned)g_world.count(), music ? "on" : "none");
+    snprintf(g_status, sizeof g_status, "sound: %s %u, world %u, music %s [%s]", pack ? "sfx" : "built-in", (unsigned)g_sfx.count(),
+             (unsigned)g_world.count(), music ? "on" : "none", g_opendsp ? "OpenDSP" : kNdspName);
     if (g_voice[0].mem && g_voice[1].mem) {
         s32 prio = 0x30;
         svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
@@ -376,7 +396,8 @@ void shutdown() {
     for (auto& [k, c] : g_cache) linearFree(c.pcm);
     g_cache.clear();
     g_cacheBytes = 0;
-    ndspExit();
+    if (g_opendsp) opendspExit();
+    else ndspExit();
     g_ok = false;
 }
 

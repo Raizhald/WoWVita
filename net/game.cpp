@@ -20,6 +20,10 @@ enum : uint16_t {
     // arrives (Player::GetConfirmedMover: "no mover client side, is this a fake client?"); the real
     // client sends it on entering the world and after every map change (WoWee does the same).
     CMSG_SET_ACTIVE_MOVER = 0x26A,
+    // 7.20: the ack the 1.12 server waits for after a spline it started on us (Charge, knockback). Until it arrives
+    // vMaNGOS ignores every movement packet (Unit::HasPendingSplineDone), so the player stays where the spline began
+    // server-side: no attack lands (out of range), no new objects come in, and a relog puts us back at that spot.
+    CMSG_MOVE_SPLINE_DONE = 0x2C9,
 };
 
 // Forced-movement packets start with the player's GUID, packed on vMaNGOS/CMaNGOS
@@ -37,6 +41,11 @@ void GameSession::attach(WorldClient& wc, uint32_t nowMs) {
     for (const auto& c : wc.characters())
         if (c.guid == self_) selfName = c.name;
     map_ = wc.mapId();
+    teleported_ = false;
+    transferPending_ = false;
+    transferMap_ = 0;
+    transferTransportEntry_ = 0;   // 7.24
+    transportSpawnPending_ = false;
     now_ = nowMs;
     objects.clear();
     objects.setSelf(self_);
@@ -74,6 +83,7 @@ void GameSession::attach(WorldClient& wc, uint32_t nowMs) {
     autoLfg_ = false;
     itemAsked_.clear();   // the item cache (items_) survives: static data
     itemWanted_.clear();
+    itemEnchantTimers_.clear();   // 7.16: enchant countdowns belong to the old session
     spells.clear();
     actionBar = {};
     actionBarSeen = false;
@@ -173,9 +183,20 @@ void GameSession::update(uint32_t nowMs) {
         const WorldObject* t = target_ ? objects.find(target_) : nullptr;
         if (!t || (t->isUnitLike() && t->dead())) attackWanted_ = attackOn_ = false;
     }
+    // 7.19: a charge landed (or we walked into reach): start the auto-attack it deferred, now the server will take it.
+    // A target that died or is gone drops it; so does a cast whose answer never came (below).
+    if (attackAfterCast_ && !cast.active) {
+        const WorldObject* t = target_ ? objects.find(target_) : nullptr;
+        const WorldObject* me = selfObject();
+        if (!t || !me || me->dead() || (t->isUnitLike() && t->dead()) ||
+            nowMs - attackAfterCastMs_ > 8000)   // it ran: a charge that never got us there starts nothing later
+            attackAfterCast_ = 0;
+        else if (!attackWanted_ && targetInMelee()) { attackAfterCast_ = 0; startAttack(nowMs); }
+    }
+    retryAttack(nowMs);   // 7.19: an attack the server refused from out of reach starts when we get there
     expireRolls(nowMs);   // 6.88
     // A cast whose SPELL_GO / failure never arrived must not block the bar for ever.
-    if (cast.active && nowMs - cast.startMs > cast.durMs + 2000) cast = CastState();
+    if (cast.active && nowMs - cast.startMs > cast.durMs + 2000) { cast = CastState(); attackAfterCast_ = 0; }
 }
 
 bool GameSession::takeTransferPending(uint32_t* map) {
@@ -185,12 +206,64 @@ bool GameSession::takeTransferPending(uint32_t* map) {
     return true;
 }
 
+bool GameSession::selfServerMove(uint32_t nowMs, float pos[3], float* yaw, bool* taxi) const {
+    const WorldObject* me = selfObject();
+    if (!me || !me->pathRunning(nowMs)) return false;
+    me->positionAt(nowMs, pos, yaw);
+    if (taxi) *taxi = me->taxiFlight();
+    return true;
+}
+
+void GameSession::endSelfServerMove(const float pos[3], float yaw, uint32_t nowMs) {
+    WorldObject* me = objects.find(self_);
+    if (!me) me = objects.find(objects.self());
+    const bool taxi = me && me->taxiFlight();
+    const uint32_t splineId = me ? me->pathSplineId : 0;
+    float end[3] = {pos[0], pos[1], pos[2]};
+    float endYaw = yaw;
+    if (me && me->pathActive) me->positionAt(nowMs, end, &endYaw);   // the exact end of the spline, not the last frame
+    else if (me && me->hasPos) {                                    // a stop packet: the server's place
+        end[0] = me->mv.x; end[1] = me->mv.y; end[2] = me->mv.z; endYaw = me->mv.o;
+    }
+    if (me) {
+        me->mv.x = end[0]; me->mv.y = end[1]; me->mv.z = end[2];
+        me->mv.o = normalizeAngle(endYaw);
+        me->mv.flags &= ~(uint32_t)MoveFlag::MaskMoving;
+        me->hasPos = true;
+        me->posMs = nowMs;
+        me->pathActive = false;
+        me->pathSmooth = false;
+        me->pathDurMs = 0;
+        me->path.clear();
+    }
+    mover.reset(end[0], end[1], end[2], endYaw, nowMs);
+    // 7.20: the server started the spline on us and waits for CMSG_MOVE_SPLINE_DONE. Until it arrives vMaNGOS drops
+    // every movement packet (Unit::HasPendingSplineDone), so the player stays at the spline's start server-side: blows
+    // cannot land there (out of range), the grid does not load, and a relog puts us back. Not for a taxi: that one the
+    // server ends itself and the client had never confirmed it.
+    if (me) me->pathSplineId = 0;
+    if (!taxi && splineId) {
+        Writer w;
+        writeMovementInfo(w, mover.snapshot(nowMs));
+        w.u32(splineId);
+        w.f32(0.0f);   // the stock 1.12 client sends a float after the id; the server reads past it
+        send(CMSG_MOVE_SPLINE_DONE, w.b, nowMs);
+    }
+}
+
 bool GameSession::takeTeleport(float pos[3], float* orient) {
     if (!teleported_) return false;
     teleported_ = false;
     const MovementInfo& m = mover.info();
     pos[0] = m.x; pos[1] = m.y; pos[2] = m.z;
     if (orient) *orient = m.o;
+    return true;
+}
+
+bool GameSession::takeTransportSpawn(TransportSpawn* out) {
+    if (!transportSpawnPending_) return false;
+    transportSpawnPending_ = false;
+    if (out) *out = transportSpawn_;
     return true;
 }
 
@@ -250,7 +323,13 @@ bool GameSession::handle(uint16_t op, const Bytes& data, uint32_t nowMs) {
             uint64_t g = r.packedGuid();
             uint32_t counter = r.u32();
             MovementInfo m;
-            if (!readMovementInfo(r, m)) return true;
+            const size_t movementStart = r.pos;
+            if (objects.turtle) {
+                if (!readMovementInfo(r, m, true) || r.left() != 0) {
+                    r.pos = movementStart; r.bad = false; m = MovementInfo{};
+                    if (!readMovementInfo(r, m)) return true;
+                }
+            } else if (!readMovementInfo(r, m)) return true;
             if (g != self_) {
                 if (WorldObject* o = objects.find(g)) { o->mv = m; o->posMs = nowMs; o->pathActive = false; }
                 return true;
@@ -265,6 +344,8 @@ bool GameSession::handle(uint16_t op, const Bytes& data, uint32_t nowMs) {
             // anything still queued was measured from the old spot.
             mover.queue().clear();
             teleported_ = true;
+            transferTransportEntry_ = 0;   // 7.24: a plain teleport is no transport transfer
+            transportSpawnPending_ = false;
             triggerWatch.rearm();   // we stand where the server put us: no trigger fires until we walk into one
             ++stats.teleports;
             return true;
@@ -273,13 +354,35 @@ bool GameSession::handle(uint16_t op, const Bytes& data, uint32_t nowMs) {
             map_ = r.u32();
             float x = r.f32(), y = r.f32(), z = r.f32(), o = r.f32();
             if (r.bad) return true;
+            const bool byTransport = transferTransportEntry_ != 0;
+            // The server has confirmed a passenger transfer. Keep that already-known ship even if the destination
+            // map does not immediately re-announce it; discard the rest of the old world's objects as usual.
+            ObjectTable::TransportMemory carriedShip;
+            if (byTransport) {
+                for (const auto& m : objects.transportMemory(nowMs)) {
+                    if (m.entry == transferTransportEntry_ && m.guid == mover.info().transportGuid) { carriedShip = m; break; }
+                }
+            }
             objects.clear();
             objects.setSelf(self_);
+            if (carriedShip.guid) objects.restoreTransport(carriedShip, nowMs);
             triggerWatch.rearm();
-            mover.reset(x, y, z, o, nowMs);
+            mover.queue().clear();   // anything still queued was measured in the old world / on the old transport
+            if (byTransport) {
+                // 7.24: on a transport the server sends the offset on it, not a world position (vMaNGOS
+                // Player::SendNewWorld: m_movementInfo.GetTransportPos()). main.cpp waits for the transport object in the
+                // new map, puts the offset on it and only then has a world position to load the ground around.
+                transportSpawn_ = TransportSpawn{transferTransportEntry_, x, y, z, o};
+                transportSpawnPending_ = true;
+                teleported_ = false;
+            } else {
+                mover.reset(x, y, z, o, nowMs);
+                transportSpawnPending_ = false;
+                teleported_ = true;
+            }
+            transferTransportEntry_ = 0;
             send(MoveOp::WorldportAck, {}, nowMs);
             sendActiveMover(nowMs);
-            teleported_ = true;
             ++stats.newWorlds;
             return true;
         }
@@ -303,11 +406,17 @@ bool GameSession::handle(uint16_t op, const Bytes& data, uint32_t nowMs) {
             ++clock.updates;
             return true;
         }
-        case SMSG_TRANSFER_PENDING: {   // u32 map [, u32 transport entry, u32 transport map]: a new map is being loaded
+        case SMSG_TRANSFER_PENDING: {   // u32 map [, u32 transport entry, u32 old map id]: a new map is being loaded
             uint32_t m = r.u32();
             if (r.bad) return true;
             transferMap_ = m;
             transferPending_ = true;
+            transportSpawnPending_ = false;
+            transferTransportEntry_ = 0;
+            if (r.left() >= 4) {
+                transferTransportEntry_ = r.u32();   // 7.24: a ship / zeppelin carries us to the other continent
+                if (r.left() >= 4) r.u32();          // the old map id (the new world's local position is enough)
+            }
             return true;
         }
         case SMSG_FORCE_RUN_SPEED_CHANGE:

@@ -188,10 +188,10 @@ float TransportPath::segmentPos(const Frame& f, float now) const {
     return f.nextDistFromPrev > 1e-6f ? pos / f.nextDistFromPrev : 0.0f;
 }
 
-TransportPose TransportPath::at(uint32_t progressMs) const {
+TransportPose TransportPath::at(uint32_t progressMs, uint32_t serverPeriodMs) const {
     TransportPose out;
     if (!built()) return out;
-    const uint32_t p = progressMs % period_;
+    const uint32_t p = progressMs % (serverPeriodMs ? serverPeriodMs : period_);
     size_t i = 0;
     for (; i < kf_.size(); ++i) {
         const Frame& f = kf_[i];
@@ -199,12 +199,16 @@ TransportPose TransportPath::at(uint32_t progressMs) const {
     }
     if (i == kf_.size()) i = kf_.size() - 1;
     const Frame& f = kf_[i];
+    // On entering a teleport frame the server places the model at the NEXT frame immediately. In particular,
+    // a DB period's extra final milliseconds belong to the destination map, not the old continent.
+    const Frame& placed = f.teleport ? kf_[(i + 1) % kf_.size()] : f;
     out.valid = true;
-    out.map = f.node.map;
-    out.x = f.node.x; out.y = f.node.y; out.z = f.node.z;
-    out.o = f.initO;
+    out.map = placed.node.map;
+    out.x = placed.node.x; out.y = placed.node.y; out.z = placed.node.z;
+    out.o = placed.initO;
+    if (f.teleport) return out;
     if (p >= f.arrive && p < f.depart) return out;   // waiting at a stop
-    if (f.teleport || f.chunk < 0 || p == 0) return out;
+    if (f.chunk < 0 || p == 0) return out;
     const std::vector<Vec3f>& pts = chunks_[(size_t)f.chunk];
     if (pts.size() < 2 || f.index + 1 > pts.size()) return out;
     const float t = std::min(1.0f, std::max(0.0f, segmentPos(f, (float)p * 0.001f)));
@@ -225,6 +229,7 @@ bool TransportTable::parse(const std::string& text) {
     decks_.clear();
     staticDecks_.clear();
     elevators_.clear();
+    periods_.clear();
     built_.clear();
     std::map<uint32_t, std::map<uint32_t, TaxiPathNode>> tmp;
     size_t at = 0;
@@ -233,6 +238,12 @@ bool TransportTable::parse(const std::string& text) {
         if (e == std::string::npos) e = text.size();
         std::string line = text.substr(at, e - at);
         at = e + 1;
+        if (line.size() >= 3 && line[0] == 'P' && line[1] == '\t') {
+            unsigned entry = 0, period = 0;
+            if (std::sscanf(line.c_str() + 2, "%u %u", &entry, &period) == 2 && entry && period)
+                periods_[entry] = period;
+            continue;
+        }
         if (line.size() >= 3 && line[0] == 'M' && line[1] == '\t') {
             unsigned id = 0;
             DeckInfo d;

@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
         s.chat.push_back(own);
         in.selfVisible = getenv("W3D_THIRD") != nullptr;
     }
-    static HudPadView pv;   // "pad": the Forever bars (stage 5.11) with a sample layout, ZR held, the aim ring
+    static HudPadView pv;   // "pad": the controller bars (stage 5.11) with a sample layout, ZR held, the aim ring
     if (argc > 5 && std::string(argv[5]) == "pad") {
         pv.show = true;
         pv.set = 2;
@@ -194,6 +194,15 @@ int main(int argc, char** argv) {
         pv.aim = s.target();
         pv.mode = argc > 6 ? atoi(argv[6]) : 0;
         in.pad = &pv;
+        in.old3ds = getenv("W3D_OLD3DS") != nullptr;   // 7.21: the Old 3DS hints (no ZL/ZR, A interacts)
+        in.interactKey = in.old3ds ? "A" : "Y";
+        if (in.old3ds) {   // main.cpp fills these from padFixedName(): the face buttons are the fixed actions
+            static const char* kOld[4] = {"Set", "Use", "Jump", "Look"};
+            for (int b = 4; b < 8; ++b) {
+                pv.cells[b].name = kOld[b - 4];
+                pv.cells[b].fixed = true;
+            }
+        }
     }
     // UI stage 8: the interface pack (W3D_UI_PACK) for the frame art, stand-in portraits, a rested character with
     // experience, an elite target, an error line (W3D_HUD_EXTRAS=1)

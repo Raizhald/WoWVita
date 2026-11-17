@@ -185,7 +185,8 @@ void ObjectTable::tickTransports(uint32_t nowMs) {
         { float s = (float)gi->data[1], a = (float)gi->data[2]; speed = s; accel = a; }
         const TransportPath* path = transports.path(gi->data[0], speed, accel);
         if (!path) continue;
-        TransportPose p = path->at(o.transportProgress + (nowMs - o.posMs));
+        const uint32_t progress = o.transportProgress + (nowMs - o.posMs);
+        TransportPose p = path->at(progress, transports.period(o.entry(), path->period()));
         if (!p.valid) continue;
         poses_[g] = p;
         o.mv.x = p.x; o.mv.y = p.y; o.mv.z = p.z; o.mv.o = p.o;
@@ -248,6 +249,102 @@ size_t ObjectTable::count(ObjType t) const {
 
 void ObjectTable::remove(uint64_t g) {
     if (g != self_) objs_.erase(g);
+}
+
+// 7.28: the transports this session has, for the next one (only the path-driven ships and zeppelins)
+std::vector<ObjectTable::TransportMemory> ObjectTable::transportMemory(uint32_t nowMs) const {
+    std::vector<TransportMemory> out;
+    for (const auto& [g, o] : objs_) {
+        if (o.type != ObjType::GameObject || o.predicted || !o.hasTransportProgress || !o.displayId() || !o.entry()) continue;
+        const GoInfo* gi = goInfo(o.entry());
+        if (!gi || gi->type != 15) continue;   // elevators / trams live on TransportAnimation, not on a path
+        out.push_back(TransportMemory{o.entry(), o.displayId(), o.transportProgress + (nowMs - o.posMs), g});
+    }
+    return out;
+}
+
+uint64_t ObjectTable::restoreTransport(const TransportMemory& m, uint32_t nowMs) {
+    // Only a GUID actually saved from a server's ship can carry the player. Never invent one from an entry.
+    if (!m.entry || !m.display || (m.guid >> 48) != 0x1FC0u || find(m.guid) || hasTransportEntry(m.entry)) return 0;
+    WorldObject o;
+    o.guid = m.guid;
+    o.type = ObjType::GameObject;
+    o.restoredTransport = true;
+    o.transportOutOfRange = true;
+    o.fields.resize(32);
+    o.fields[UF::OBJECT_ENTRY] = m.entry;
+    o.fields[UF::GAMEOBJECT_DISPLAYID] = m.display;
+    o.fields[UF::GAMEOBJECT_TYPE_ID] = 15;
+    o.transportProgress = m.progress;
+    o.hasTransportProgress = true;
+    o.posMs = nowMs;
+    objs_[m.guid] = o;
+    created_.push_back(m.guid);
+    return m.guid;
+}
+
+void ObjectTable::dropRestoredTransports() {
+    for (auto it = objs_.begin(); it != objs_.end();) {
+        if (it->second.restoredTransport) {
+            poses_.erase(it->first);
+            it = objs_.erase(it);
+        } else ++it;
+    }
+}
+
+bool ObjectTable::hasTransportEntry(uint32_t entry) const {
+    for (const auto& [g, o] : objs_)
+        if (o.type == ObjType::GameObject && o.entry() == entry && !o.predicted) return true;
+    return false;
+}
+
+// Put a transport of the previous session on its path now: the phase is the remembered progress plus the time between the
+// sessions, and the server's create (when it comes) replaces it. Its template is queried like any other object's, so
+// tickTransports finds the path by itself.
+uint64_t ObjectTable::addPredictedTransport(uint32_t entry, uint32_t display, uint32_t progressMs, uint32_t nowMs) {
+    if (!entry || !display || hasTransportEntry(entry)) return 0;
+    uint64_t g = 0xFFF0000000000000ull | (uint64_t)(entry & 0xFFFFFF);
+    for (auto& [gg, oo] : objs_) if (oo.predicted && oo.entry() == entry) return 0;
+    WorldObject o;
+    o.guid = g;
+    o.type = ObjType::GameObject;
+    o.predicted = true;
+    o.fields.resize(32);
+    o.fields[UF::OBJECT_ENTRY] = entry;
+    o.fields[UF::GAMEOBJECT_DISPLAYID] = display;
+    o.transportProgress = progressMs;
+    o.hasTransportProgress = true;
+    o.posMs = nowMs;
+    objs_[g] = o;
+    created_.push_back(g);   // sendQueries asks the server for the template (type 15, path, speed)
+    return g;
+}
+
+void ObjectTable::dropPredictedTransports(uint32_t entry) {
+    for (auto it = objs_.begin(); it != objs_.end();) {
+        if (it->second.predicted && (!entry || it->second.entry() == entry)) it = objs_.erase(it);
+        else ++it;
+    }
+}
+
+// 7.28: what an update packet carried, block by block (the perf log)
+void ObjectTable::noteBlock(const BlockNote& n) {
+    if (blockNotes_.size() >= 900) return;
+    blockNotes_.push_back(n);
+}
+
+// 7.27: a transport object came or went (the perf log: the client's own view, with the GUID the server used)
+void ObjectTable::noteTransport(uint8_t kind, const WorldObject& o, uint64_t guid) {
+    if (transportEvents_.size() >= 64) return;   // a stuck server must not grow it without end
+    TransportEvent e;
+    e.ms = nowMs_;
+    e.kind = kind;
+    e.guid = guid;
+    e.entry = o.entry();
+    e.display = o.displayId();
+    e.progress = o.transportProgress;
+    e.x = o.mv.x; e.y = o.mv.y; e.z = o.mv.z;
+    transportEvents_.push_back(e);
 }
 
 uint32_t ObjectTable::fieldCap(const WorldObject& o) const {
@@ -322,7 +419,10 @@ bool ObjectTable::parseMovementBlock(Reader& r, WorldObject& o, uint32_t nowMs, 
         m.time = r.u32();
         m.x = r.f32(); m.y = r.f32(); m.z = r.f32(); m.o = r.f32();
         if (m.flags & MoveFlag::OnTransport) {
-            m.transportGuid = r.packedGuid();
+            m.transportGuid = transportTime ? r.packedGuid() : r.u64();
+            // A packed-layout trial on a full Vanilla GUID can otherwise look like an empty / player GUID and
+            // consume a plausible but misaligned field block, preventing the Turtle -> Vanilla fallback.
+            if (!m.transportGuid || (m.transportGuid >> 48) == 0) return false;
             m.tx = r.f32(); m.ty = r.f32(); m.tz = r.f32(); m.to = r.f32();
             if (transportTime) r.u32();   // 6.58: Turtle
         }
@@ -344,7 +444,7 @@ bool ObjectTable::parseMovementBlock(Reader& r, WorldObject& o, uint32_t nowMs, 
             else if (sf & SPLINE_FINAL_TARGET) r.skip(8);
             else if (sf & SPLINE_FINAL_ANGLE) { o.pathFinalO = r.f32(); o.pathHasFinalO = true; }
             uint32_t passed = r.u32(), dur = r.u32();
-            r.u32();   // spline id
+            o.pathSplineId = r.u32();   // spline id (7.20: echoed back in CMSG_MOVE_SPLINE_DONE)
             uint32_t count = r.u32();
             if (r.bad || count > 256) { stats.lastError = "bad spline in movement block"; return false; }
             std::vector<Vec3f> pts;
@@ -404,6 +504,13 @@ bool ObjectTable::parseUpdate(const uint8_t* p, size_t n, uint32_t nowMs) {
     uint32_t count = r.u32();
     r.u8();   // has transport
     if (r.bad || count > 4096) { stats.lastError = "bad update header"; return false; }
+    {   // 7.28: packet summary for the perf log
+        BlockNote s;
+        s.kind = 1;
+        s.entry = count;              // blocks announced
+        s.size = (uint32_t)n;         // bytes of the body
+        noteBlock(s);
+    }
     for (uint32_t i = 0; i < count; ++i) {
         uint8_t type = r.u8();
         if (r.bad || type > UPD_NEAR) { stats.lastError = "bad update block type " + std::to_string(type); return false; }
@@ -411,6 +518,7 @@ bool ObjectTable::parseUpdate(const uint8_t* p, size_t n, uint32_t nowMs) {
         switch (type) {
             case UPD_VALUES: {
                 uint64_t g = r.packedGuid();
+                { BlockNote bn; bn.type = 0; bn.guid = g; noteBlock(bn); }   // 7.28
                 WorldObject* o = find(g);
                 if (!parseFields(r, o)) { stats.lastError = "VALUES block truncated"; return false; }
                 if (o) applyNames(*o);
@@ -418,6 +526,7 @@ bool ObjectTable::parseUpdate(const uint8_t* p, size_t n, uint32_t nowMs) {
             }
             case UPD_MOVEMENT: {
                 uint64_t g = r.u64();   // full GUID here, unlike every other block
+                { BlockNote bn; bn.type = 1; bn.guid = g; noteBlock(bn); }   // 7.28
                 WorldObject tmp;
                 WorldObject* o = find(g);
                 if (!parseMovementOrCreate(r, o ? *o : tmp, nowMs, false)) { stats.lastError = "MOVEMENT block truncated"; return false; }
@@ -440,7 +549,20 @@ bool ObjectTable::parseUpdate(const uint8_t* p, size_t n, uint32_t nowMs) {
                     return false;
                 }
                 applyNames(o);
+                BlockNote bn;   // 7.28
+                bn.type = (uint8_t)(type == UPD_CREATE ? 2 : type);
+                bn.objType = ot;
+                bn.guid = g;
+                bn.entry = o.entry();
+                bn.display = o.displayId();
+                noteBlock(bn);
                 if (!existed) created_.push_back(g);
+                if (o.type == ObjType::GameObject && o.hasTransportProgress) {
+                    o.transportOutOfRange = false;
+                    o.restoredTransport = false;
+                    noteTransport(existed ? 3 : 0, o, g);
+                    if (!existed) dropPredictedTransports(o.entry());   // 7.28: the server's object replaces our guess
+                }
                 break;
             }
             case UPD_OUT_OF_RANGE:
@@ -449,7 +571,20 @@ bool ObjectTable::parseUpdate(const uint8_t* p, size_t n, uint32_t nowMs) {
                 if (r.bad || k > 65536) return false;
                 for (uint32_t j = 0; j < k; ++j) {
                     uint64_t g = r.packedGuid();
-                    if (type == UPD_OUT_OF_RANGE) remove(g);
+                    { BlockNote bn; bn.type = (uint8_t)(type == UPD_OUT_OF_RANGE ? 3 : 4); bn.guid = g; noteBlock(bn); }   // 7.28
+                    if (type == UPD_OUT_OF_RANGE) {
+                        // Unlike units / elevators, a ship has a complete multi-map path. Forgetting it here
+                        // makes it invisible on its next approach if the server only re-announces it on departure.
+                        // The initial create may be followed by OUT_OF_RANGE before its template query is sent.
+                        if (WorldObject* ship = find(g); ship && ship->isPathTransport() && !ship->predicted) {
+                            ship->transportOutOfRange = true;
+                            noteTransport(4, *ship, g);
+                            continue;
+                        }
+                        if (const WorldObject* gone = find(g))
+                            if (gone->type == ObjType::GameObject && gone->hasTransportProgress) noteTransport(1, *gone, g);
+                        remove(g);
+                    }
                 }
                 if (r.bad) return false;
                 break;
@@ -462,14 +597,16 @@ bool ObjectTable::parseUpdate(const uint8_t* p, size_t n, uint32_t nowMs) {
 bool ObjectTable::parseMonsterMove(Reader& r, uint32_t nowMs) {
     uint64_t g = r.packedGuid();
     Vec3f start = readVec(r);
-    r.u32();   // spline id / server tick
+    const uint32_t splineId = r.u32();   // 7.20: echoed back in CMSG_MOVE_SPLINE_DONE
     uint8_t kind = r.u8();
     if (r.bad || !finite3(start)) return false;
     WorldObject tmp;
     WorldObject* op = find(g);
     WorldObject& o = op ? *op : tmp;
+    o.pathSplineId = splineId;
     float drawn[3] = {start.x, start.y, start.z};   // 6.83: where it was drawn a moment ago
-    const bool hadPos = op && o.hasPos && !o.carried && o.type == ObjType::Unit;
+    const bool hadPos = op && o.hasPos && !o.carried &&
+                        (o.type == ObjType::Unit || (o.type == ObjType::Player && !o.self));
     if (hadPos) o.positionAt(nowMs, drawn);
     o.mv.x = start.x; o.mv.y = start.y; o.mv.z = start.z;
     if (hadPos) {
@@ -546,7 +683,11 @@ bool ObjectTable::handle(uint16_t op, const Bytes& data, uint32_t nowMs) {
         case ObjOp::SMSG_DESTROY_OBJECT: {
             Reader r(data);
             uint64_t g = r.u64();
-            if (!r.bad) { remove(g); stats.destroys++; }
+            if (!r.bad) {
+                if (const WorldObject* gone = find(g))
+                    if (gone->type == ObjType::GameObject && gone->hasTransportProgress) noteTransport(2, *gone, g);
+                remove(g); stats.destroys++;
+            }
             return true;
         }
         case ObjOp::SMSG_MONSTER_MOVE: {
@@ -646,7 +787,13 @@ bool ObjectTable::handle(uint16_t op, const Bytes& data, uint32_t nowMs) {
         Reader r(data);
         uint64_t g = r.packedGuid();
         MovementInfo m;
-        if (!readMovementInfo(r, m)) return true;
+        const size_t start = r.pos;
+        if (turtle) {
+            if (!readMovementInfo(r, m, true) || r.left() != 0) {
+                r.pos = start; r.bad = false; m = MovementInfo{};
+                if (!readMovementInfo(r, m)) return true;
+            }
+        } else if (!readMovementInfo(r, m)) return true;
         if (WorldObject* o = find(g)) {
             if (o->self) return true;   // our own echo (should not happen)
             o->mv = m;

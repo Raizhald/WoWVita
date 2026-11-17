@@ -2414,9 +2414,23 @@ void rendererShutdown() {
 }
 
 static float g_iod = 0;
-static void buildProj() {
-    if (g_iod == 0) Mtx_PerspTilt(&g_proj, C3D_AngleFromDegrees(60.0f), C3D_AspectRatioTop, g_near, g_far, false);
-    else Mtx_PerspStereoTilt(&g_proj, C3D_AngleFromDegrees(60.0f), C3D_AspectRatioTop, g_near, g_far, g_iod, 5.0f, false);
+static bool g_offscr = false;   // 7.27: FSR scene texture: a landscape target, not the sideways screen (no tilt)
+static void projFor(C3D_Mtx* m, float fovyDeg, float nearZ, float farZ, float screen) {
+    const float fovy = C3D_AngleFromDegrees(fovyDeg);
+    if (g_iod == 0) {
+        if (g_offscr) Mtx_Persp(m, fovy, C3D_AspectRatioTop, nearZ, farZ, false);
+        else Mtx_PerspTilt(m, fovy, C3D_AspectRatioTop, nearZ, farZ, false);
+    } else {
+        if (g_offscr) Mtx_PerspStereo(m, fovy, C3D_AspectRatioTop, nearZ, farZ, g_iod, screen, false);
+        else Mtx_PerspStereoTilt(m, fovy, C3D_AspectRatioTop, nearZ, farZ, g_iod, screen, false);
+    }
+}
+static void buildProj() { projFor(&g_proj, 60.0f, g_near, g_far, 5.0f); }
+
+void rendererSetOffscreen(bool offscreen) {
+    if (g_offscr == offscreen) return;
+    g_offscr = offscreen;
+    buildProj();
 }
 
 void rendererSetEye(float iod) {
@@ -2720,8 +2734,7 @@ void rendererDrawScene(const Camera& cam, float vfovDeg, float nearZ, float farZ
     g_nowMs = streamerNowMs();   // 6.41: rendererPrepare does not run behind the login screens: the portal's textures move on this clock
     g_near = std::max(nearZ, 0.1f);
     g_far = std::max(farZ, g_near + 1.0f);
-    if (g_iod == 0) Mtx_PerspTilt(&g_proj, C3D_AngleFromDegrees(vfovDeg), C3D_AspectRatioTop, g_near, g_far, false);
-    else Mtx_PerspStereoTilt(&g_proj, C3D_AngleFromDegrees(vfovDeg), C3D_AspectRatioTop, g_near, g_far, g_iod, 3.0f, false);
+    projFor(&g_proj, vfovDeg, g_near, g_far, 3.0f);
     float f[3];
     cam.forward(f);
     C3D_Mtx view;

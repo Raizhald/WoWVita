@@ -1,5 +1,6 @@
 // useitem_test — an item whose spell needs a target (quest items "use on ...": Foreman's Blackjack on a Lazy Peon) names the
-// selected creature / object in CMSG_USE_ITEM; food, potions and ground spells keep mask 0.
+// selected creature / object in CMSG_USE_ITEM; food, potions and ground spells keep mask 0. 7.16: an item used on another
+// item (Shiny Bauble on the fishing pole) names its GUID with TARGET_FLAG_ITEM, taking the main hand for a held-item spell.
 #include <algorithm>
 #include <cstdio>
 #include <vector>
@@ -194,6 +195,93 @@ int main() {
         InvItem b; b.bag = 255; b.slot = 28; b.entry = 2000; b.guid = 0x4000000000001235ull;
         q.useItem(b, 20);
         CHECK(out.size() == 1 && out[0].first == 0x0AB, "quest item with an on-use spell -> CMSG_USE_ITEM");
+    }
+    {   // 7.16: the converter's @item line: the requirement masks and the main-hand flag
+        const char* path = "useitem_spells_tmp.txt";
+        FILE* f = fopen(path, "wb");
+        if (f) {
+            fputs("@item\t8087\t2\t1048576\t0\t1\n@enchant\t263\tFishing Lure +25\n8087\tShiny Bauble\t\n", f);
+            fclose(f);
+        }
+        SpellNames names;
+        CHECK(f && names.load(path), "spells.txt with @item loads");
+        const SpellNames::ItemTarget* t = names.itemTarget(8087);
+        CHECK(t && t->mainHand, "main-hand flag");
+        CHECK(t && t->fits(2, 20, 17) && !t->fits(2, 7, 21) && !t->fits(4, 1, 5), "class / subclass masks");
+        CHECK(names.enchantName(263) == "Fishing Lure +25", "enchant name");
+        if (f) remove(path);
+    }
+    {   // 7.16: an item used on another item - Shiny Bauble on the fishing pole in the main hand. The packet names the
+        // pole (TARGET_FLAG_ITEM 0x10 and its GUID); a "held item" spell always takes the main hand, as the original does.
+        auto setF = [](WorldObject* o, uint16_t f, uint32_t v) { if (o->fields.size() <= f) o->fields.resize(f + 1u, 0); o->fields[f] = v; };
+        auto itemObj = [&](uint64_t guid, uint32_t entry) {
+            Writer w;
+            w.u32(1); w.u8(0); w.u8(2); w.packedGuid(guid); w.u8(1);
+            w.u8(0x10); w.u32(1);
+            w.u8(1); w.u32(0xF);
+            w.u32((uint32_t)guid); w.u32((uint32_t)(guid >> 32)); w.u32(0x3u); w.u32(entry);
+            s.handle(0x0A9, w.b, 1);
+        };
+        const uint64_t pole = 0x400000000000BEEFull, lureGuid = 0x400000000000BEE1ull;
+        itemObj(pole, 6366);
+        itemObj(lureGuid, 6529);
+        WorldObject* p = s.objects.find(me);
+        setF(p, UF::PLAYER_FIELD_INV_SLOT_HEAD + 2u * 15, (uint32_t)pole);
+        setF(p, UF::PLAYER_FIELD_INV_SLOT_HEAD + 2u * 15 + 1, (uint32_t)(pole >> 32));
+        setF(p, UF::PLAYER_FIELD_INV_SLOT_HEAD + 2u * 23, (uint32_t)lureGuid);
+        setF(p, UF::PLAYER_FIELD_INV_SLOT_HEAD + 2u * 23 + 1, (uint32_t)(lureGuid >> 32));
+        ItemInfo lure;
+        lure.entry = 6529; lure.cls = 0; lure.spellId[0] = 8087; lure.spellTrigger[0] = 0;
+        s.testSetItemInfo(lure);
+        ItemInfo poleInfo;
+        poleInfo.entry = 6366; poleInfo.cls = 2; poleInfo.subclass = 20; poleInfo.inventoryType = 17; poleInfo.name = "Fishing Pole";
+        s.testSetItemInfo(poleInfo);
+        ItemInfo sword;   // a weapon the bait does not fit: never chosen
+        sword.entry = 1000; sword.cls = 2; sword.subclass = 7; sword.inventoryType = 21;
+        s.testSetItemInfo(sword);
+        s.spellNames.addItemTarget(8087, SpellNames::ItemTarget{2, 1u << 20, 0, true});
+        s.spellNames.addEnchant(263, "Fishing Lure +25");
+        setF(s.objects.find(pole), UF::ITEM_FIELD_ENCHANTMENT, 263);
+        setF(s.objects.find(pole), UF::ITEM_FIELD_ENCHANTMENT + 1, 600000);   // 10 minutes at apply time
+        CHECK(s.itemOnItemSpell(6529) == 8087, "Shiny Bauble is an item-on-item spell");
+        CHECK(s.itemTargetSpell(6529) == 0, "it is not a unit / object target spell");
+        InvItem bait;
+        bait.bag = 255; bait.slot = 23; bait.entry = 6529; bait.guid = lureGuid;
+        std::vector<InvItem> targets = s.itemOnItemTargets(bait);
+        CHECK(targets.size() == 1 && targets[0].guid == pole, "only the fishing pole fits");
+        CHECK(targets.size() == 1 && targets[0].enchant[0].id == 263 && targets[0].enchant[0].leftMs == 600000,
+              "the pole carries enchant 263 for 10 min");
+        CHECK(targets.size() == 1 && targets[0].enchanted(), "the pole reports that it is enchanted (the icon's glow)");
+        std::vector<std::string> tip = itemTooltip(poleInfo, targets.empty() ? nullptr : &targets[0], s.spellNames);
+        bool hasEnchant = false;
+        for (const std::string& l : tip) hasEnchant = hasEnchant || l == "Enchant: Fishing Lure +25 (10m 0s left)";
+        CHECK(hasEnchant, "the item card shows the enchant and its time");
+        {   // SMSG_ITEM_ENCHANT_TIME_UPDATE: 120 s left; the card counts down from there
+            Writer e;
+            e.u64(pole); e.u8(0); e.u32(120); e.u64(me);
+            s.handle(0x1EB, e.b, 1000);
+            s.update(31000);
+            InvItem fresh;
+            fresh.guid = pole;
+            CHECK(s.refreshItem(fresh), "refresh the carried item");
+            CHECK(fresh.enchant[0].leftMs == 90000, "90 s left after 30 s");
+            tip = itemTooltip(poleInfo, &fresh, s.spellNames);
+            hasEnchant = false;
+            for (const std::string& l : tip) hasEnchant = hasEnchant || l == "Enchant: Fishing Lure +25 (1m 30s left)";
+            CHECK(hasEnchant, "the card counts down");
+        }
+        sent.clear();
+        s.useItem(bait, 200);
+        CHECK(sent.size() == 1 && sent[0].size() > 5 && sent[0][3] == 0x10 && sent[0][4] == 0x00, "use -> TARGET_FLAG_ITEM 0x10");
+        if (sent.size() == 1) {
+            Reader r(sent[0]);
+            r.u8(); r.u8(); r.u8();
+            const uint16_t mask = r.u16();
+            CHECK(mask == 0x10 && r.packedGuid() == pole, "the pole's guid");
+        }
+        sent.clear();
+        s.useItemOnItem(bait, pole, 210);   // the picked target (the touch-screen item list)
+        CHECK(sent.size() == 1 && sent[0].size() > 5 && sent[0][3] == 0x10 && sent[0][4] == 0x00, "useItemOnItem -> 0x10");
     }
     std::printf("USE ITEM ON TARGET: %d checks, %d failed -> %s\n", g_ok + g_fail, g_fail, g_fail ? "FAIL" : "PASS");
     return g_fail != 0;

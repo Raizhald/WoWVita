@@ -453,11 +453,17 @@ void uiDraw(const HudList& list, int width) {
     C3D_CullFace(GPU_CULL_NONE);
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
-    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
     int mode = -1;
     Tex* bound = nullptr;
     for (const Batch& b : batches) {
-        if (b.mode != mode) { setMode(b.mode); mode = b.mode; }
+        if (b.mode != mode) {
+            setMode(b.mode);
+            mode = b.mode;
+            // 7.17: kHudAdd adds the picture to what is under it (the enchanted items' glow: its black adds nothing)
+            const bool add = b.mode == kHudAdd;
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, add ? GPU_ONE : GPU_ONE_MINUS_SRC_ALPHA,
+                           GPU_SRC_ALPHA, add ? GPU_ONE : GPU_ONE_MINUS_SRC_ALPHA);
+        }
         if (b.tex && b.tex != bound) {
             C3D_TexBind(0, &b.tex->t);
             bound = b.tex;

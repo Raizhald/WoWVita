@@ -22,6 +22,8 @@ check((F("CDSP"), 0x80000000 | 3016) not in E, "the chest display is not a trans
 lines = open(txt).read().splitlines()
 T = [l.split("\t") for l in lines if l.startswith("T\t")]
 M = [l.split("\t") for l in lines if l.startswith("M\t")]
+P = {int(l.split("\t")[1]): int(l.split("\t")[2]) for l in lines if l.startswith("P\t")}
+check(P.get(175080) == 303463 and P.get(164871) == 356284, "server periods exported separately from spline lengths")
 check(len(T) == exp["pathNodes"], f"{len(T)} path nodes")
 check(any(t[1] == "9" and t[2] == "1" and t[7] == "2" and t[8] == "10" for t in T), "ferry stop node with flags 2 / delay 10")
 check(len(M) == 1 and int(M[0][1]) == exp["display"], f"one deck line {M}")

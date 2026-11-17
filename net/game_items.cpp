@@ -16,6 +16,7 @@ namespace w3n {
 namespace {
 enum : uint16_t {
     CMSG_ITEM_QUERY_SINGLE = 0x056, SMSG_ITEM_QUERY_SINGLE_RESPONSE = 0x058, CMSG_USE_ITEM = 0x0AB, CMSG_OPEN_ITEM = 0x0AC,
+    SMSG_ITEM_ENCHANT_TIME_UPDATE = 0x1EB,
     CMSG_AUTOSTORE_LOOT_ITEM = 0x108, CMSG_AUTOEQUIP_ITEM = 0x10A, CMSG_AUTOSTORE_BAG_ITEM = 0x10B,
     CMSG_DESTROYITEM = 0x111, SMSG_INVENTORY_CHANGE_FAILURE = 0x112,
     CMSG_LOOT = 0x15D, CMSG_LOOT_MONEY = 0x15E, CMSG_LOOT_RELEASE = 0x15F, SMSG_LOOT_RESPONSE = 0x160,
@@ -42,6 +43,14 @@ const char* lootErrorText(uint8_t e) {
     }
 }
 }  // namespace
+
+static std::string enchantTimeText(int32_t ms) {   // 7.16: "9m 59s", "1h 2m", "45s"
+    if (ms < 0) ms = 0;
+    const int32_t s = (ms + 999) / 1000;
+    if (s >= 3600) return std::to_string(s / 3600) + "h " + std::to_string(s / 60 % 60) + "m";
+    if (s >= 60) return std::to_string(s / 60) + "m " + std::to_string(s % 60) + "s";
+    return std::to_string(s) + "s";
+}
 
 std::string moneyText(uint32_t copper) {
     char b[48];
@@ -125,6 +134,20 @@ std::vector<std::string> itemTooltip(const ItemInfo& i, const InvItem* it, const
         snprintf(b, sizeof b, "Durability %u / %u", cur, (unsigned)i.maxDurability);
         out.push_back(b);
     }
+    // 7.16: applied enchantments and their time left (a lure on the fishing pole, an oil on a weapon)
+    if (it)
+        for (int k = 0; k < (int)UF::ITEM_FIELD_ENCHANTMENT_COUNT; ++k) {
+            const ItemEnchantView& e = it->enchant[k];
+            if (!e.id) continue;
+            std::string nm = spells.enchantName(e.id);
+            if (nm.empty()) nm = "Enchant " + std::to_string(e.id);
+            std::string line = "Enchant: " + nm;
+            std::string extra;
+            if (e.charges) extra = std::to_string(e.charges) + (e.charges == 1 ? " charge" : " charges");
+            if (e.leftMs > 0) extra += (extra.empty() ? "" : ", ") + enchantTimeText(e.leftMs) + " left";
+            if (!extra.empty()) line += " (" + extra + ")";
+            out.push_back(line);
+        }
     if (i.requiredLevel > 1) out.push_back("Requires Level " + std::to_string(i.requiredLevel));
     for (int k = 0; k < 5; ++k) {
         if (!i.spellId[k]) continue;
@@ -206,6 +229,18 @@ std::vector<InvItem> GameSession::inventory() const {
             if (!it.count) it.count = 1;
             it.durability = o->field(UF::ITEM_FIELD_DURABILITY);
             it.maxDurability = o->field(UF::ITEM_FIELD_MAXDURABILITY);
+            // 7.16: item enchantments (a lure on the pole, an oil on a weapon): id, time left, charges
+            for (int k = 0; k < (int)UF::ITEM_FIELD_ENCHANTMENT_COUNT; ++k) {
+                const uint16_t base = (uint16_t)(UF::ITEM_FIELD_ENCHANTMENT + UF::ITEM_FIELD_ENCHANTMENT_STRIDE * k);
+                const uint32_t id = o->field(base);
+                if (!id) continue;
+                const uint32_t fieldMs = o->field((uint16_t)(base + 1));
+                const int32_t left = enchantLeftMs(o->guid, (uint8_t)k, id, fieldMs);
+                if (fieldMs && left <= 0) continue;   // the timer has run out (the server clears it soon)
+                it.enchant[k].id = id;
+                it.enchant[k].leftMs = left;
+                it.enchant[k].charges = o->field((uint16_t)(base + 2));
+            }
         }
         out.push_back(it);
     };
@@ -217,6 +252,22 @@ std::vector<InvItem> GameSession::inventory() const {
         for (uint32_t i = 0; i < n; ++i) add(b, (uint8_t)i, guidAt(*bag, UF::CONTAINER_FIELD_SLOT_1 + 2u * i));
     }
     return out;
+}
+
+// 7.16: time left on an enchantment. The item field is the value at apply / login time; SMSG_ITEM_ENCHANT_TIME_UPDATE
+// carries what the server has left, and from then on the card counts down by itself.
+int32_t GameSession::enchantLeftMs(uint64_t item, uint8_t slot, uint32_t id, uint32_t fieldMs) const {
+    for (const ItemEnchantTimer& t : itemEnchantTimers_)
+        if (t.item == item && t.slot == slot && (!t.id || t.id == id))
+            return t.endMs > now_ ? (int32_t)(t.endMs - now_) : 0;
+    return fieldMs <= 0x7FFFFFFFu ? (int32_t)fieldMs : 0;
+}
+
+bool GameSession::refreshItem(InvItem& it) const {
+    if (!it.guid) return false;
+    for (const InvItem& cur : inventory())
+        if (cur.guid == it.guid) { it = cur; return true; }
+    return false;
 }
 
 uint32_t GameSession::freeBagSlots() const {
@@ -246,8 +297,70 @@ static uint32_t itemUseSpell(const ItemInfo* i, uint8_t* index) {
 uint32_t GameSession::itemTargetSpell(uint32_t entry) const {
     uint8_t idx;
     const uint32_t sp = itemUseSpell(itemInfoIfKnown(entry), &idx);
-    if (!sp || !spellNames.selfCastCount() || spellNames.selfCast(sp) || spellNames.ground(sp)) return 0;   // (no spell data: as before)
+    // 7.16: an item-on-item spell (a lure, a weapon oil) names an item, not a unit / object
+    if (!sp || spellNames.itemTarget(sp) || !spellNames.selfCastCount() || spellNames.selfCast(sp) || spellNames.ground(sp)) return 0;
     return sp;
+}
+
+// 7.16: the first on-use spell of an item that the game casts on another item (Spell.dbc Targets 0x10; spells.txt "@item").
+uint32_t GameSession::itemOnItemSpell(uint32_t entry) const {
+    const ItemInfo* i = itemInfoIfKnown(entry);
+    if (!i) return 0;
+    for (int k = 0; k < 5; ++k)
+        if (i->spellId[k] && i->spellTrigger[k] == 0 && spellNames.itemTarget(i->spellId[k])) return i->spellId[k];
+    return 0;
+}
+
+// Which inventory items an item-on-item spell may go on. Unknown item data is not a reason to hide a worn item: the
+// server checks the requirements itself (and answers with its own message). Bag items need their data - without it there
+// is no class / subclass / slot to test. Bags and ammunition are never targets (they are not what a lure / oil goes on).
+static bool fitsOnItem(const SpellNames::ItemTarget& fit, const ItemInfo* info, const InvItem& it) {
+    if (fit.mainHand && !(it.equipped() && it.slot == 15)) return false;   // the server takes only the main hand
+    if (!info) return it.equipped();
+    if (!info->equippable() || info->inventoryType == 18 || info->inventoryType == 24) return false;
+    return fit.fits(info->cls, info->subclass, info->inventoryType);
+}
+
+std::vector<InvItem> GameSession::itemOnItemTargets(const InvItem& source) const {
+    std::vector<InvItem> out;
+    const uint32_t sp = itemOnItemSpell(source.entry);
+    const SpellNames::ItemTarget* fit = sp ? spellNames.itemTarget(sp) : nullptr;
+    if (!fit) return out;
+    for (const InvItem& it : inventory()) {
+        if (!it.guid || it.guid == source.guid) continue;
+        if (fitsOnItem(*fit, itemInfoIfKnown(it.entry), it)) out.push_back(it);
+    }
+    return out;
+}
+
+bool GameSession::itemOnItemTarget(const InvItem& source, InvItem* out) const {
+    const uint32_t sp = itemOnItemSpell(source.entry);
+    const SpellNames::ItemTarget* fit = sp ? spellNames.itemTarget(sp) : nullptr;
+    if (!fit || !out) return false;
+    const std::vector<InvItem> inv = inventory();
+    if (fit->mainHand) {   // SPELL_ATTR_HELD_ITEM_ONLY: the original client picks the item from the main hand
+        for (const InvItem& it : inv)
+            if (it.equipped() && it.slot == 15 && it.guid && it.guid != source.guid) { *out = it; return true; }
+        return false;   // no main-hand item: a bag item would be refused by the server's held-item check
+    }
+    // The main hand is the usual place for a lure / oil; prefer it when its data is known to fit, and also when its data
+    // has not arrived yet (otherwise the first unknown worn item, a shirt, could be picked).
+    const InvItem* mainHand = nullptr;
+    for (const InvItem& it : inv)
+        if (it.equipped() && it.slot == 15 && it.guid && it.guid != source.guid) { mainHand = &it; break; }
+    auto knownFits = [&](const InvItem& it) {
+        const ItemInfo* info = itemInfoIfKnown(it.entry);
+        return info && fitsOnItem(*fit, info, it);
+    };
+    if (mainHand && knownFits(*mainHand)) { *out = *mainHand; return true; }
+    for (const InvItem& it : inv)   // another worn item whose data fits
+        if (it.equipped() && it.guid && it.guid != source.guid && knownFits(it)) { *out = it; return true; }
+    if (mainHand && !itemInfoIfKnown(mainHand->entry)) { *out = *mainHand; return true; }   // data still on its way
+    for (const InvItem& it : inv)
+        if (it.equipped() && it.guid && it.guid != source.guid && !itemInfoIfKnown(it.entry)) { *out = it; return true; }
+    for (const InvItem& it : inv)   // then a bag item, when nothing worn fits
+        if (it.guid && it.guid != source.guid && !it.equipped() && knownFits(it)) { *out = it; return true; }
+    return false;
 }
 
 void GameSession::useItem(const InvItem& it, uint32_t nowMs, const WorldObject* forced) {
@@ -263,6 +376,12 @@ void GameSession::useItem(const InvItem& it, uint32_t nowMs, const WorldObject* 
         q.u32(qi->startQuest);
         send(kCmsgQuestgiverQueryQuest, q.b, nowMs);
         return;
+    }
+    // 7.16: the spell goes on another item (a lure on the fishing pole, a weapon oil / sharpening stone on a weapon):
+    // name that item as the target. A "held item" spell always takes the main hand, as the original client does.
+    if (itemOnItemSpell(it.entry)) {
+        InvItem tgt;
+        if (itemOnItemTarget(it, &tgt)) { useItemOnItem(it, tgt.guid, nowMs); return; }
     }
     Writer w;
     w.u8(it.bag);
@@ -287,6 +406,30 @@ void GameSession::useItem(const InvItem& it, uint32_t nowMs, const WorldObject* 
     } else {
         w.u16(0);
     }
+    send(CMSG_USE_ITEM, w.b, nowMs);
+}
+
+// 7.16: use an item on another one. CMSG_USE_ITEM: bag, slot, the spell's slot among the item's spells, then the
+// SpellCastTargets mask TARGET_FLAG_ITEM 0x10 and the packed GUID of the item it goes on (vMaNGOS
+// SpellCastTargets::read / Spell::CheckCast; the same fields castSpellOnItem sends for an enchant).
+void GameSession::useItemOnItem(const InvItem& it, uint64_t itemGuid, uint32_t nowMs) {
+    const ItemInfo* info = itemInfoIfKnown(it.entry);
+    uint8_t index = 0;
+    uint32_t spell = 0;
+    if (info)
+        for (int k = 0; k < 5; ++k)
+            if (info->spellId[k] && info->spellTrigger[k] == 0 && spellNames.itemTarget(info->spellId[k])) {
+                index = (uint8_t)k;
+                spell = info->spellId[k];
+                break;
+            }
+    if (!spell || !itemGuid) { useItem(it, nowMs); return; }   // not a use-on-item spell / nothing to put it on
+    Writer w;
+    w.u8(it.bag);
+    w.u8(it.slot);
+    w.u8(index);
+    w.u16(0x10);   // TARGET_FLAG_ITEM: the packed GUID of the item
+    w.packedGuid(itemGuid);
     send(CMSG_USE_ITEM, w.b, nowMs);
 }
 
@@ -521,6 +664,21 @@ bool GameSession::handleItems(uint16_t op, const Bytes& data, uint32_t nowMs) {
                 if (!r.bad) t = "You must reach level " + std::to_string(lvl) + " to use that item.";
             }
             error(t, vocalForInventoryResult(res), nowMs);
+            return true;
+        }
+        case SMSG_ITEM_ENCHANT_TIME_UPDATE: {   // 7.16: u64 item, u8 slot, u32 seconds left, u64 player (1.12)
+            const uint64_t item = r.u64();
+            const uint8_t slot = r.u8();
+            const uint32_t secs = r.u32();
+            if (r.bad || !item || slot >= UF::ITEM_FIELD_ENCHANTMENT_COUNT) return true;
+            if (r.left() >= 8) r.u64();
+            uint32_t id = 0;
+            if (const WorldObject* o = objects.find(item))
+                id = o->field((uint16_t)(UF::ITEM_FIELD_ENCHANTMENT + UF::ITEM_FIELD_ENCHANTMENT_STRIDE * slot));
+            const uint32_t endMs = secs ? nowMs + secs * 1000u : nowMs;
+            for (ItemEnchantTimer& t : itemEnchantTimers_)
+                if (t.item == item && t.slot == slot) { t.id = id; t.endMs = endMs; return true; }
+            itemEnchantTimers_.push_back(ItemEnchantTimer{item, slot, id, endMs});
             return true;
         }
         case SMSG_ITEM_PUSH_RESULT: {

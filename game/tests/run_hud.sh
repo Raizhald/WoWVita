@@ -17,4 +17,5 @@ g++ -std=c++20 -O1 -Wall -I"$N" -I"$P/source" -I"$P/tests" -I"$P/tests/ui_stub" 
     "$N/game_auction.cpp" "$N/game_trade.cpp" "$N/game_water.cpp" "$N/tables.cpp" "$N/result_text.cpp" "$N/objects.cpp" "$N/transport.cpp" "$N/movement.cpp" "$N/client.cpp" \
     "$N/crypto.cpp" "$N/socket.cpp" "$N/inflate.cpp" -x c++ "$D/rgetc1/rg_etc1.cpp" -o "$OUT/hud_test" 2>&1 | grep -v rg_etc1 || true
 "$OUT/hud_test" "$LOG" "$MS" "$OUT/hud.png" with-target pad
-echo "wrote $OUT/hud.png"
+W3D_OLD3DS=1 "$OUT/hud_test" "$LOG" "$MS" "$OUT/hud_old.png" with-target pad   # 7.21: Old 3DS (D-pad = hotbar)
+echo "wrote $OUT/hud.png and $OUT/hud_old.png"

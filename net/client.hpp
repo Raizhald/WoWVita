@@ -126,6 +126,19 @@ public:
     bool takeLogoutRefused() { bool v = logoutRefused_; logoutRefused_ = false; return v; }   // the server said no (combat)
     void send(uint32_t opcode, const Bytes& payload);
 
+    // ---- offline / test transport -------------------------------------------------------------
+    // When packetSink is set, every CMSG is handed to it instead of a socket. This is the internal
+    // logical message boundary between the existing client and OfflineWorldCore: no TCP server, no
+    // SRP, no header cipher, but exactly the same opcodes and payloads a 1.12.1 realm would see.
+    std::function<void(uint16_t opcode, const Bytes& payload)> packetSink;
+    // Enter the world without a handshake. The caller supplies what LOGIN_VERIFY_WORLD and the
+    // character list would have said. mapId/pos/orient follow the same coordinate convention.
+    void beginOffline(uint64_t playerGuid, std::vector<Character> chars, uint32_t mapId, const float pos[3], float orient);
+    // Offline character management: the login screens drive OfflineSession and mirror the results here.
+    void offlineSetCharacters(std::vector<Character> chars);
+    void offlineSetCreateResult(int code) { createResult_ = code; }
+    void offlineSetDeleteResult(int code) { deleteResult_ = code; }
+
     State state() const { return state_; }
     const std::string& error() const { return err_; }
     const std::vector<Character>& characters() const { return chars_; }

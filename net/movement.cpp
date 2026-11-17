@@ -44,7 +44,7 @@ void writeMovementInfo(Writer& w, const MovementInfo& m) {
     w.u32(m.time);
     w.f32(m.x); w.f32(m.y); w.f32(m.z); w.f32(m.o);
     if (m.flags & MoveFlag::OnTransport) {
-        w.packedGuid(m.transportGuid);
+        w.u64(m.transportGuid);   // MovementInfo::Read on Vanilla reads ObjectGuid, not PackedGuidReader
         w.f32(m.tx); w.f32(m.ty); w.f32(m.tz); w.f32(m.to);
     }
     if (m.flags & MoveFlag::Swimming) w.f32(m.pitch);
@@ -55,13 +55,14 @@ void writeMovementInfo(Writer& w, const MovementInfo& m) {
     if (m.flags & MoveFlag::SplineElevation) w.f32(m.splineElevation);
 }
 
-bool readMovementInfo(Reader& r, MovementInfo& m) {
+bool readMovementInfo(Reader& r, MovementInfo& m, bool turtleTransport) {
     m.flags = r.u32();
     m.time = r.u32();
     m.x = r.f32(); m.y = r.f32(); m.z = r.f32(); m.o = r.f32();
     if (m.flags & MoveFlag::OnTransport) {
-        m.transportGuid = r.packedGuid();
+        m.transportGuid = turtleTransport ? r.packedGuid() : r.u64();
         m.tx = r.f32(); m.ty = r.f32(); m.tz = r.f32(); m.to = r.f32();
+        if (turtleTransport) r.u32();
     }
     if (m.flags & MoveFlag::Swimming) m.pitch = r.f32();
     m.fallTime = r.u32();
@@ -152,7 +153,7 @@ void Mover::update(uint32_t dir, float x, float y, float z, float o, uint32_t no
         emit(MoveOp::SetPitch, nowMs);
         return;
     }
-    bool moving = (m_.flags & MoveFlag::MaskMoving) || airborne() || (swimming() && std::fabs(m_.z - lastSentZ_) > 0.05f);
+    bool moving = (m_.flags & MoveFlag::MaskMoving) || airborne() || onTransport() || (swimming() && std::fabs(m_.z - lastSentZ_) > 0.05f);
     if (moving && nowMs - lastSendMs_ >= heartbeatMs) {
         emit(MoveOp::Heartbeat, nowMs);
         ++heartbeats;

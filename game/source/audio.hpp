@@ -1,6 +1,7 @@
 // audio.hpp — sound on the 3DS (NDSP): event sounds, zone music, ambience. The files come from w3dconv --sound
 // (sdmc:/3ds/w3dproto/sound/); without them the built-in synthesized blips play for the interface events.
-// NDSP needs the DSP firmware (sdmc:/3ds/dspfirm.cdc, dumped by DSP1); without it the game stays silent.
+// 7.24: the DSP firmware is OpenDSP, linked into the app (no dspfirm.cdc dump); the old ndsp / dspfirm.cdc path is a
+// fallback for a setup where OpenDSP cannot start.
 #pragma once
 #include <cstdint>
 

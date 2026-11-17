@@ -101,6 +101,30 @@ int main() {
     { Writer w; w.u32(1); w.u8(0); w.u8(0); w.packedGuid(wolf); values(w, {{UF::UNIT_HEALTH, 0}}); s.handle(0x0A9, w.b, 16050); }
     s.update(16100);
     CHECK(!s.inCombat() && !s.attackWanted(), "combat mode ends after the kill");
+
+    // 7.19: Charge (8-25 yd) does not send the attack with the cast - the server would refuse it as out of range, and
+    // the wish then held the client in combat mode until a relog. It goes out when the target is in reach.
+    const uint64_t bear = 0xF130000045000104ull;
+    create(bear, 3, false, 20, {{UF::UNIT_HEALTH, 60}, {UF::UNIT_MAXHEALTH, 60}});
+    s.spellNames.addCombat(100, SpellNames::kCombatMelee);
+    s.spellNames.addRange(100, 8, 25);
+    out.clear();
+    s.setTarget(bear, 20000);
+    CHECK(s.castSpell(100, 20100) && sent(CAST) == 1, "Charge is sent");
+    CHECK(!s.attackWanted() && !s.inCombat() && sent(SWING) == 0, "no attack and no combat mode from 20 yd");
+    { Writer w; w.packedGuid(me); w.packedGuid(me); w.u32(100); w.u16(0); w.u8(0); s.handle(0x132, w.b, 20200); }   // SPELL_GO
+    s.mover.reset(17, 0, 0, 0, 20250);   // the charge landed next to it
+    s.update(20300);
+    CHECK(s.attackWanted() && sent(SWING) == 1 && lastGuid(SWING) == bear, "the swing starts when we are in reach");
+    // a refused charge starts nothing, even when we are later in reach
+    s.stopAttack(30000);
+    s.mover.reset(0, 0, 0, 0, 30000);
+    out.clear();
+    s.castSpell(100, 30100);
+    { Writer w; w.u32(100); w.u8(2); w.u8(46); s.handle(0x130, w.b, 30200); }   // SMSG_CAST_FAILED: "while moving"
+    s.mover.reset(17, 0, 0, 0, 30300);
+    s.update(30400);
+    CHECK(sent(SWING) == 0 && !s.attackWanted() && !s.inCombat(), "a refused charge never starts the attack");
     std::printf("AUTO-ATTACK: %d checks, %d failed -> %s\n", g_ok + g_fail, g_fail, g_fail ? "FAIL" : "PASS");
     return g_fail ? 1 : 0;
 }

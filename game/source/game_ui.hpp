@@ -13,7 +13,7 @@
 // and back to the Map tab afterwards unless a tab is pinned (the pin in the header); SELECT + D-pad left/right turns
 // the tabs. Dangerous actions (destroy, selling rare items, abandoning a quest, deleting mail) ask first.
 //
-// Pad actions come from pad.hpp (scheme Forever or Classic); this class decides what they mean in the game:
+// Pad actions come from pad.hpp (scheme New 3DS or Old 3DS); this class decides what they mean in the game:
 // soft targeting (a spell or attack without a living target takes the enemy in front), interact (the target, else
 // the nearest lootable corpse / NPC in front), assist, last hostile target, aiming with the C-Stick while L/R is held.
 #pragma once
@@ -114,6 +114,7 @@ public:
     enum class Act : uint8_t {
         Tab, Release, Reclaim, ResAccept, ResDecline, HealerYes, HealerNo, HealerTalk, LootItem, LootMoney, LootAll, LootClose,
         GossipOption, GossipClose, SelectItem, Use, Equip, Unequip, Destroy, BindItem, PagePrev, PageNext,
+        UseOnItem, UseOnBack,   // 7.16: an item applied to another item (a lure on the fishing pole, a weapon oil)
         BarCell, BindSpell, ClearSlot, MenuItem, ContextItem, Setting, ClosePanel,
         // stages 5.12-5.14
         GossipQuest, VendorMode, VendorPick, VendorBuy, VendorSell, VendorSellJunk, VendorBuyback, VendorRepair, VendorClose,
@@ -186,6 +187,8 @@ private:
     Button& region(int x, int y, int w, int h, Act act, int arg);
     void window(int x, int y, int w, int h, bool dialog = false);
     void iconBox(int x, int y, int size, const ui::Image& icon, const std::string& name, uint32_t border, bool dim = false);
+    // 7.17: the green glow of an enchanted item, drawn behind its icon (bags, equipment, the card, the item pickers)
+    void itemGlow(const w3n::InvItem& it, int x, int y, int size);
     int money(int xRight, int y, uint32_t copper, ui::Font f = ui::Font::Small);   // coins; returns the width
     void header(w3n::GameSession& g, const std::string& title);
     void tabBar();
@@ -196,7 +199,6 @@ private:
     // 6.95: spells shown with the icon of the weapon in hand (Attack: main hand; Auto Shot, Shoot, Throw ...: the ranged slot)
     ui::Image weaponIcon_[2];
     const w3n::GameSession* gameSess_ = nullptr;
-    static bool weaponSpell(const w3n::GameSession& g, uint32_t spell, int* which);
     ui::Image itemIcon(w3n::GameSession& g, uint32_t entry);
     std::string spellLabel(const w3n::GameSession& g, uint32_t spell) const;
     ui::Font listFont() const;
@@ -333,7 +335,10 @@ private:
     bool selTapped_ = false;          // the selection came from a tap (a second tap shows the tooltip)
     bool bindArmed_ = false;          // the next hotbar press binds bindWhat_ (Empty = clear the slot)
     ActionSlot bindWhat_;
-    int shownSet_ = 0, classicSet_ = 0;
+    // 7.16: "Use" on an item that goes on another one (a lure, a weapon oil): the picker of the items it fits
+    bool useOnPick_ = false;
+    w3n::InvItem useOnFrom_;
+    int shownSet_ = 0;                // the hotbar set on the bars (PadOut::set of both schemes)
     uint64_t aim_ = 0, lastHostile_ = 0;
     // vendor (stage 5.13): mode 0 buy, 1 sell, 2 buyback; the selected row (absolute) and page
     int vendorMode_ = 0, vendorSel_ = -1, vendorPage_ = 0;
@@ -429,6 +434,8 @@ private:
     int tradeSel_ = -1;
     int petSel_ = -1;                  // UI stage 13: the selected entry in the pet window (PetCmdId, 100000 + spell)
     int feedSel_ = -1;                 // the food picked in the feed list (index into petFoodCandidates())
+    std::vector<uint64_t> petFeedShown_;   // 7.19: the food guids as the list was last drawn (the item queries fill in
+                                           // while it is open, so an index alone could point at another row)
     bool petFeedList_ = false;         // the pet window shows the food list
     int stableSel_ = -1;               // the stabled pet picked (slot)
     uint64_t windowNpc_ = 0;           // the NPC / object of the open stage-6 window (reset when it changes)

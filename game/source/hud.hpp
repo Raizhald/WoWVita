@@ -15,7 +15,7 @@ constexpr int kHudW = 400, kHudH = 240;
 constexpr int kTouchW = 320, kTouchH = 240;
 
 // mode: how the texture combines with the colour
-enum HudMode : uint8_t { kHudFlat = 0, kHudAlpha = 1, kHudImage = 2 };
+enum HudMode : uint8_t { kHudFlat = 0, kHudAlpha = 1, kHudImage = 2, kHudAdd = 3 };
 
 struct HudQuad {
     int16_t x0, y0, x1, y1;       // pixels
@@ -64,6 +64,8 @@ struct HudList {
     // Pictures: the whole image stretched to w x h; a part of it (fractions of the source rectangle); a 9-slice
     // frame (corners kept, edges and centre stretched; without margins = image()). Nothing when !im.ok().
     void image(int x, int y, int w, int h, const ui::Image& im, uint32_t color = 0xFFFFFFFFu);
+    // 7.17: the picture added to what is under it (a glow: black in it adds nothing), alpha = its colour's alpha
+    void imageAdd(int x, int y, int w, int h, const ui::Image& im, uint32_t color = 0xFFFFFFFFu);
     void imagePart(int x, int y, int w, int h, const ui::Image& im, float fx0, float fy0, float fx1, float fy1,
                    uint32_t color = 0xFFFFFFFFu);
     void nine(int x, int y, int w, int h, const ui::Image& im, uint32_t color = 0xFFFFFFFFu, bool centre = true);

@@ -46,12 +46,14 @@ struct ChatLine {
     std::string text;
 };
 
-// One melee swing (SMSG_ATTACKERSTATEUPDATE).
+// One blow: a melee swing (SMSG_ATTACKERSTATEUPDATE), spell damage (SMSG_SPELLNONMELEEDAMAGELOG), a damage-over-time
+// tick (SMSG_PERIODICAURALOG) or a damage shield (SMSG_SPELLDAMAGESHIELD). The HUD draws the floating number from it.
 struct MeleeHit {
     uint32_t ms = 0;
     uint64_t attacker = 0, victim = 0;
     int32_t damage = 0;
     uint32_t hitInfo = 0, victimState = 0;
+    uint32_t spell = 0;      // 7.21: the spell that dealt it (0 for a swing)
     bool miss() const { return (hitInfo & 0x10) != 0; }
     bool crit() const { return (hitInfo & 0x80) != 0; }
 };
@@ -83,6 +85,28 @@ public:
     bool friendly(uint32_t id) const { return friend_.count(id) != 0; }
     void addFriendly(uint32_t id) { friend_.insert(id); }
     size_t friendlyCount() const { return friend_.size(); }   // 0 = spells.txt not loaded: we cannot tell what needs a target
+    // 7.16: spells cast on another item (a lure on the fishing pole, a weapon oil, a sharpening stone, a poison;
+    // spells.txt "@item id class subclassMask inventoryTypeMask mainHand"). The masks are Spell.dbc's EquippedItem*.
+    struct ItemTarget {
+        int32_t itemClass = -1;   // -1 = any item class
+        uint32_t subMask = 0, invMask = 0;
+        bool mainHand = false;    // SPELL_ATTR_HELD_ITEM_ONLY: only the item in the main hand (the original client picks it)
+        bool fits(uint32_t cls, uint32_t subclass, uint32_t inventoryType) const {
+            if (itemClass < 0) return true;
+            if (cls != (uint32_t)itemClass) return false;
+            if (subMask && (subclass >= 32 || !(subMask & (1u << subclass)))) return false;
+            if (invMask && (inventoryType >= 32 || !(invMask & (1u << inventoryType)))) return false;
+            return true;
+        }
+    };
+    const ItemTarget* itemTarget(uint32_t id) const { auto it = itemTarget_.find(id); return it == itemTarget_.end() ? nullptr : &it->second; }
+    void addItemTarget(uint32_t id, const ItemTarget& t) { itemTarget_[id] = t; }
+    size_t itemTargetCount() const { return itemTarget_.size(); }
+    // 7.16: the display name of an applied item enchantment (spells.txt "@enchant id name", SpellItemEnchantment.dbc:
+    // "Fishing Lure +25", "Sharpened +3" ...); empty when the converter did not know it.
+    std::string enchantName(uint32_t id) const { auto it = enchant_.find(id); return it == enchant_.end() ? std::string() : it->second; }
+    void addEnchant(uint32_t id, const std::string& name) { enchant_[id] = name; }
+    size_t enchantCount() const { return enchant_.size(); }
     // UI stage 12: the cooldowns of Spell.dbc (spells.txt "@cd id recovery category categoryRecovery onEvent", ms). The
     // 1.12 server does not send them for ordinary casts: the client starts them itself when its cast goes off.
     struct Cooldown { uint32_t rec = 0, category = 0, catRec = 0; bool onEvent = false; };
@@ -128,6 +152,8 @@ private:
     std::unordered_map<uint32_t, Ground> ground_;
     std::unordered_set<uint32_t> selfCast_;
     std::unordered_set<uint32_t> friend_;
+    std::unordered_map<uint32_t, ItemTarget> itemTarget_;
+    std::unordered_map<uint32_t, std::string> enchant_;
     std::unordered_map<uint32_t, Cooldown> cd_;
 };
 
@@ -186,12 +212,24 @@ const char* inventoryTypeName(uint32_t t);   // "Head", "Main Hand", "Bag" ...
 // equipped, 19..22 bag slots, 23..38 backpack), bag 19..22 = the bag in that slot (slot = index in the bag).
 constexpr uint8_t kBagSelf = 255;
 constexpr uint8_t kSlotBagFirst = 19, kSlotBackpackFirst = 23, kSlotBackpackEnd = 39;
+// 7.16: an applied item enchantment (ITEM_FIELD_ENCHANTMENT, 7 slots of id / left duration / charges).
+struct ItemEnchantView {
+    uint32_t id = 0;
+    int32_t leftMs = 0;     // 0 = permanent or no timer known
+    uint32_t charges = 0;
+};
 struct InvItem {
     uint8_t bag = kBagSelf, slot = 0;
     uint64_t guid = 0;
     uint32_t entry = 0, count = 1, durability = 0, maxDurability = 0;
+    ItemEnchantView enchant[7];
     bool equipped() const { return bag == kBagSelf && slot < kSlotBagFirst; }
     bool isBagSlot() const { return bag == kBagSelf && slot >= kSlotBagFirst && slot < kSlotBackpackFirst; }
+    // 7.17: the item carries a permanent or temporary enchantment (a lure on the pole, an oil on a weapon)
+    bool enchanted() const {
+        for (const ItemEnchantView& e : enchant) if (e.id) return true;
+        return false;
+    }
 };
 const char* equipSlotName(uint8_t slot);     // "Head" .. "Tabard" for slots 0..18
 
@@ -477,6 +515,10 @@ struct ResurrectOffer { bool active = false; uint64_t from = 0; std::string name
 constexpr uint32_t kSpellAttack = 6603;           // "Attack": toggles auto-attack, never sent as a cast
 constexpr uint32_t kGlobalCooldownMs = 1500;
 
+// 7.13: a spell that is a swing with the weapon in hand (Attack, Auto Shot / Shoot / Throw): its action-bar icon is the
+// weapon's, not the generic picture of the spell. which: 0 = main hand, 1 = the ranged slot.
+bool weaponSwingSpell(const SpellNames& names, uint32_t spell, int* which = nullptr);
+
 // Client texts of SpellCastResult / InventoryResult codes (result_text.cpp, generated from vMaNGOS).
 std::string castResultText(uint32_t code);
 std::string inventoryResultText(uint32_t code);
@@ -515,9 +557,24 @@ public:
 
     // The server moved us (teleport ACK or new world): take the new position once.
     bool takeTeleport(float pos[3], float* orient);
+    // 7.24: SMSG_NEW_WORLD after a transport transfer (a zeppelin crossing a continent) carries the position ON the
+    // transport, not in the world. True once when that happens; the world position is known only after the transport
+    // object has arrived (main.cpp applies the offset). A normal new world goes through takeTeleport() instead.
+    struct TransportSpawn { uint32_t entry = 0; float lx = 0, ly = 0, lz = 0, lo = 0; };
+    bool takeTransportSpawn(TransportSpawn* out);
     // SMSG_TRANSFER_PENDING: the server is about to move us to another map (portal, dungeon door, ship to another
-    // continent). True once per notice; the new position follows with SMSG_NEW_WORLD (takeTeleport).
+    // continent). True once per notice; the new position follows with SMSG_NEW_WORLD (takeTeleport, or
+    // takeTransportSpawn when the transfer is on a transport).
     bool takeTransferPending(uint32_t* map);
+    // Re-assert CMSG_SET_ACTIVE_MOVER (the server ignores movement while no mover is confirmed; a far
+    // teleport or a transport transfer may leave its side without one).
+    void confirmMover(uint32_t nowMs) { sendActiveMover(nowMs); }
+    // 7.13: the server moves us itself (a taxi flight, Charge): our own object carries a running SMSG_MONSTER_MOVE spline.
+    // True while it runs; pos/yaw are the point on it, taxi says whether the mount camera is wanted. We send no movement
+    // packets meanwhile; main.cpp follows the spline with the camera.
+    bool selfServerMove(uint32_t nowMs, float pos[3], float* yaw, bool* taxi) const;
+    // The spline ended: put the mover and the object at its final point and forget the spline, so the next frame walks normally.
+    void endSelfServerMove(const float pos[3], float yaw, uint32_t nowMs);
     uint32_t mapId() const { return map_; }
     // 6.60: the server's game clock (SMSG_LOGIN_SETTIMESPEED / GAMETIME_*): the realm's time of day, which the sky follows.
     struct GameClock {
@@ -601,7 +658,9 @@ public:
     uint64_t targetOf(uint64_t guid) const;            // UNIT_TARGET of a unit (assist)
     void startAttack(uint32_t nowMs);                  // CMSG_ATTACKSWING at the target
     void stopAttack(uint32_t nowMs);                   // CMSG_ATTACKSTOP
+    void retryAttack(uint32_t nowMs);                  // 7.19: the wish to attack, once the target is in reach
     void combatAfterCast(uint32_t spell, uint32_t nowMs);   // 6.87: a melee ability starts auto-attack (spells.txt @combat)
+    bool targetInMelee() const;                        // 7.19: the target is inside vMaNGOS ATTACK_DISTANCE (5 yd)
     bool attackWanted() const { return attackWanted_; }   // we asked to auto-attack
     bool attacking() const { return attackOn_; }          // the server confirmed (SMSG_ATTACKSTART)
     uint16_t lastAttackError() const { return attackError_; }   // SMSG_ATTACKSWING_* opcode, 0 = none
@@ -678,6 +737,14 @@ public:
     uint32_t freeBagSlots() const;
     void useItem(const InvItem& it, uint32_t nowMs, const WorldObject* forced = nullptr);   // forced: the object a quest item goes on (6.75)   // CMSG_USE_ITEM on self, or on the selected unit / object when its spell needs a target
     uint32_t itemTargetSpell(uint32_t entry) const;    // the on-use spell when it needs a target (quest items used on a creature), else 0
+    // 7.16: an item used on another item (Shiny Bauble on the fishing pole, a weapon oil, a sharpening stone, a poison):
+    // the on-use spell, the items it fits in the bags / equipment (worn first) and CMSG_USE_ITEM with TARGET_FLAG_ITEM.
+    uint32_t itemOnItemSpell(uint32_t entry) const;
+    std::vector<InvItem> itemOnItemTargets(const InvItem& source) const;
+    bool itemOnItemTarget(const InvItem& source, InvItem* out) const;   // main hand for a held-item spell, else the first fit
+    void useItemOnItem(const InvItem& it, uint64_t itemGuid, uint32_t nowMs);
+    // 7.16: re-read one carried item for its card (durability and the time left on its enchantments)
+    bool refreshItem(InvItem& it) const;
     const WorldObject* objectForItem() const;          // 6.59b: the nearest usable object within 10 yd (an item's target when none is selected)
     // UI stage 10: an item whose spell is placed on the ground (grenades, bombs, target dummies): its on-use spell, or 0
     uint32_t itemGroundSpell(uint32_t entry) const;
@@ -811,6 +878,9 @@ public:
     bool castSpell(uint32_t spell, uint32_t nowMs);
     // 7.11: true when a helpful spell must go at ourselves now (the target is an enemy / dead / not set)
     bool castsOnSelf(uint32_t spell) const;
+    // 7.13: a spell that works on a corpse (Cannibalize): its target must not be replaced by the soft-target enemy, and
+    // the cast goes without an explicit unit target - the server picks the corpse itself (vMaNGOS Spell::EffectDummy 20577).
+    bool corpseSpell(uint32_t spell) const;
     uint32_t lastCastSpell_ = 0, lastCastRetry_ = 0;
     uint64_t lastCastTarget_ = 0;
     // 6.64: our own cast starts on send, not when the server answers (rolled back by SMSG_CAST_FAILED / SPELL_FAILURE)
@@ -1102,6 +1172,10 @@ private:
     void ackFlagChange(uint16_t ackOp, uint32_t counter, uint32_t flag, bool on, uint32_t nowMs);
     std::unordered_map<uint32_t, ItemInfo> items_;
     std::unordered_set<uint32_t> itemAsked_, itemWanted_;
+    // 7.16: SMSG_ITEM_ENCHANT_TIME_UPDATE: when a temporary item enchant ends (the item field holds the value at apply time)
+    struct ItemEnchantTimer { uint64_t item = 0; uint8_t slot = 0; uint32_t id = 0, endMs = 0; };
+    std::vector<ItemEnchantTimer> itemEnchantTimers_;
+    int32_t enchantLeftMs(uint64_t item, uint8_t slot, uint32_t id, uint32_t fieldMs) const;
     uint32_t reclaimAt_ = 0, corpseAskedMs_ = 0;
     Life lastLife_ = Life::Alive;
     bool lifeSeen_ = false;
@@ -1124,9 +1198,16 @@ private:
 
     uint64_t target_ = 0;
     bool attackWanted_ = false, attackOn_ = false, faceRequest_ = false;
+    // 7.19: a spell that carries us to the target (Charge, 8-25 yd) must not start auto-attack together with the cast:
+    // from 20 yd the server refuses the attack (SMSG_ATTACKSWING_NOTINRANGE) and, since no swing ever begins, the wish
+    // to attack stayed on. inCombat() counts that wish, so the client then sat in the combat stance, with the combat
+    // controls and the Combat tab, until a relog. The spell id waits here until the target is in reach (game.cpp update).
+    uint32_t attackAfterCast_ = 0;
+    uint32_t attackAfterCastMs_ = 0;   // when that deferral was made (it expires: the target may run away)
     bool followMoving_ = false;
     uint16_t attackError_ = 0;
     uint32_t attackErrorMs_ = 0;
+    uint32_t attackRetryMs_ = 0;   // 7.19: the last attempt to start the deferred swing (once a second at most)
     uint64_t lootGuid_ = 0;
     std::vector<std::string> channels_;   // joined channels (SMSG_CHANNEL_NOTIFY "you joined")
     uint32_t autoZone_ = 0;               // the zone the default channels were joined for
@@ -1140,6 +1221,9 @@ private:
     bool teleported_ = false;
     bool transferPending_ = false;
     uint32_t transferMap_ = 0;
+    uint32_t transferTransportEntry_ = 0;   // 7.24: the pending transfer is on a transport (a zeppelin to another continent)
+    bool transportSpawnPending_ = false;
+    TransportSpawn transportSpawn_;
     std::unordered_set<uint64_t> askedNames_;
     std::unordered_set<uint32_t> askedCreatures_, askedGos_;
 };

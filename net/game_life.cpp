@@ -71,6 +71,7 @@ void GameSession::updateLife(uint32_t nowMs) {
         if (l == Life::Dead) {
             ++deaths;
             attackWanted_ = attackOn_ = false;
+            attackAfterCast_ = 0;   // 7.19
             cast = CastState();
             lootWindow = LootWindow();
             gossip = GossipMenu();

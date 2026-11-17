@@ -1,7 +1,7 @@
 // pad.hpp — controller schemes (stage 5.11): turns the 3DS buttons and sticks into game intents. Pure logic (only
 // the KEY_* bits of libctru), so the PC test drives it with a stub.
 //
-// Forever scheme (after WoW: Forever's built-in gamepad UI, positions as on an Xbox pad):
+// New 3DS scheme (after WoW: Forever's built-in gamepad UI, positions as on an Xbox pad):
 //   Circle Pad   move. Pushed past runThreshold = run, less = walk. Out of combat the character turns to the stick
 //                direction (face movement), in combat too; with faceMovement off the character faces the camera and the stick strafes.
 //                While L / R is held a ring with an arrow under the character shows the aim (red: enemies, green: friends).
@@ -15,33 +15,37 @@
 //                (outside a party the D-pad also takes the next friendly unit).
 //   L+R          D-pad left/right page of the hotbars, up/down camera zoom, A centre the camera.
 //   START        menu (bottom screen), SELECT (tap) free camera, SELECT + D-pad left/right the touch screen's tabs.
-// Classic scheme (stages 5.1-5.10, Old 3DS without ZL/ZR/C-Stick): Circle Pad up/down walk, left/right turn,
-//   C-Stick / D-pad left-right look, D-pad up/down zoom, B jump, L next target, R attack, Y chat, A interact,
-//   X shows the next hotbar set on the touch bar.
+// Old 3DS scheme (stages 5.1-5.10, Old 3DS without ZL/ZR/C-Stick): Circle Pad up/down walk, left/right turn,
+//   D-pad = the hotbar: its 4 slots of the set X picked. X: tap = next set, hold = the target's menu. The camera looks
+//   with the Circle Pad while Y is held (the D-pad looks too; up/down zoom), a tap of Y is chat. L + Y held aims the
+//   target ring with the Circle Pad (release Y or L takes the aimed enemy), as L / R + C-Stick on the New 3DS. B jump,
+//   L next target, R attack, A interact, START menu.
 #pragma once
 #include <3ds.h>
 #include <stdint.h>
 
 #include <string>
 
-enum class PadScheme : uint8_t { Forever = 0, Classic = 1 };
+enum class PadScheme : uint8_t { New3DS = 0, Old3DS = 1 };
 
 struct PadConfig {
-    PadScheme scheme = PadScheme::Forever;
+    PadScheme scheme = PadScheme::New3DS;
     float stickDead = 0.12f;          // fraction of the full stick throw
-    float runThreshold = 0.5f;        // Forever "Stick Run Threshold"
-    float backThreshold = 0.6f;       // Forever "Back Pedal Stick Threshold": pull back this far to backpedal
+    float runThreshold = 0.5f;        // New 3DS "Stick Run Threshold"
+    float backThreshold = 0.6f;       // New 3DS "Back Pedal Stick Threshold": pull back this far to backpedal
     bool faceMovement = true;         // out of combat the character faces the stick direction
-    bool toggleModifiers = false;     // Forever "HUD Modifier, Press to Toggle": tap ZL/ZR instead of holding
+    bool toggleModifiers = false;     // New 3DS "HUD Modifier, Press to Toggle": tap ZL/ZR instead of holding
     bool invertY = false;
     float camSpeed = 1.8f;            // radians per second at full C-Stick
     bool questTracker = true;         // stage 5.14: the followed quests' objectives on the top screen (6.63: on)
     // UI stages 3/6 (the Settings tab)
-    int lang = 0;                     // interface language: 0 English (default), 1 Russian
+    int lang = 0;                     // interface language: 0 English, 1 Russian, 2 Spanish, 3 German, 4 French
     int drawDist = 1;                 // index into the draw distances (main.cpp kDrawDists)
     int horizon = 0;                  // 6.34b: the ground and far buildings past the draw distance: 0 off, 1 to 800 yd, 2 to 1200 yd
     int crowd = 2;                    // creatures drawn at most: 0 = 10, 1 = 20, 2 = 40, 3 = all
     int topMode = 0;                  // top screen: 0 normal 400x240, 1 wide 800x240, 2 stereoscopic 3D (the slider)
+    int fsr = 0;                      // 7.27: 0 off, 1 sharp (1:1), 2 320, 3 240, 4 200 logical internal width
+                                      // (the scene is drawn lower and upscaled by the PICA TEV; wide doubles it)
     bool doodads = true;              // small world objects (trees, rocks, furniture)
     bool showStats = false;          // 5.35e: FPS and ping, small, at the bottom centre of the top screen
     int effects = 2;                  // stage 5.32: particles and lamp glows: 0 off, 1 low, 2 high
@@ -106,11 +110,11 @@ struct PadOut {
     // fixed actions
     bool jump = false, cancel = false, interact = false, context = false, menu = false, freeCamera = false;
     bool ascend = false;              // the jump button held: swims up (stage 5.26)
-    // classic extras
-    bool nextTarget = false, toggleAttack = false, chat = false, nextSet = false;
+    // Old 3DS extras
+    bool nextTarget = false, toggleAttack = false, chat = false, clearTarget = false;
     // hotbar
     int slot = -1;                    // pressed this frame (see addressing above)
-    int set = 0;                      // the set the modifiers select now (bars highlight it)
+    int set = 0;                      // the set the modifiers select (New 3DS) or X chose (Old 3DS); bars highlight it
     int pageDelta = 0;
     // targeting modes
     Mode mode = None;                 // held now
@@ -124,15 +128,20 @@ struct PadOut {
 
 class Pad {
 public:
-    // camYaw: the camera's yaw; inCombat switches Forever's face movement to strafing.
+    // camYaw: the camera's yaw; inCombat switches New 3DS face movement to strafing.
     PadOut update(const PadInput& in, const PadConfig& cfg, bool inCombat, float camYaw, float dt);
     int toggledSet() const { return toggled_; }
-    void reset() { toggled_ = 0; lastMode_ = PadOut::None; selectCombo_ = false; }
+    void reset() { toggled_ = 0; lastMode_ = PadOut::None; selectCombo_ = false; xHeldMs_ = 0; xMenu_ = false; }
 
 private:
-    PadOut forever(const PadInput& in, const PadConfig& cfg, bool inCombat, float camYaw, float dt);
-    PadOut classic(const PadInput& in, const PadConfig& cfg, float dt);
+    PadOut new3ds(const PadInput& in, const PadConfig& cfg, bool inCombat, float camYaw, float dt);
+    PadOut old3ds(const PadInput& in, const PadConfig& cfg, float camYaw, float dt);
     int toggled_ = 0;                 // press-to-toggle modifier state
+    int oldSet_ = 0;                  // Old 3DS: the hotbar set X selected
+    bool yLook_ = false;              // Old 3DS: the Y-held look moved the camera, so its tap is not chat
+    bool yDown_ = false;              // Old 3DS: Y was held last frame (a real tap, not a stale key-up after a pause)
+    uint32_t xHeldMs_ = 0;            // Old 3DS: how long X has been held (tap = next set, hold = target menu)
+    bool xMenu_ = false;              // ... this hold opened the menu, so the release does not change the set
     bool selectCombo_ = false;        // SELECT was used with the D-pad while held (no free camera on release)
     void selectKeys(const PadInput& in, PadOut& o);
     PadOut::Mode lastMode_ = PadOut::None;

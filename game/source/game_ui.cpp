@@ -451,8 +451,18 @@ void GameUi::interactAction(w3n::GameSession& g, const Input& in, Output& out) {
         else if (g.trade.open()) g.acceptTrade(in.nowMs);
         return;
     }
-    if (p == Panel::Vendor) { hint(tr("Tap an item, then Buy / Sell", "Выберите предмет, затем Купить / Продать"), in.nowMs); return; }
-    if (p == Panel::Trainer) {
+    // WoWVita: another NPC selected while a vendor / trainer window is open -> that one is used (its window replaces
+    // this one), as clicking another merchant does in the original
+    auto otherNpcSelected = [&](uint64_t windowNpc) {
+        const uint64_t t = g.target();
+        if (!t || t == windowNpc) return false;
+        const w3n::WorldObject* o = g.objects.find(t);
+        return o && o->type == w3n::ObjType::Unit && !o->dead() && o->field(w3n::UF::UNIT_NPC_FLAGS) != 0;
+    };
+    if (p == Panel::Vendor && otherNpcSelected(g.vendor.npc)) g.vendor = w3n::VendorWindow();
+    else if (p == Panel::Trainer && otherNpcSelected(g.trainer.npc)) g.trainer = w3n::TrainerWindow();
+    else if (p == Panel::Vendor) { hint(tr("Tap an item, then Buy / Sell", "Выберите предмет, затем Купить / Продать"), in.nowMs); return; }
+    if (panel(g) == Panel::Trainer) {
         if (trainerSel_ >= 0) g.trainSpell((size_t)trainerSel_, in.nowMs);
         else hint(tr("Tap a spell, then Train", "Выберите заклинание, затем Обучиться"), in.nowMs);
         return;

@@ -19,6 +19,13 @@ No game files are included. Do not share your converted files.
 3. Copy everything from the `wowvita` folder it makes (except `log_*.txt`) to **`ux0:data/wowvita/`** on the Vita.
 4. Start **WoWVita**, tap the small panel in the corner, enter the server, your account and password, tap **Login**.
 
+## Offline (experimental)
+
+**Offline** in the main menu plays without a server. Without anything else it is a small Northshire sample; with
+**`offline.w3do`** in `ux0:data/wowvita/` it is the whole Eastern Kingdoms: creatures with their loot, red ones attack,
+yellow ones only fight back, 473 vendors (buy, sell, wear what you buy). Not there yet: quests, trainers, talents,
+most creature spells. The character saves every 20 s. How to make `offline.w3do`: [`docs/OFFLINE_WORLD.md`](docs/OFFLINE_WORLD.md).
+
 ## Controls
 
 | | |

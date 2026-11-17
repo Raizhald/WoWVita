@@ -190,6 +190,37 @@ uint8_t fillClassSpells(const WorldData* data, uint8_t cls, std::array<uint32_t,
     return count;
 }
 
+
+// WoWVita: one creature's create block (the login packets and a spawn that comes into range share it)
+void addCreatureCreate(UpdateBuilder& u, const Entity& ent) {
+    const Entity* e = &ent;
+    FieldSet f;
+    f.set(UF::OBJECT_GUID, (uint32_t)e->guid);
+    f.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(e->guid >> 32));
+    f.set(UF::OBJECT_TYPE, 0x9);
+    f.set(UF::OBJECT_ENTRY, e->entry);
+    {   // the template's scale (WoWVita: whole-world packs have giants and tiny critters)
+        const float sc = e->scale > 0.05f && e->scale < 20.0f ? e->scale : 1.0f;
+        uint32_t bits;
+        std::memcpy(&bits, &sc, 4);
+        f.set(UF::OBJECT_SCALE_X, bits);
+    }
+    f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, e->hp));
+    f.set(UF::UNIT_MAXHEALTH, e->maxHp);
+    f.set(UF::UNIT_LEVEL, e->level);
+    f.set(UF::UNIT_FACTIONTEMPLATE, e->faction);
+    f.set(UF::UNIT_BYTES_0, 0u | (1u << 8) | (0u << 16) | ((uint32_t)e->powerType << 24));
+    f.set(UF::UNIT_POWER1 + e->powerType, wirePower(*e));
+    f.set(UF::UNIT_MAXPOWER1 + e->powerType, e->maxPower);
+    f.set(UF::UNIT_DISPLAYID, (uint32_t)e->displayId);
+    f.set(UF::UNIT_NATIVEDISPLAYID, (uint32_t)e->displayId);
+    f.set(UF::UNIT_NPC_FLAGS, e->npcFlags);
+    f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
+    f.set(UF::UNIT_COMBATREACH, 0x3FC00000u);
+    if (e->dead) f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
+    addCreate(u, e->guid, 3, kUfHighGuid, e->x, e->y, e->z, e->o, f);
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------- setup
@@ -822,26 +853,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         if (!e || !e->used || e->objType != 3) continue;
         const float dx = e->x - px, dy = e->y - py;
         if (dx * dx + dy * dy > 150.0f * 150.0f) continue;
-        FieldSet f;
-        f.set(UF::OBJECT_GUID, (uint32_t)e->guid);
-        f.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(e->guid >> 32));
-        f.set(UF::OBJECT_TYPE, 0x9);
-        f.set(UF::OBJECT_ENTRY, e->entry);
-        f.set(UF::OBJECT_SCALE_X, 0x3F800000u);
-        f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, e->hp));
-        f.set(UF::UNIT_MAXHEALTH, e->maxHp);
-        f.set(UF::UNIT_LEVEL, e->level);
-        f.set(UF::UNIT_FACTIONTEMPLATE, e->faction);
-        f.set(UF::UNIT_BYTES_0, 0u | (1u << 8) | (0u << 16) | ((uint32_t)e->powerType << 24));
-        f.set(UF::UNIT_POWER1 + e->powerType, wirePower(*e));
-        f.set(UF::UNIT_MAXPOWER1 + e->powerType, e->maxPower);
-        f.set(UF::UNIT_DISPLAYID, (uint32_t)e->displayId);
-        f.set(UF::UNIT_NATIVEDISPLAYID, (uint32_t)e->displayId);
-        f.set(UF::UNIT_NPC_FLAGS, e->npcFlags);
-        f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
-        f.set(UF::UNIT_COMBATREACH, 0x3FC00000u);
-        if (e->dead) f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
-        addCreate(u, e->guid, 3, kUfHighGuid, e->x, e->y, e->z, e->o, f);
+        addCreatureCreate(u, *e);
     }
     sendUpdateObject(u.finish());
 
@@ -905,7 +917,7 @@ void OfflineSession::handleAttack(const Bytes& data, uint32_t nowMs) {
     if (r.bad) return;
     Entity* t = world_.entity(g);
     if (!t || !t->alive()) { send(SMSG_ATTACKSWING_DEADTARGET); return; }
-    if (!world_.hostileTowards(*p, *t)) { send(SMSG_ATTACKSWING_CANT_ATTACK); return; }
+    if (!world_.canAttack(*p, *t)) { send(SMSG_ATTACKSWING_CANT_ATTACK); return; }
     if (!world_.inMeleeRange(*p, *t)) { send(SMSG_ATTACKSWING_NOTINRANGE); return; }
     const float want = std::atan2(t->y - p->y, t->x - p->x);
     float diff = p->o - want;
@@ -1182,6 +1194,19 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                     w.u32(0);
                     send(SMSG_ATTACKSTOP, w.b);
                 }
+                break;
+            }
+            case SimEvent::Appear: {   // WoWVita: the spawn grid brought a creature into range
+                if (!a) break;
+                UpdateBuilder u;
+                addCreatureCreate(u, *a);
+                sendUpdateObject(u.finish());
+                break;
+            }
+            case SimEvent::Vanish: {   // ... and took one out of it (the entity is gone: only the guid is left)
+                Writer w;
+                w.u64(e.a);
+                send(0x0AA, w.b);   // SMSG_DESTROY_OBJECT
                 break;
             }
             case SimEvent::Respawn: {

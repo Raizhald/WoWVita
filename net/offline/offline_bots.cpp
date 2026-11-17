@@ -117,7 +117,7 @@ uint64_t chooseTarget(const World& w, const Entity& bot, uint32_t nowMs) {
     if (const Entity* p = w.player()) {
         if (p->victim) {
             const Entity* t = w.entity(p->victim);
-            if (t && t->alive() && w.hostileTowards(bot, *t)) return t->guid;
+            if (t && t->alive() && w.canAttack(bot, *t)) return t->guid;
         }
     }
     // The tank leads; the others assist the tank's target.
@@ -125,7 +125,7 @@ uint64_t chooseTarget(const World& w, const Entity& bot, uint32_t nowMs) {
         if (const Entity* t = tankOf(w)) {
             if (t->victim) {
                 const Entity* v = w.entity(t->victim);
-                if (v && v->alive() && w.hostileTowards(bot, *v)) return v->guid;
+                if (v && v->alive() && w.canAttack(bot, *v)) return v->guid;
             }
         }
     }

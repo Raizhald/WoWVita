@@ -20,6 +20,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "../wire.hpp"
 
@@ -27,7 +29,7 @@ namespace w3n {
 namespace offline {
 
 constexpr uint32_t kSimStepMs = 50;          // fixed simulation tick (20 Hz), independent of rendering
-constexpr int kMaxEntities = 56;             // player + 4 bots + 51 creatures
+constexpr int kMaxEntities = 160;            // player + 4 bots + the creatures around the player (WoWVita: spawn grid)
 constexpr int kMaxEvents = 512;              // up to 8 catch-up steps may be buffered before dispatch
 constexpr int kMaxThreat = 12;
 constexpr int kMaxAuras = 8;
@@ -192,6 +194,15 @@ struct WorldData {
     const ItemTemplate* item(uint32_t entry) const;
     const SpellDef* spell(uint32_t id) const;
     bool hostile(uint32_t a, uint32_t b) const;
+    // WoWVita: a HOST pair whose first faction has bit 31 set means "may be attacked, but does not attack first"
+    // (the yellow, neutral creatures of a whole-world pack). hostile() ignores those pairs.
+    static constexpr uint32_t kNeutralFlag = 0x80000000u;
+    bool attackable(uint32_t a, uint32_t b) const;
+    mutable std::unordered_set<uint64_t> neutralIdx_;
+    // WoWVita: hash indexes for a whole-continent pack (built on first use, rebuilt if a vector grew)
+    mutable std::unordered_map<uint32_t, uint32_t> creatureIdx_, itemIdx_, lootIdx_;
+    mutable std::unordered_set<uint64_t> hostileIdx_;
+    mutable size_t hostileIdxFor_ = (size_t)-1;
     // Referential integrity report for the converter-side validator and the runtime loader.
     std::vector<std::string> validate() const;
 };
@@ -298,6 +309,7 @@ struct SimEvent {
         CastStarted = 7, CastFinished = 8, CastFailed = 9, AttackStarted = 10, AttackStopped = 11,
         AuraApplied = 12, AuraRemoved = 13, AttackError = 14, Message = 15, Looted = 16,
         ThreatChanged = 17, PowerChanged = 18, ItemGained = 19, QuestProgress = 20, QuestComplete = 21,
+        Appear = 22, Vanish = 23,      // WoWVita: a spawn came into / went out of the active area around the player
     };
     uint8_t type = 0;
     uint64_t a = 0, b = 0;             // actor / target (or victim / attacker)
@@ -387,6 +399,8 @@ public:
     bool inMeleeRange(const Entity& a, const Entity& b) const;
     float distance(const Entity& a, const Entity& b) const;
     bool hostileTowards(const Entity& a, const Entity& b) const;
+    // WoWVita: hostile, or neutral to each other (may be attacked; a neutral creature only fights back)
+    bool canAttack(const Entity& a, const Entity& b) const;
     uint64_t highestThreatTarget(const Entity& e) const;
     uint32_t cooldownLeft(const Entity& e, uint32_t spell, uint32_t nowMs) const;
     bool knowsSpell(const Entity& e, uint32_t spell) const;
@@ -436,8 +450,20 @@ public:
     Rng& rng() { return rng_; }
     uint32_t seed() const { return seed_; }
 
+    // WoWVita: creatures exist only around the player (a whole continent does not fit the pool). Called by step();
+    // 'initial' (from reset) spawns without Appear events - the login packets create those units.
+    void updateActivation(uint32_t nowMs, bool initial);
+    int activeCreatures() const;
+
 private:
     void spawnCreature(const Spawn& s, uint32_t nowMs, int index);
+    void buildSpawnCells();
+    std::unordered_map<int64_t, std::vector<uint32_t>> spawnCells_;   // 64-yard cells -> spawn indexes
+    std::vector<uint32_t> spawnRespawnAt_;   // per spawn: the time a creature that vanished dead may come back
+    std::vector<uint8_t> spawnActive_;       // per spawn: has an entity in the pool now
+    const WorldData* cellsFor_ = nullptr;
+    size_t cellsSpawnCount_ = 0;
+    uint32_t nextActivationMs_ = 0;
     Entity& allocate(uint64_t guid);
     void emit(uint8_t type, uint64_t a, uint64_t b, uint32_t spell, int32_t value, uint8_t school = 0, uint8_t flags = 0);
     void emitText(uint8_t type, uint64_t a, const char* text);

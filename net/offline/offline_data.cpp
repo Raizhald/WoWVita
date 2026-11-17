@@ -13,10 +13,10 @@ namespace offline {
 
 namespace {
 
-constexpr uint32_t kMaxCreatures = 4096;
-constexpr uint32_t kMaxSpawns = 16384;
-constexpr uint32_t kMaxLootTables = 4096;
-constexpr uint32_t kMaxItems = 8192;
+constexpr uint32_t kMaxCreatures = 16384;   // WoWVita: whole-continent packs
+constexpr uint32_t kMaxSpawns = 131072;
+constexpr uint32_t kMaxLootTables = 32768;
+constexpr uint32_t kMaxItems = 32768;
 constexpr uint32_t kMaxSpells = 2048;
 constexpr uint32_t kMaxQuests = 2048;
 constexpr uint32_t kMaxString = 512;
@@ -267,7 +267,7 @@ bool readBots(Bin& b, WorldData& w) {
 
 bool readHostility(Bin& b, WorldData& w) {
     uint32_t n = b.u32();
-    if (b.bad || n > 4096) return false;
+    if (b.bad || n > 65536) return false;
     w.hostility.clear();
     for (uint32_t i = 0; i < n && !b.bad; ++i) {
         HostilePair p;
@@ -281,20 +281,27 @@ bool readHostility(Bin& b, WorldData& w) {
 }  // namespace
 
 // ---------------------------------------------------------------- lookups
+template <typename V, typename F>
+static void reindex(std::unordered_map<uint32_t, uint32_t>& idx, const V& v, F key) {
+    if (idx.size() == v.size()) return;
+    idx.clear();
+    idx.reserve(v.size());
+    for (uint32_t i = 0; i < (uint32_t)v.size(); ++i) idx.emplace(key(v[i]), i);   // (the first one wins, as before)
+}
 const CreatureTemplate* WorldData::creature(uint32_t entry) const {
-    for (const CreatureTemplate& c : creatures)
-        if (c.entry == entry) return &c;
-    return nullptr;
+    reindex(creatureIdx_, creatures, [](const CreatureTemplate& c) { return c.entry; });
+    auto it = creatureIdx_.find(entry);
+    return it == creatureIdx_.end() ? nullptr : &creatures[it->second];
 }
 const LootTable* WorldData::lootTable(uint32_t id) const {
-    for (const LootTable& t : loot)
-        if (t.id == id) return &t;
-    return nullptr;
+    reindex(lootIdx_, loot, [](const LootTable& t) { return t.id; });
+    auto it = lootIdx_.find(id);
+    return it == lootIdx_.end() ? nullptr : &loot[it->second];
 }
 const ItemTemplate* WorldData::item(uint32_t entry) const {
-    for (const ItemTemplate& i : items)
-        if (i.entry == entry) return &i;
-    return nullptr;
+    reindex(itemIdx_, items, [](const ItemTemplate& i) { return i.entry; });
+    auto it = itemIdx_.find(entry);
+    return it == itemIdx_.end() ? nullptr : &items[it->second];
 }
 const SpellDef* WorldData::spell(uint32_t id) const {
     for (const SpellDef& s : spells)
@@ -303,9 +310,23 @@ const SpellDef* WorldData::spell(uint32_t id) const {
 }
 bool WorldData::hostile(uint32_t a, uint32_t b) const {
     if (!a || !b || a == b) return false;
-    for (const HostilePair& p : hostility)
-        if ((p.a == a && p.b == b) || (p.a == b && p.b == a)) return true;
-    return false;
+    if (hostileIdxFor_ != hostility.size()) {
+        hostileIdx_.clear();
+        neutralIdx_.clear();
+        for (const HostilePair& p : hostility) {
+            const uint32_t a = p.a & ~kNeutralFlag;
+            auto& set = (p.a & kNeutralFlag) ? neutralIdx_ : hostileIdx_;
+            set.insert(((uint64_t)a << 32) | p.b);
+            set.insert(((uint64_t)p.b << 32) | a);
+        }
+        hostileIdxFor_ = hostility.size();
+    }
+    return hostileIdx_.count(((uint64_t)a << 32) | b) != 0;
+}
+bool WorldData::attackable(uint32_t a, uint32_t b) const {
+    if (!a || !b || a == b) return false;
+    if (hostile(a, b)) return true;   // (also builds the indexes)
+    return neutralIdx_.count(((uint64_t)a << 32) | b) != 0;
 }
 
 // ---------------------------------------------------------------- validation
@@ -372,7 +393,7 @@ std::vector<std::string> WorldData::validate() const {
 
     for (const HostilePair& p : hostility) {
         if (!p.a || !p.b) err("HOST: faction 0");
-        if (p.a == p.b) err("HOST: faction " + std::to_string(p.a) + " hostile to itself");
+        if ((p.a & ~kNeutralFlag) == p.b) err("HOST: faction " + std::to_string(p.b) + " hostile to itself");
     }
     return r;
 }

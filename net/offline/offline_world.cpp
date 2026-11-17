@@ -177,14 +177,10 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
         p.x = e.x; p.y = e.y; p.z = e.z; p.o = e.o;
     }
 
-    // ---- creatures from the immutable spawn list
-    if (data_) {
-        int idx = 0;
-        for (const Spawn& s : data_->spawns) {
-            if (idx >= kMaxEntities - 5) break;
-            spawnCreature(s, nowMs, idx++);
-        }
-    }
+    // ---- creatures from the immutable spawn list: only those around the player (WoWVita: spawn grid)
+    cellsFor_ = nullptr;
+    nextActivationMs_ = 0;
+    updateActivation(nowMs, true);
     commands_ = PartyCommandState();
     emitText(SimEvent::Message, 0, "Offline world ready");
     applyGround(*player_);
@@ -272,6 +268,14 @@ bool World::hostileTowards(const Entity& a, const Entity& b) const {
     if (b.npcFlags & 3u) return false;
     if (a.faction == 0 || b.faction == 0) return false;
     return data_ && data_->hostile(a.faction, b.faction);
+}
+
+bool World::canAttack(const Entity& a, const Entity& b) const {
+    if (hostileTowards(a, b)) return true;
+    if (a.guid == b.guid || a.dead || b.dead) return false;
+    if ((a.npcFlags & 3u) || (b.npcFlags & 3u)) return false;
+    if (a.faction == 0 || b.faction == 0) return false;
+    return data_ && data_->attackable(a.faction, b.faction);
 }
 
 int World::alivePartyMembers() const {
@@ -447,7 +451,7 @@ bool World::startAttack(Entity& actor, uint64_t targetGuid, uint32_t nowMs) {
     Entity* t = entity(targetGuid);
     if (!t || !t->alive() || t->guid == actor.guid) return false;
     if (actor.bot || actor.self) {
-        if (!hostileTowards(actor, *t)) return false;
+        if (!canAttack(actor, *t)) return false;
     }
     actor.victim = t->guid;
     actor.target = t->guid;
@@ -551,7 +555,7 @@ bool World::tryCast(Entity& actor, uint32_t spellId, uint64_t targetGuid, uint32
         return false;
     }
     if (!s->friendly && s->kind != SpellKind::Buff && s->kind != SpellKind::Heal &&
-        !hostileTowards(actor, *target) && !target->self && !target->bot) {
+        !canAttack(actor, *target) && !target->self && !target->bot) {
         emit(SimEvent::CastFailed, actor.guid, target->guid, spellId, 0, 0, 8);
         return false;
     }
@@ -678,7 +682,7 @@ void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell
     if (dst.hp <= 0) { dst.hp = 0; onDeath(dst, src, nowMs); return; }
     if (dst.objType == 3 && src.guid) {
         addThreat(dst, src.guid, dmg);
-        if (!dst.victim && hostileTowards(dst, src)) {
+        if (!dst.victim && canAttack(dst, src)) {
             dst.victim = src.guid;
             dst.target = src.guid;
             dst.aiState = 1;
@@ -1086,6 +1090,98 @@ void World::step(uint32_t nowMs) {
     // Too far behind (a long loading screen): drop the backlog rather than run a burst of catch-up.
     if (nowMs - lastStepMs_ > 8 * kSimStepMs) lastStepMs_ = nowMs;
     now_ = nowMs;
+    updateActivation(nowMs, false);
+}
+
+// ---------------------------------------------------------------- WoWVita: the spawn grid
+namespace {
+constexpr float kCellYards = 64.0f;
+constexpr float kAppearDist = 100.0f;   // a spawn this close to the player gets a creature
+constexpr float kVanishDist = 130.0f;   // a creature (and its home) this far away goes back to the list
+inline int64_t cellKey(int cx, int cy) { return ((int64_t)cx << 32) ^ (int64_t)(uint32_t)cy; }
+inline int cellOf(float v) { return (int)std::floor(v / kCellYards); }
+}  // namespace
+
+void World::buildSpawnCells() {
+    spawnCells_.clear();
+    cellsFor_ = data_;
+    cellsSpawnCount_ = data_ ? data_->spawns.size() : 0;
+    spawnRespawnAt_.assign(cellsSpawnCount_, 0);
+    spawnActive_.assign(cellsSpawnCount_, 0);
+    for (uint32_t i = 0; i < (uint32_t)cellsSpawnCount_; ++i) {
+        const Spawn& sp = data_->spawns[i];
+        spawnCells_[cellKey(cellOf(sp.x), cellOf(sp.y))].push_back(i);
+    }
+}
+
+int World::activeCreatures() const {
+    int n = 0;
+    for (const Entity& e : pool_) if (e.used && e.objType == 3) ++n;
+    return n;
+}
+
+void World::updateActivation(uint32_t nowMs, bool initial) {
+    if (!data_ || !player_) return;
+    if (cellsFor_ != data_ || cellsSpawnCount_ != data_->spawns.size()) buildSpawnCells();
+    if (!initial && nowMs < nextActivationMs_) return;
+    nextActivationMs_ = nowMs + 500;
+    const float px = player_->x, py = player_->y;
+
+    // 1. creatures far from the player (and not chasing anyone) leave the pool; a dead one keeps its respawn time
+    int used = 0;
+    for (Entity& e : pool_) {
+        if (!e.used) continue;
+        ++used;
+        if (e.objType != 3) continue;
+        const float d = std::min(dist2d(e.x, e.y, px, py), dist2d(e.homeX, e.homeY, px, py));
+        if (d <= kVanishDist) continue;
+        if (!e.dead && e.victim) continue;
+        const uint32_t idx = (uint32_t)(e.guid & 0xFFFFFF);
+        if (idx >= 1 && idx <= spawnRespawnAt_.size()) {
+            spawnRespawnAt_[idx - 1] = e.dead ? std::max(e.respawnAtMs, nowMs + 5000) : 0;
+            spawnActive_[idx - 1] = 0;
+        }
+        if (!initial) emit(SimEvent::Vanish, e.guid, 0, 0, 0);
+        for (Entity& o : pool_)   // nobody keeps a pointer-by-guid to it
+            if (o.used) {
+                if (o.victim == e.guid) o.victim = 0;
+                if (o.target == e.guid) o.target = 0;
+            }
+        e = Entity();
+        --used;
+    }
+
+    // 2. spawns near the player get a creature, the nearest first, while the pool has room
+    struct Cand { float d; uint32_t idx; };
+    std::vector<Cand> cands;
+    const int r = (int)std::ceil(kAppearDist / kCellYards);
+    const int cx0 = cellOf(px), cy0 = cellOf(py);
+    for (int cy = cy0 - r; cy <= cy0 + r; ++cy)
+        for (int cx = cx0 - r; cx <= cx0 + r; ++cx) {
+            auto it = spawnCells_.find(cellKey(cx, cy));
+            if (it == spawnCells_.end()) continue;
+            for (uint32_t idx : it->second) {
+                if (spawnActive_[idx]) continue;
+                if (spawnRespawnAt_[idx] && nowMs < spawnRespawnAt_[idx]) continue;
+                const Spawn& sp = data_->spawns[idx];
+                const float d = dist2d(sp.x, sp.y, px, py);
+                if (d <= kAppearDist) cands.push_back(Cand{d, idx});
+            }
+        }
+    std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
+    for (const Cand& c : cands) {
+        if (used >= kMaxEntities - 1) break;
+        const Spawn& sp = data_->spawns[c.idx];
+        spawnCreature(sp, nowMs, (int)c.idx);
+        const CreatureTemplate* t = data_->creature(sp.entry);
+        if (!t) { spawnActive_[c.idx] = 1; continue; }   // (an unknown template never comes back)
+        const uint64_t guid = 0xF130000000000000ull | ((uint64_t)(t->entry & 0xFFFFFF) << 24) | (uint64_t)(c.idx + 1);
+        if (!entity(guid)) break;   // the pool is full
+        spawnActive_[c.idx] = 1;
+        spawnRespawnAt_[c.idx] = 0;
+        ++used;
+        if (!initial) emit(SimEvent::Appear, guid, 0, 0, 0);
+    }
 }
 
 // ---------------------------------------------------------------- bots helpers used by the director

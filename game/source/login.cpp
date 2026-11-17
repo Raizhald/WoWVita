@@ -335,6 +335,8 @@ bool LoginFlow::startOffline() {
         return false;
     }
     offlineSession_.setup(&offlineData_, kOfflineSavePath);
+    // WoWVita: alone by default; an (empty) offline_party.txt next to the save brings the four companions back
+    offlineSession_.setParty(fileExists("sdmc:/3ds/w3dproto/offline_party.txt"));
     offlineTrace("startOffline: setup done");
     if (!offlineSession_.open(err)) {
         // A corrupt save must not lock the player out: move it aside and start a fresh profile.

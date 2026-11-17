@@ -423,7 +423,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     inWorld_ = true;
     incoming_.clear();
     outgoing_.clear();
-    world_.reset(nowMs, save_.seed, save_.player, save_.bots, true);
+    world_.reset(nowMs, save_.seed, save_.player, save_.bots, partyEnabled_);
     lastPartyStats_ = 0;
     lastMoveSend_ = 0;
     lastSave_ = nowMs;
@@ -879,10 +879,12 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
     }
 
     sendInventory();
-    sendPartyList();
-    sendPartyStats();
+    if (partyEnabled_) {
+        sendPartyList();
+        sendPartyStats();
+    }
     sendChat(0x0A, 0, "Offline world: " + (data_ ? data_->name : std::string("unnamed")) +
-                            ". Party commands: /p follow, assist, stay, retreat.");
+                            (partyEnabled_ ? ". Party commands: /p follow, assist, stay, retreat." : "."));
     if (ghost_) errorLine("You are a ghost: reclaim your corpse to return to life.", 0);
 }
 

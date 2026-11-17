@@ -24,6 +24,9 @@ python3 tools/offline_data/export_world_sql.py --sql ClassicDB_1_12_1_z2815.sql.
 Map 0 (Eastern Kingdoms) gives about 24 000 spawns, 3 300 creature kinds and 3 500 items in 0.7 MB. Copy
 `offline.w3do` to `ux0:data/wowvita/offline.w3do`; without it the game uses the Northshire sample.
 
+No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
+`ux0:data/wowvita/offline_party.txt` brings them back.
+
 Still missing (the offline core's own limits): quests, vendors, trainers, talents, creature spells beyond the
 documented subset, pathfinding, other maps. The start is Northshire Abbey.
 

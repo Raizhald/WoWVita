@@ -138,6 +138,7 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
         profiles_[1 + i].isBot = true;
         profiles_[1 + i].used = true;
         if (profiles_[1 + i].guid == 0) profiles_[1 + i].guid = 0x0000000000000B01ull + (uint64_t)i;
+        if (!botsEnabled) continue;   // WoWVita: alone (the profiles stay in the save for when the party comes back)
         CharacterProfile& p = profiles_[1 + i];
         Entity& e = allocate(p.guid);
         e.objType = 4;

@@ -30,6 +30,12 @@ public:
     using PacketSink = std::function<void(uint16_t opcode, const Bytes& data)>;
 
     void setup(const WorldData* data, const char* savePath);
+
+    // WoWVita: the four companions (the game turns them off unless offline_party.txt exists - see login.cpp)
+
+    void setParty(bool on) { partyEnabled_ = on; }
+
+    bool party() const { return partyEnabled_; }
     // Load the profile, or create a fresh one. The four companions come from the .w3do templates.
     bool open(std::string& err);
     bool save(std::string* err = nullptr);
@@ -61,6 +67,7 @@ public:
     } stats;
 
 private:
+    bool partyEnabled_ = true;   // (the core and its tests: on; the game sets it from offline_party.txt)
     // ---- setup / profile
     void defaultPlayer();
     void refreshCharacters();

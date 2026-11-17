@@ -175,6 +175,9 @@ struct Spawn {
 
 struct HostilePair { uint32_t a = 0, b = 0; };
 
+// WoWVita: what a vendor sells ("VEND" section): the item and how many come in one purchase (arrows: 200)
+struct VendorGoods { uint32_t item = 0; uint16_t buyCount = 1; };
+
 struct WorldData {
     uint16_t formatVersion = 1;
     std::string name;
@@ -188,6 +191,7 @@ struct WorldData {
     std::vector<QuestDef> quests;
     std::vector<HostilePair> hostility;
     std::array<BotTemplate, kMaxParty> bots{};
+    std::unordered_map<uint32_t, std::vector<VendorGoods>> vendors;   // WoWVita: creature entry -> its goods
 
     const CreatureTemplate* creature(uint32_t entry) const;
     const LootTable* lootTable(uint32_t id) const;
@@ -423,6 +427,15 @@ public:
     bool takeLoot(Entity& corpse, int slot, uint32_t nowMs);
     uint32_t takeLootMoney(Entity& corpse, uint32_t nowMs);
     void addItemToPlayer(uint32_t entry, uint16_t count, uint32_t nowMs);
+    // WoWVita: vendors. buyItem: false = not enough money (*why = 1) or no room in the backpack (*why = 2).
+    bool buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t nowMs, int* why);
+    // Sells (count 0 = all) of backpack slot 'index'; the copper paid, 0 = nothing sold.
+    uint32_t sellBagItem(int index, uint32_t count, uint32_t nowMs);
+    // Puts backpack slot 'index' on (what was worn there goes to the backpack). 0 = done, else a reason for the
+    // player: 1 cannot be worn, 2 too low level, 3 no room for the off-hand item. *slotsOut: the equipment slots
+    // that changed (up to 2).
+    int equipFromBag(int index, int slotsOut[2]);
+    void recomputeGear();   // weapon damage / speed and armour from what is worn
     void addMoneyToPlayer(uint32_t copper, uint32_t nowMs);
     void addXp(Entity& e, uint32_t xp, uint32_t nowMs);
     // Player resurrection (corpse reclaim / spirit healer): clears combat and restores a share of HP.

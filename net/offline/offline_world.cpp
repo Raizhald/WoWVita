@@ -122,14 +122,7 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
         e.homeX = e.x; e.homeY = e.y; e.homeZ = e.z; e.homeO = e.o;
         e.spellCount = std::min<uint8_t>(profiles_[0].spellCount, (uint8_t)e.spells.size());
         for (uint8_t i = 0; i < e.spellCount; ++i) e.spells[i] = profiles_[0].spells[i];
-        e.dmgMin = 3; e.dmgMax = 6; e.attackMs = 2000;
-        if (const ItemTemplate* it = data_ ? data_->item(profiles_[0].equipment[15]) : nullptr) {
-            if (it->delayMs >= 500) e.attackMs = it->delayMs;
-            if (it->dmgMax > 0) {
-                e.dmgMin = (uint32_t)std::max(1.0f, it->dmgMin);
-                e.dmgMax = (uint32_t)std::max(1.0f, it->dmgMax);
-            }
-        }
+        recomputeGear();   // WoWVita: the weapon and the armour of everything worn
     }
 
     // ---- the four companions
@@ -894,6 +887,127 @@ void World::addItemToPlayer(uint32_t entry, uint16_t count, uint32_t nowMs) {
         emit(SimEvent::ItemGained, player_->guid, entry, 0, b.count);
     }
     (void)nowMs;
+}
+
+// ---------------------------------------------------------------- WoWVita: vendors
+bool World::buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t nowMs, int* why) {
+    if (why) *why = 0;
+    if (!player_ || !entry || !count) return false;
+    if (player_->money < price) { if (why) *why = 1; return false; }
+    CharacterProfile& p = profiles_[0];
+    const ItemTemplate* it = data_ ? data_->item(entry) : nullptr;
+    const uint32_t stackMax = it ? std::max<uint32_t>(1u, it->maxStack) : 1u;
+    uint32_t room = 0;   // the 16 visible backpack slots
+    for (uint8_t i = 0; i < p.bagCount; ++i)
+        if (p.bag[i].entry == entry && p.bag[i].count < stackMax) room += stackMax - p.bag[i].count;
+    if (p.bagCount < 16) room += (16u - p.bagCount) * stackMax;
+    if (room < count) { if (why) *why = 2; return false; }
+    player_->money -= price;
+    p.money = player_->money;
+    addItemToPlayer(entry, (uint16_t)std::min<uint32_t>(count, 65535u), nowMs);
+    return true;
+}
+
+uint32_t World::sellBagItem(int index, uint32_t count, uint32_t nowMs) {
+    (void)nowMs;
+    if (!player_) return 0;
+    CharacterProfile& p = profiles_[0];
+    if (index < 0 || index >= p.bagCount || !p.bag[index].entry) return 0;
+    BagItem& b = p.bag[index];
+    const ItemTemplate* it = data_ ? data_->item(b.entry) : nullptr;
+    if (!it || !it->sellPrice) return 0;
+    const uint16_t have = b.count ? b.count : 1;
+    const uint16_t n = (count == 0 || count >= have) ? have : (uint16_t)count;
+    const uint32_t copper = it->sellPrice * n;
+    if (n >= have) {   // the slot empties: the rest moves up
+        for (int i = index; i + 1 < p.bagCount; ++i) { p.bag[i] = p.bag[i + 1]; p.bag[i].slot = (uint8_t)i; }
+        --p.bagCount;
+        p.bag[p.bagCount] = BagItem();
+    } else {
+        b.count = (uint16_t)(have - n);
+    }
+    player_->money += copper;
+    p.money = player_->money;
+    return copper;
+}
+
+namespace {
+// InventoryType (1.12) -> the first equipment slot (-1: not worn)
+int equipSlotFor(uint32_t invType) {
+    switch (invType) {
+        case 1: return 0;  case 2: return 1;  case 3: return 2;  case 4: return 3;  case 5: case 20: return 4;
+        case 6: return 5;  case 7: return 6;  case 8: return 7;  case 9: return 8;  case 10: return 9;
+        case 11: return 10; case 12: return 12; case 16: return 14; case 19: return 18;
+        case 13: case 17: case 21: return 15;
+        case 14: case 22: case 23: return 16;
+        case 15: case 25: case 26: return 17;
+        default: return -1;
+    }
+}
+}  // namespace
+
+void World::recomputeGear() {
+    if (!player_) return;
+    const CharacterProfile& p = profiles_[0];
+    Entity& e = *player_;
+    e.dmgMin = 3; e.dmgMax = 6; e.attackMs = 2000;
+    if (const ItemTemplate* it = data_ ? data_->item(p.equipment[15]) : nullptr) {
+        if (it->delayMs >= 500) e.attackMs = it->delayMs;
+        if (it->dmgMax > 0) {
+            e.dmgMin = (uint32_t)std::max(1.0f, it->dmgMin);
+            e.dmgMax = (uint32_t)std::max(1.0f, it->dmgMax);
+        }
+    }
+    uint32_t armor = 0;
+    for (int s = 0; s < 19; ++s)
+        if (const ItemTemplate* it = data_ ? data_->item(p.equipment[(size_t)s]) : nullptr) armor += it->armor;
+    e.armor = armor;
+}
+
+int World::equipFromBag(int index, int slotsOut[2]) {
+    slotsOut[0] = slotsOut[1] = -1;
+    if (!player_) return 1;
+    CharacterProfile& p = profiles_[0];
+    if (index < 0 || index >= p.bagCount || !p.bag[index].entry) return 1;
+    const ItemTemplate* it = data_ ? data_->item(p.bag[index].entry) : nullptr;
+    if (!it) return 1;
+    int slot = equipSlotFor(it->inventoryType);
+    if (slot < 0) return 1;
+    if (it->requiredLevel > player_->level) return 2;
+    if (slot == 10 && p.equipment[10] && !p.equipment[11]) slot = 11;   // the second ring / trinket slot if free
+    if (slot == 12 && p.equipment[12] && !p.equipment[13]) slot = 13;
+    const bool twoHand = it->inventoryType == 17;
+    const ItemTemplate* main = data_->item(p.equipment[15]);
+    const bool mainIsTwoHand = main && main->inventoryType == 17;
+    // a two-hander frees the off hand (into the backpack); an off-hand item sends a two-hander back
+    int freeSlot = -1;
+    if ((twoHand && p.equipment[16]) || (slot == 16 && mainIsTwoHand)) {
+        if (p.bagCount >= 16) return 3;
+        freeSlot = twoHand ? 16 : 15;
+    }
+    const uint32_t newEntry = p.bag[index].entry;
+    const uint32_t old = p.equipment[(size_t)slot];
+    p.equipment[(size_t)slot] = newEntry;
+    if (old) {
+        p.bag[index].entry = old;
+        p.bag[index].count = 1;
+    } else {
+        for (int i = index; i + 1 < p.bagCount; ++i) { p.bag[i] = p.bag[i + 1]; p.bag[i].slot = (uint8_t)i; }
+        --p.bagCount;
+        p.bag[p.bagCount] = BagItem();
+    }
+    slotsOut[0] = slot;
+    if (freeSlot >= 0 && p.equipment[(size_t)freeSlot]) {
+        BagItem& b = p.bag[p.bagCount];
+        b.entry = p.equipment[(size_t)freeSlot];
+        b.count = 1;
+        b.slot = p.bagCount;
+        ++p.bagCount;
+        p.equipment[(size_t)freeSlot] = 0;
+        slotsOut[1] = freeSlot;
+    }
+    recomputeGear();
+    return 0;
 }
 
 void World::addMoneyToPlayer(uint32_t copper, uint32_t nowMs) {

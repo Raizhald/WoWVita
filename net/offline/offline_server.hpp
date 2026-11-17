@@ -100,6 +100,8 @@ private:
     void handleChat(const Bytes& data, uint32_t nowMs);
     void handleDeath(uint16_t op, const Bytes& data, uint32_t nowMs);
     void handleQuery(uint16_t op, const Bytes& data, uint32_t nowMs);
+    void handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs);   // WoWVita
+    void sendListInventory(uint64_t npc);
 
     // ---- events / state
     void dispatchEvents(uint32_t nowMs);

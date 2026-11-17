@@ -265,6 +265,27 @@ bool readBots(Bin& b, WorldData& w) {
     return !b.bad;
 }
 
+bool readVendors(Bin& b, WorldData& w) {   // WoWVita
+    uint32_t n = b.u32();
+    if (b.bad || n > 16384) return false;
+    w.vendors.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t entry = b.u32();
+        const uint16_t count = b.u16();
+        if (b.bad || count > 255) return false;
+        std::vector<VendorGoods> goods;
+        for (uint16_t k = 0; k < count && !b.bad; ++k) {
+            VendorGoods v;
+            v.item = b.u32();
+            v.buyCount = b.u16();
+            if (!v.buyCount) v.buyCount = 1;
+            goods.push_back(v);
+        }
+        if (!b.bad) w.vendors[entry] = std::move(goods);
+    }
+    return !b.bad;
+}
+
 bool readHostility(Bin& b, WorldData& w) {
     uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -441,6 +462,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("QUES"): ok = readQuests(b, out); break;
             case fourcc("BOTS"): ok = readBots(b, out); haveBots = true; break;
             case fourcc("HOST"): ok = readHostility(b, out); break;
+            case fourcc("VEND"): ok = readVendors(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }
         if (!ok) { err = "malformed section"; return false; }

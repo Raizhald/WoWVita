@@ -23,11 +23,14 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND",)   # WoWVita's vendor section (older readers skip unknown tags)
+
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
-          "item_template", "creature_model_info", "creature_spawn_entry"}
+          "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template"}
 
 CREATE_RE = re.compile(r"^CREATE TABLE `(\w+)`")
 COL_RE = re.compile(r"^\s+`(\w+)`")
@@ -278,6 +281,33 @@ def build(tables, factions, map_id, report, player_faction=1):
         lo, hi = money_by_loot.get(lid, (0, 0))
         loot_tables.append((lid, lo, max(lo, hi), ents))
 
+    # ---- vendors: npc_vendor by creature entry, plus CMaNGOS npc_vendor_template through VendorTemplateId
+    direct, tmpl = {}, {}
+    for r in tables.get("npc_vendor", []):
+        direct.setdefault(int(num(g(r, "entry"))), []).append(r)
+    for r in tables.get("npc_vendor_template", []):
+        tmpl.setdefault(int(num(g(r, "entry"))), []).append(r)
+    vendors = {}
+    for t in crea:
+        if not (t["npc"] & 0x4):
+            continue
+        rows = list(direct.get(t["entry"], []))
+        vt = int(num(g(templates[t["entry"]], "VendorTemplateId", "vendor_id")))
+        if vt:
+            rows += tmpl.get(vt, [])
+        goods, seen = [], set()
+        for r in sorted(rows, key=lambda r: int(num(g(r, "slot", default=0)))):
+            item = int(num(g(r, "item")))
+            if item in seen or item not in items_db:
+                continue
+            if int(num(g(r, "maxcount"))) > 0:
+                continue                 # limited-stock rarities: left out (no restock timers offline)
+            seen.add(item)
+            goods.append(item)
+        if goods:
+            vendors[t["entry"]] = goods[:255]
+            item_needed.update(goods)
+
     # ---- items: what the loot and the companions need (the sample's item ids are in the DB too)
     for e in (25, 38, 2589, 750):
         item_needed.add(e)
@@ -294,7 +324,8 @@ def build(tables, factions, map_id, report, player_faction=1):
             buy=int(num(g(r, "BuyPrice", "buy_price"))), sell=int(num(g(r, "SellPrice", "sell_price"))),
             armor=int(num(g(r, "armor"))), delay=int(num(g(r, "delay"))),
             dmin=num(g(r, "dmg_min1")), dmax=num(g(r, "dmg_max1")),
-            cls=int(num(g(r, "class"))), sub=int(num(g(r, "subclass")))))
+            cls=int(num(g(r, "class"))), sub=int(num(g(r, "subclass"))),
+            buycount=max(1, int(num(g(r, "BuyCount", "buy_count", default=1))))))
     known_items = {i["entry"] for i in items}
 
     # ---- hostility towards the player's faction template (1: Human; the companions use it too)
@@ -350,6 +381,17 @@ def build(tables, factions, map_id, report, player_faction=1):
         it.u32(i["armor"]); it.u32(i["delay"]); it.f32(i["dmin"]); it.f32(i["dmax"]); it.u32(i["cls"]); it.u32(i["sub"])
     sec["ITEM"] = it.b
 
+    vb = Bin()   # WoWVita "VEND": u32 n, n x {u32 creature, u16 count, count x {u32 item, u16 buy count}}
+    by_item = {i["entry"]: i for i in items}
+    vlist = [(e, [x for x in goods if x in by_item]) for e, goods in sorted(vendors.items())]
+    vlist = [(e, gl) for e, gl in vlist if gl]
+    vb.u32(len(vlist))
+    for e, gl in vlist:
+        vb.u32(e); vb.u16(len(gl))
+        for x in gl:
+            vb.u32(x); vb.u16(min(65535, by_item[x]["buycount"]))
+    sec["VEND"] = vb.b
+
     hb = Bin()
     hb.u32(len(host))
     for a, b in host:
@@ -370,7 +412,8 @@ def build(tables, factions, map_id, report, player_faction=1):
 
     report["counts"] = dict(creatures=len(crea), spawns=len(spawn_rows), invisible_skipped=skipped_invisible,
                             items=len(items), loot=len(loot_tables), hostile_factions=hostile_n,
-                            neutral_factions=neutral_n)
+                            neutral_factions=neutral_n, vendors=len(vlist),
+                            vendor_items=sum(len(gl) for _, gl in vlist))
     return sec
 
 

@@ -51,6 +51,10 @@ enum : uint16_t {
     SMSG_PARTY_MEMBER_STATS_FULL = 0x2F2,
     SMSG_CORPSE_RECLAIM_DELAY = 0x269,
     CMSG_LOGOUT_REQUEST = 0x04B,
+    // WoWVita: vendors (layouts in net/game_vendor.cpp)
+    CMSG_GOSSIP_HELLO = 0x17B, CMSG_LIST_INVENTORY = 0x19E, SMSG_LIST_INVENTORY = 0x19F, CMSG_SELL_ITEM = 0x1A0,
+    SMSG_SELL_ITEM = 0x1A1, CMSG_BUY_ITEM = 0x1A2, SMSG_BUY_ITEM = 0x1A4, SMSG_BUY_FAILED = 0x1A5,
+    CMSG_AUTOEQUIP_ITEM = 0x10A,
 };
 
 constexpr uint8_t kUpdateValues = 0, kUpdateMovement = 1, kUpdateCreate2 = 3;
@@ -540,7 +544,12 @@ void OfflineSession::sendInventory() {
     for (int slot = 0; slot < 19; ++slot) {
         const uint32_t entry = pr.equipment[(size_t)slot];
         self.set((uint16_t)(UF::PLAYER_VISIBLE_ITEM_1_0 + UF::PLAYER_VISIBLE_ITEM_STRIDE * slot), entry);
-        if (!entry) continue;
+        if (!entry) {   // WoWVita: an emptied slot (an off hand moved to the backpack)
+            const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + slot * 2);
+            self.set(f, 0);
+            self.set((uint16_t)(f + 1), 0);
+            continue;
+        }
         const uint64_t g = itemGuidFor(true, slot);
         const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + slot * 2);
         self.set(f, (uint32_t)g);
@@ -572,8 +581,109 @@ void OfflineSession::sendInventory() {
         it.set(UF::ITEM_FIELD_STACK_COUNT, pr.bag[i].count ? pr.bag[i].count : 1);
         addCreateItem(u, g, it);
     }
+    for (int i = pr.bagCount; i < 16; ++i) {   // WoWVita: a sold item's slot is empty again
+        const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + (23 + i) * 2);
+        self.set(f, 0);
+        self.set((uint16_t)(f + 1), 0);
+    }
     addValues(u, p->guid, self);
     sendUpdateObject(u.finish());
+}
+
+// ---------------------------------------------------------------- WoWVita: vendors
+void OfflineSession::sendListInventory(uint64_t npc) {
+    const Entity* e = world_.entity(npc);
+    if (!e || !data_) return;
+    Writer w;
+    w.u64(npc);
+    auto it = data_->vendors.find(e->entry);
+    if (it == data_->vendors.end()) { w.u8(0); w.u8(0); send(SMSG_LIST_INVENTORY, w.b); return; }
+    const auto& goods = it->second;
+    const uint8_t n = (uint8_t)std::min<size_t>(goods.size(), 255);
+    w.u8(n);
+    for (uint8_t i = 0; i < n; ++i) {
+        const ItemTemplate* t = data_->item(goods[i].item);
+        w.u32((uint32_t)i + 1);                  // slot (visible row, from 1)
+        w.u32(goods[i].item);
+        w.u32(t ? t->displayId : 0);
+        w.u32(0xFFFFFFFFu);                      // unlimited stock
+        w.u32(t ? t->buyPrice : 0);
+        w.u32(0);                                // max durability
+        w.u32(goods[i].buyCount);
+    }
+    send(SMSG_LIST_INVENTORY, w.b);
+}
+
+void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs) {
+    Entity* p = world_.player();
+    if (!p || !data_) return;
+    Reader r(data);
+    const uint64_t npc = r.u64();
+    if (r.bad) return;
+    const Entity* v = world_.entity(npc);
+    const bool isVendor = v && v->alive() && (v->npcFlags & 0x4u) && data_->vendors.count(v->entry);
+    const bool near = v && std::hypot(v->x - p->x, v->y - p->y) < 12.0f;
+    switch (op) {
+        case CMSG_GOSSIP_HELLO:
+        case CMSG_LIST_INVENTORY:
+            if (isVendor && near) sendListInventory(npc);
+            return;
+        case CMSG_BUY_ITEM: {
+            const uint32_t item = r.u32();
+            const uint8_t bundles = r.u8();
+            if (r.bad || !isVendor || !near) return;
+            const auto& goods = data_->vendors.at(v->entry);
+            uint32_t slot = 0;
+            const VendorGoods* g = nullptr;
+            for (size_t i = 0; i < goods.size() && i < 255; ++i)
+                if (goods[i].item == item) { g = &goods[i]; slot = (uint32_t)i + 1; break; }
+            const ItemTemplate* t = data_->item(item);
+            auto fail = [&](uint8_t why) {
+                Writer w;
+                w.u64(npc); w.u32(item); w.u8(why);
+                send(SMSG_BUY_FAILED, w.b);
+            };
+            if (!g || !t) { fail(0); return; }   // BUY_ERR_CANT_FIND_ITEM
+            const uint32_t n = std::max<uint32_t>(1, bundles);
+            int why = 0;
+            if (!world_.buyItem(item, n * g->buyCount, t->buyPrice * n, nowMs, &why)) {
+                if (why == 1) fail(2);           // BUY_ERR_NOT_ENOUGHT_MONEY
+                else errorLine("Inventory is full.", nowMs);
+                return;
+            }
+            Writer w;
+            w.u64(npc); w.u32(slot); w.u32(0xFFFFFFFFu); w.u32(n * g->buyCount);
+            send(SMSG_BUY_ITEM, w.b);
+            sendSelfFields();   // the money
+            return;
+        }
+        case CMSG_SELL_ITEM: {
+            const uint64_t itemGuid = r.u64();
+            const uint8_t count = r.u8();
+            if (r.bad) return;
+            const uint32_t low = (uint32_t)itemGuid;
+            const int index = (low & 0xFFFFF000u) == (0x40000000u | 0x2000u) ? (int)(low & 0xFFFu) : -1;
+            const uint8_t before = world_.playerProfile().bagCount;
+            const uint32_t paid = (isVendor && near && index >= 0) ? world_.sellBagItem(index, count, nowMs) : 0;
+            if (!paid) {
+                Writer w;
+                w.u64(npc); w.u64(itemGuid); w.u8(2);   // SELL_ERR_CANT_SELL_ITEM
+                send(SMSG_SELL_ITEM, w.b);
+                return;
+            }
+            // The slots after the sold one moved up: their objects go and come back with the new contents.
+            for (int i = index; i < before; ++i) {
+                Writer w;
+                w.u64((uint64_t)itemGuidFor(false, i));
+                send(0x0AA, w.b);   // SMSG_DESTROY_OBJECT
+            }
+            sendInventory();
+            sendSelfFields();
+            return;
+        }
+        default:
+            return;
+    }
 }
 
 void OfflineSession::sendPartyList() {
@@ -1422,6 +1532,29 @@ void OfflineSession::update(uint32_t nowMs) {
                 handleLoot(op, p.second, nowMs);
                 break;
             case CMSG_MESSAGECHAT: handleChat(p.second, nowMs); break;
+            case CMSG_GOSSIP_HELLO: case CMSG_LIST_INVENTORY: case CMSG_BUY_ITEM: case CMSG_SELL_ITEM:
+                handleVendor(op, p.second, nowMs);
+                break;
+            case CMSG_AUTOEQUIP_ITEM: {   // WoWVita: u8 bag (255 = the character), u8 slot (23..38 = the backpack)
+                Reader r(p.second);
+                const uint8_t bag = r.u8(), slot = r.u8();
+                if (r.bad || bag != 255 || slot < 23 || slot > 38) break;
+                const int index = slot - 23;
+                const uint8_t before = world_.playerProfile().bagCount;
+                int changed[2];
+                const int why = world_.equipFromBag(index, changed);
+                if (why) {
+                    errorLine(why == 2 ? "You must reach a higher level to use that item."
+                              : why == 3 ? "Inventory is full." : "You can't equip that.", nowMs);
+                    break;
+                }
+                // the objects of the touched slots go and come back with their new contents
+                auto destroy = [&](uint64_t g) { Writer w; w.u64(g); send(0x0AA, w.b); };
+                for (int i = index; i < std::max<int>(before, world_.playerProfile().bagCount); ++i) destroy(itemGuidFor(false, i));
+                for (int c : changed) if (c >= 0) destroy(itemGuidFor(true, c));
+                sendInventory();
+                break;
+            }
             case CMSG_REPOP_REQUEST: case CMSG_RECLAIM_CORPSE: handleDeath(op, p.second, nowMs); break;
             case CMSG_NAME_QUERY: case CMSG_CREATURE_QUERY: case CMSG_GAMEOBJECT_QUERY:
             case CMSG_ITEM_QUERY_SINGLE: case CMSG_REQUEST_PARTY_MEMBER_STATS: case CMSG_SET_SELECTION:

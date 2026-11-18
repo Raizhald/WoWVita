@@ -746,6 +746,7 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
         if (const CreatureTemplate* t = data_ ? data_->creature(e.entry) : nullptr) {
             if (killer.self || killer.bot) {
                 addXp(*player_, t->xp, nowMs);
+                if (onKillCredit) onKillCredit(e.entry, e.guid);   // WoWVita: the quests of the server layer
                 // Quest progress for every accepted kill quest.
                 for (QuestLogEntry& q : questLog_) {
                     const QuestDef* qd = nullptr;
@@ -814,6 +815,18 @@ void World::rollLoot(Entity& e) {
     if (!lt) return;
     if (lt->moneyMax > lt->moneyMin) e.lootMoney = (uint32_t)rng_.range((int32_t)lt->moneyMin, (int32_t)lt->moneyMax);
     else e.lootMoney = lt->moneyMin;
+    // WoWVita: quest drops first (only while a quest in the log still wants the item)
+    auto qd = data_->questLoot.find(t->lootId);
+    if (qd != data_->questLoot.end() && questItemWanted)
+        for (const QuestDrop& d : qd->second) {
+            if (e.lootCount >= kMaxLoot) break;
+            if (!questItemWanted(d.item)) continue;
+            if ((uint32_t)rng_.below(10000) >= d.chance) continue;
+            LootSlotState& s = e.loot[e.lootCount++];
+            s.item = d.item;
+            s.count = 1;
+            s.taken = false;
+        }
     for (const LootItem& li : lt->items) {
         if (e.lootCount >= kMaxLoot) break;
         if ((uint32_t)rng_.below(10000) >= li.chance) continue;
@@ -887,6 +900,34 @@ void World::addItemToPlayer(uint32_t entry, uint16_t count, uint32_t nowMs) {
         emit(SimEvent::ItemGained, player_->guid, entry, 0, b.count);
     }
     (void)nowMs;
+}
+
+// ---------------------------------------------------------------- WoWVita: the bag for quests
+uint32_t World::countPlayerItem(uint32_t entry) const {
+    const CharacterProfile& p = profiles_[0];
+    uint32_t n = 0;
+    for (uint8_t i = 0; i < p.bagCount; ++i)
+        if (p.bag[i].entry == entry) n += p.bag[i].count ? p.bag[i].count : 1;
+    return n;
+}
+
+uint32_t World::removePlayerItem(uint32_t entry, uint32_t count) {
+    CharacterProfile& p = profiles_[0];
+    uint32_t removed = 0;
+    for (int i = (int)p.bagCount - 1; i >= 0 && removed < count; --i) {
+        if (p.bag[i].entry != entry) continue;
+        const uint16_t have = p.bag[i].count ? p.bag[i].count : 1;
+        const uint32_t take = std::min<uint32_t>(have, count - removed);
+        removed += take;
+        if (take >= have) {
+            for (int k = i; k + 1 < p.bagCount; ++k) { p.bag[k] = p.bag[k + 1]; p.bag[k].slot = (uint8_t)k; }
+            --p.bagCount;
+            p.bag[p.bagCount] = BagItem();
+        } else {
+            p.bag[i].count = (uint16_t)(have - take);
+        }
+    }
+    return removed;
 }
 
 // ---------------------------------------------------------------- WoWVita: vendors

@@ -108,6 +108,28 @@ private:
     void handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs);   // WoWVita
     void sendListInventory(uint64_t npc);
 
+    // ---- WoWVita: quests (offline_quests.cpp)
+    bool handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs);
+    bool questHello(uint64_t npc, uint16_t op, bool vendor);
+    void questKill(uint32_t entry, uint64_t guid);
+    void questItem(uint32_t item, uint32_t count);
+    bool questWantsItem(uint32_t item) const;
+    const QuestFull* questDef(uint32_t id) const;
+    int questSlot(uint32_t id) const;
+    bool questRewarded(uint32_t id) const;
+    bool questDone(const QuestLogEntry& e) const;
+    bool questCanTake(const QuestFull& q) const;
+    uint32_t questXp(const QuestFull& q) const;
+    uint32_t questMarkFor(const Entity& npc) const;
+    std::vector<std::pair<uint32_t, uint32_t>> questMenu(const Entity& npc) const;
+    void questLogFields(std::vector<std::pair<uint16_t, uint32_t>>& f) const;
+    void sendQuestStatus(uint64_t npc);
+    void sendQuestDetails(uint64_t npc, const QuestFull& q);
+    void sendQuestRequestItems(uint64_t npc, const QuestFull& q, bool done);
+    void sendQuestOfferReward(uint64_t npc, const QuestFull& q);
+    void sendQuestQuery(uint32_t id);
+    bool questFieldsDirty_ = false;
+
     // ---- events / state
     void dispatchEvents(uint32_t nowMs);
     void sendMovementToClient(uint32_t nowMs);

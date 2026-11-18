@@ -229,6 +229,8 @@ void addCreatureCreate(UpdateBuilder& u, const Entity& ent) {
 
 // ---------------------------------------------------------------- setup
 void OfflineSession::setup(const WorldData* data, const char* savePath) {
+    world_.onKillCredit = [this](uint32_t entry, uint64_t guid) { questKill(entry, guid); };   // WoWVita: quests
+    world_.questItemWanted = [this](uint32_t item) { return questWantsItem(item); };
     data_ = data;
     savePath_ = savePath ? savePath : "";
     world_.setData(data);
@@ -446,7 +448,9 @@ void OfflineSession::syncProfiles() {
     for (int i = 0; i < kMaxParty + 1; ++i) world_.syncProfileFromEntity(i);
     save_.player = world_.playerProfile();
     for (int i = 0; i < kMaxParty; ++i) save_.bots[(size_t)i] = world_.botProfile(i);
-    save_.quests = world_.questLog();
+    // WoWVita: the quest log of a whole-world pack is kept by offline_quests.cpp in save_.quests; the core's own
+    // (single-objective "QUES" quests of the sample) only when the pack has those
+    if (data_ && !data_->quests.empty()) save_.quests = world_.questLog();
     save_.commands.tank = world_.bot(0) ? world_.bot(0)->tacticalMode : 1;
     save_.commands.healer = world_.bot(1) ? world_.bot(1)->tacticalMode : 1;
     save_.commands.dps1 = world_.bot(2) ? world_.bot(2)->tacticalMode : 1;
@@ -529,6 +533,12 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_NEXT_LEVEL_XP, p->nextLevelXp);
     f.set(UF::PLAYER_FIELD_COINAGE, p->money);
     f.set(UF::PLAYER_FLAGS, ghost_ ? 0x10u : 0u);
+    {   // WoWVita: the quest log
+        std::vector<std::pair<uint16_t, uint32_t>> ql;
+        questLogFields(ql);
+        for (const auto& [field, v] : ql) f.set(field, v);
+        questFieldsDirty_ = false;
+    }
     UpdateBuilder u;
     addValues(u, p->guid, f);
     sendUpdateObject(u.finish());
@@ -638,6 +648,8 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
         case CMSG_QUESTGIVER_HELLO:
         case CMSG_LIST_INVENTORY:
             if (!v) return;
+            // WoWVita: a quest giver shows its quests (and its goods as a gossip option)
+            if (op != CMSG_LIST_INVENTORY && near && questHello(npc, op, isVendor)) return;
             if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
                 if (op != CMSG_LIST_INVENTORY && v->npcFlags) errorLine("This NPC has nothing to say offline yet.", nowMs);
                 return;
@@ -902,6 +914,7 @@ void OfflineSession::sendCastFailed(const Entity& caster, uint32_t spell, uint8_
 
 // ---------------------------------------------------------------- login
 void OfflineSession::loginPackets(uint32_t nowMs) {
+    questFieldsDirty_ = true;   // WoWVita: the quest log goes with the first update
     (void)nowMs;
     Entity* p = world_.player();
     if (!p || !data_) return;
@@ -1439,6 +1452,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
             case SimEvent::ItemGained:
                 inventoryDirty = true;
                 saveSoon_ = true;
+                questItem((uint32_t)e.b, (uint32_t)std::max<int32_t>(1, e.value));   // WoWVita
                 if (data_) {
                     const ItemTemplate* it = data_->item((uint32_t)e.b);
                     if (it) sendChat(0x0A, 0, "You receive loot: " + it->name + " x" + std::to_string((int)e.value) + ".");
@@ -1597,6 +1611,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 send(0x04D);   // SMSG_LOGOUT_COMPLETE
                 break;
             default:
+                if (handleQuest(op, p.second, nowMs)) break;   // WoWVita
                 if (trace && std::find(unhandledSeen_.begin(), unhandledSeen_.end(), op) == unhandledSeen_.end() &&
                     unhandledSeen_.size() < 64) {
                     unhandledSeen_.push_back(op);
@@ -1629,6 +1644,7 @@ void OfflineSession::update(uint32_t nowMs) {
             sendPartyStats();
         }
     }
+    if (questFieldsDirty_ && inWorld_) sendSelfFields();   // WoWVita: quest progress
     // WoWVita: every 20 s, and 2 s after anything worth keeping (a purchase, loot, a level) - the Vita is often
     // closed with the PS button, which never reaches leaveWorld()
     if (nowMs - lastSave_ >= 20000 || (saveSoon_ && nowMs - lastSave_ >= 2000)) {

@@ -286,6 +286,76 @@ bool readVendors(Bin& b, WorldData& w) {   // WoWVita
     return !b.bad;
 }
 
+std::string lstr(Bin& b) {   // WoWVita: u16-length text up to 4000 bytes (quest texts)
+    const uint16_t len = b.u16();
+    const uint8_t* p = (!b.bad && len <= 4000) ? b.take(len) : nullptr;
+    if (!p) { b.bad = true; return std::string(); }
+    return std::string((const char*)p, len);
+}
+
+bool readQuests2(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 16384) return false;
+    w.questsFull.clear();
+    w.questsFull.reserve(n);
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        QuestFull q;
+        q.id = b.u32(); q.level = b.u16(); q.minLevel = b.u16(); q.races = b.u32(); q.classes = b.u32();
+        q.zoneOrSort = b.u32(); q.type = b.u32(); q.flags = b.u32(); q.special = b.u32();
+        q.prev = (int32_t)b.u32(); q.nextInChain = b.u32(); q.srcItem = b.u32(); q.srcCount = b.u8();
+        q.money = (int32_t)b.u32(); q.moneyMaxLevel = b.u32();
+        q.title = lstr(b); q.details = lstr(b); q.objectives = lstr(b); q.offerReward = lstr(b);
+        q.requestItems = lstr(b); q.endText = lstr(b);
+        for (std::string& t : q.objText) t = lstr(b);
+        for (int k = 0; k < 4; ++k) { q.killEntry[k] = b.u32(); q.killCount[k] = b.u16(); }
+        for (int k = 0; k < 4; ++k) { q.itemEntry[k] = b.u32(); q.itemCount[k] = b.u16(); }
+        for (int k = 0; k < 6; ++k) { q.choiceItem[k] = b.u32(); q.choiceCount[k] = b.u16(); }
+        for (int k = 0; k < 4; ++k) { q.rewItem[k] = b.u32(); q.rewCount[k] = b.u16(); }
+        uint16_t ns = b.u16();
+        if (ns > 64) return false;
+        for (uint16_t k = 0; k < ns && !b.bad; ++k) q.starters.push_back(b.u32());
+        uint16_t ne = b.u16();
+        if (ne > 64) return false;
+        for (uint16_t k = 0; k < ne && !b.bad; ++k) q.enders.push_back(b.u32());
+        if (!b.bad) w.questsFull.push_back(std::move(q));
+    }
+    w.questIndex.clear(); w.questsStarted.clear(); w.questsEnded.clear();
+    for (uint32_t i = 0; i < (uint32_t)w.questsFull.size(); ++i) {
+        const QuestFull& q = w.questsFull[i];
+        w.questIndex[q.id] = i;
+        for (uint32_t c : q.starters) w.questsStarted[c].push_back(q.id);
+        for (uint32_t c : q.enders) w.questsEnded[c].push_back(q.id);
+    }
+    return !b.bad;
+}
+
+bool readQuestLoot(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.questLoot.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t lid = b.u32();
+        const uint16_t k = b.u16();
+        if (k > 64) return false;
+        std::vector<QuestDrop> v;
+        for (uint16_t j = 0; j < k && !b.bad; ++j) { QuestDrop d; d.item = b.u32(); d.chance = b.u16(); v.push_back(d); }
+        w.questLoot[lid] = std::move(v);
+    }
+    return !b.bad;
+}
+
+bool readGreetings(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.greetings.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t e = b.u32();
+        std::string t = lstr(b);
+        if (!b.bad) w.greetings[e] = std::move(t);
+    }
+    return !b.bad;
+}
+
 bool readHostility(Bin& b, WorldData& w) {
     uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -463,6 +533,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("BOTS"): ok = readBots(b, out); haveBots = true; break;
             case fourcc("HOST"): ok = readHostility(b, out); break;
             case fourcc("VEND"): ok = readVendors(b, out); break;
+            case fourcc("QST2"): ok = readQuests2(b, out); break;
+            case fourcc("QLOT"): ok = readQuestLoot(b, out); break;
+            case fourcc("GOSS"): ok = readGreetings(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }
         if (!ok) { err = "malformed section"; return false; }

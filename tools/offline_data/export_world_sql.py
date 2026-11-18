@@ -27,14 +27,78 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND",)   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
-          "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template"}
+          "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
+          "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text"}
 
 CREATE_RE = re.compile(r"^CREATE TABLE `(\w+)`")
 COL_RE = re.compile(r"^\s+`(\w+)`")
 INSERT_RE = re.compile(r"^INSERT INTO `(\w+)`\s*(\(([^)]*)\))?\s*VALUES\s*", re.I)
+
+
+_ESC = {"n": "\n", "r": "", "t": "\t", "0": "", "Z": "", "\\": "\\", "'": "'", '"': '"'}
+
+
+def sql_rows(text):
+    """VALUES (...),(...) -> lists of values (str for quoted, int/float/None otherwise). Commas and parentheses
+    inside strings and MySQL backslash escapes are handled (the upstream splitter cuts strings at commas)."""
+    rows, i, n = [], 0, len(text)
+    while i < n:
+        if text[i] != "(":
+            i += 1
+            continue
+        i += 1
+        row, tok, quoted = [], [], False
+        while i < n:
+            ch = text[i]
+            if ch == "'":
+                quoted = True
+                i += 1
+                buf = []
+                while i < n:
+                    c = text[i]
+                    if c == "\\" and i + 1 < n:
+                        buf.append(_ESC.get(text[i + 1], text[i + 1]))
+                        i += 2
+                        continue
+                    if c == "'":
+                        if i + 1 < n and text[i + 1] == "'":
+                            buf.append("'")
+                            i += 2
+                            continue
+                        i += 1
+                        break
+                    buf.append(c)
+                    i += 1
+                tok = buf
+                continue
+            if ch == "," or ch == ")":
+                v = "".join(tok)
+                if quoted:
+                    row.append(v)
+                else:
+                    v = v.strip()
+                    if v.upper() == "NULL" or v == "":
+                        row.append(None)
+                    else:
+                        try:
+                            row.append(int(v))
+                        except ValueError:
+                            try:
+                                row.append(float(v))
+                            except ValueError:
+                                row.append(v)
+                tok, quoted = [], False
+                i += 1
+                if ch == ")":
+                    break
+                continue
+            tok.append(ch)
+            i += 1
+        rows.append(row)
+    return rows
 
 
 def open_text(path):
@@ -74,7 +138,7 @@ def load_dump(paths):
                     continue
                 body = line[m.end():].rstrip().rstrip(";")
                 dst = tables.setdefault(table, [])
-                for r in split_sql_values(body):
+                for r in sql_rows(body):
                     if len(r) == len(names):
                         dst.append(dict(zip(names, r)))
     return tables
@@ -134,6 +198,19 @@ def friendly_to(a, b):
 
 
 # --------------------------------------------------------------------------- the pack
+def long_s(b, text, limit=4000):
+    """A u16-length UTF-8 string past Bin.s's 500 bytes (quest texts), cut on a character boundary."""
+    raw = (text or "").encode("utf-8")
+    if len(raw) > limit:
+        raw = raw[:limit]
+        while raw and (raw[-1] & 0xC0) == 0x80:
+            raw = raw[:-1]
+        if raw and raw[-1] >= 0xC0:
+            raw = raw[:-1]
+    b.u16(len(raw))
+    b.b += raw
+
+
 def newest_patch(rows, key):
     """vMaNGOS keeps one row per content patch: take the newest one per entry (CMaNGOS has no 'patch')."""
     best = {}
@@ -247,6 +324,8 @@ def build(tables, factions, map_id, report, player_faction=1):
     for r in tables.get("reference_loot_template", []):
         refs.setdefault(int(num(g(r, "entry"))), []).append(r)
 
+    quest_drops = []
+
     def entries_of(rows, scale=1.0, depth=0):
         out = []
         groups = {}
@@ -258,8 +337,10 @@ def build(tables, factions, map_id, report, player_faction=1):
             share = max(0.0, 100.0 - explicit) / len(zero) if (gid and zero) else 100.0
             for r in rs:
                 chance = num(g(r, "ChanceOrQuestChance", "chance"))
-                if chance < 0:
-                    continue                                   # quest item (no quests offline)
+                if chance < 0:                                 # a quest drop: only while a quest wants it (QLOT)
+                    if depth == 0 and int(num(g(r, "mincountOrRef", "mincount", default=1))) > 0:
+                        quest_drops.append((int(num(g(r, "item"))), -chance * scale))
+                    continue
                 if chance == 0:
                     chance = share
                 mnc = int(num(g(r, "mincountOrRef", "mincount", default=1)))
@@ -272,8 +353,12 @@ def build(tables, factions, map_id, report, player_faction=1):
         return out
 
     loot_tables, item_needed = [], set()
+    qloot = {}
     for lid in sorted(loot_ids):
+        quest_drops = []
         ents = [e for e in entries_of(by_entry.get(lid, [])) if e[0] in items_db]
+        if quest_drops:
+            qloot[lid] = [(i, c) for i, c in quest_drops if i in items_db][:16]
         ents.sort(key=lambda e: -e[1])
         ents = ents[:64]
         for e in ents:
@@ -307,6 +392,107 @@ def build(tables, factions, map_id, report, player_faction=1):
         if goods:
             vendors[t["entry"]] = goods[:255]
             item_needed.update(goods)
+
+    # ---- quests: given and taken by creatures of this map; only kinds the offline core can finish
+    spawned = {t["entry"] for t in crea}
+    starters, enders = {}, {}
+    for r in tables.get("creature_questrelation", []):
+        c = int(num(g(r, "id")))
+        if c in spawned:
+            starters.setdefault(int(num(g(r, "quest"))), []).append(c)
+    for r in tables.get("creature_involvedrelation", []):
+        c = int(num(g(r, "id")))
+        if c in spawned:
+            enders.setdefault(int(num(g(r, "quest"))), []).append(c)
+    obtainable = set()                       # items a player can get here: creature loot, quest drops, vendors
+    for lid, lo, hi, ents in loot_tables:
+        obtainable.update(e[0] for e in ents)
+    for lid, drops in qloot.items():
+        obtainable.update(i for i, _ in drops)
+    for goods in vendors.values():
+        obtainable.update(goods)
+    quests_db = newest_patch(tables.get("quest_template", []), ("entry",))
+    for qid, q in quests_db.items():         # ... and what quests given here hand out (letters, rewards)
+        if qid in starters:
+            for k in ["SrcItemId"] + [f"RewItemId{i}" for i in (1, 2, 3, 4)] + [f"RewChoiceItemId{i}" for i in range(1, 7)]:
+                v = int(num(g(q, k)))
+                if v:
+                    obtainable.add(v)
+    quests, skipped_q = [], {}
+
+    def skip(why):
+        skipped_q[why] = skipped_q.get(why, 0) + 1
+
+    for qid in sorted(quests_db):
+        q = quests_db[qid]
+        if qid not in starters or qid not in enders:
+            continue                         # not given and taken on this map by creatures
+        if int(num(g(q, "SpecialFlags"))) & 2 or int(num(g(q, "QuestFlags"))) & 4:
+            skip("exploration / scripted event"); continue
+        if int(num(g(q, "LimitTime"))) > 0:
+            skip("timed"); continue
+        if int(num(g(q, "RequiredSkill"))) or int(num(g(q, "RepObjectiveFaction"))):
+            skip("profession / reputation"); continue
+        if any(int(num(g(q, f"ReqSpellCast{i}"))) for i in (1, 2, 3, 4)):
+            skip("cast a spell"); continue
+        objs, bad = [], False
+        for i in (1, 2, 3, 4):
+            c = int(num(g(q, f"ReqCreatureOrGOId{i}")))
+            n = int(num(g(q, f"ReqCreatureOrGOCount{i}")))
+            if c < 0 and n:
+                bad = "use a game object"
+            elif c and n and c not in spawned:
+                bad = "kill a creature not on this map"
+            objs.append((max(0, c), n if c > 0 else 0))
+        src = int(num(g(q, "SrcItemId")))
+        items_req = []
+        for i in (1, 2, 3, 4):
+            it = int(num(g(q, f"ReqItemId{i}")))
+            n = int(num(g(q, f"ReqItemCount{i}")))
+            if it and n and it not in obtainable and it != src:
+                bad = bad or "an item that cannot be got here"
+            items_req.append((it if n else 0, n if it else 0))
+        if bad:
+            skip(bad); continue
+        rew = [(int(num(g(q, f"RewItemId{i}"))), int(num(g(q, f"RewItemCount{i}")))) for i in (1, 2, 3, 4)]
+        cho = [(int(num(g(q, f"RewChoiceItemId{i}"))), int(num(g(q, f"RewChoiceItemCount{i}")))) for i in range(1, 7)]
+        rew = [(i, n) if i in items_db and n else (0, 0) for i, n in rew]
+        cho = [(i, n) if i in items_db and n else (0, 0) for i, n in cho]
+        for i, n in rew + cho + items_req + [(src, 1)]:
+            if i:
+                item_needed.add(i)
+        quests.append(dict(
+            id=qid, level=int(num(g(q, "QuestLevel", default=1))), minlevel=int(num(g(q, "MinLevel"))),
+            races=int(num(g(q, "RequiredRaces"))), classes=int(num(g(q, "RequiredClasses"))),
+            zone=int(num(g(q, "ZoneOrSort"))), type=int(num(g(q, "Type"))), flags=int(num(g(q, "QuestFlags"))),
+            special=int(num(g(q, "SpecialFlags"))), prev=int(num(g(q, "PrevQuestId"))),
+            next=int(num(g(q, "NextQuestInChain"))), src=src, srccount=int(num(g(q, "SrcItemCount", default=1))) or 1,
+            money=int(num(g(q, "RewOrReqMoney"))), moneymax=int(num(g(q, "RewMoneyMaxLevel"))),
+            texts=[str(g(q, k, default="") or "") for k in ("Title", "Details", "Objectives", "OfferRewardText",
+                                                             "RequestItemsText", "EndText")],
+            objtext=[str(g(q, f"ObjectiveText{i}", default="") or "") for i in (1, 2, 3, 4)],
+            kills=objs, items=items_req, rew=rew, cho=cho,
+            starters=sorted(set(starters[qid])), enders=sorted(set(enders[qid]))))
+    kept = {q["id"] for q in quests}
+    for q in quests:                         # a step left out of a chain must not lock the rest
+        if q["prev"] and abs(q["prev"]) not in kept:
+            q["prev"] = 0
+
+    # ---- what NPCs say first (gossip_menu -> npc_text)
+    menus = {}
+    for r in tables.get("gossip_menu", []):
+        menus.setdefault(int(num(g(r, "entry"))), int(num(g(r, "text_id"))))
+    texts = {int(num(g(r, "ID"))): r for r in tables.get("npc_text", [])}
+    greetings = {}
+    for t in crea:
+        if not t["npc"]:
+            continue
+        mid = int(num(g(templates[t["entry"]], "GossipMenuId", "gossip_menu_id")))
+        tr = texts.get(menus.get(mid, -1))
+        if tr:
+            txt = str(g(tr, "text0_0", default="") or "") or str(g(tr, "text0_1", default="") or "")
+            if txt:
+                greetings[t["entry"]] = txt[:600]
 
     # ---- items: what the loot and the companions need (the sample's item ids are in the DB too)
     for e in (25, 38, 2589, 750):
@@ -392,6 +578,47 @@ def build(tables, factions, map_id, report, player_faction=1):
             vb.u32(x); vb.u16(min(65535, by_item[x]["buycount"]))
     sec["VEND"] = vb.b
 
+    qb = Bin()   # WoWVita "QST2" (net/offline/offline_data.cpp readQuests2)
+    qb.u32(len(quests))
+    for q in quests:
+        qb.u32(q["id"]); qb.u16(max(0, q["level"]) & 0xFFFF); qb.u16(q["minlevel"]); qb.u32(q["races"]); qb.u32(q["classes"])
+        qb.u32(q["zone"] & 0xFFFFFFFF); qb.u32(q["type"]); qb.u32(q["flags"]); qb.u32(q["special"])
+        qb.u32(q["prev"] & 0xFFFFFFFF); qb.u32(q["next"]); qb.u32(q["src"]); qb.u8(min(255, q["srccount"]))
+        qb.u32(q["money"] & 0xFFFFFFFF); qb.u32(q["moneymax"])
+        for t in q["texts"]:
+            long_s(qb, t)
+        for t in q["objtext"]:
+            qb.s(t[:200])
+        for c, n in q["kills"]:
+            qb.u32(c); qb.u16(n)
+        for i, n in q["items"]:
+            qb.u32(i); qb.u16(n)
+        for i, n in q["cho"]:
+            qb.u32(i); qb.u16(n)
+        for i, n in q["rew"]:
+            qb.u32(i); qb.u16(n)
+        qb.u16(len(q["starters"]))
+        for c in q["starters"]:
+            qb.u32(c)
+        qb.u16(len(q["enders"]))
+        for c in q["enders"]:
+            qb.u32(c)
+    sec["QST2"] = qb.b
+
+    lq = Bin()   # "QLOT": quest drops per loot table, rolled only while a quest wants the item
+    lq.u32(len(qloot))
+    for lid in sorted(qloot):
+        lq.u32(lid); lq.u16(len(qloot[lid]))
+        for i, c in qloot[lid]:
+            lq.u32(i); lq.u16(max(1, min(10000, int(round(c * 100)))))
+    sec["QLOT"] = lq.b
+
+    gb = Bin()   # "GOSS": an NPC's greeting
+    gb.u32(len(greetings))
+    for e in sorted(greetings):
+        gb.u32(e); long_s(gb, greetings[e])
+    sec["GOSS"] = gb.b
+
     hb = Bin()
     hb.u32(len(host))
     for a, b in host:
@@ -413,7 +640,9 @@ def build(tables, factions, map_id, report, player_faction=1):
     report["counts"] = dict(creatures=len(crea), spawns=len(spawn_rows), invisible_skipped=skipped_invisible,
                             items=len(items), loot=len(loot_tables), hostile_factions=hostile_n,
                             neutral_factions=neutral_n, vendors=len(vlist),
-                            vendor_items=sum(len(gl) for _, gl in vlist))
+                            vendor_items=sum(len(gl) for _, gl in vlist), quests=len(quests),
+                            quest_drop_tables=len(qloot), greetings=len(greetings),
+                            **{"quests_left_out_" + k.replace(" ", "_").replace("/", ""): v for k, v in skipped_q.items()})
     return sec
 
 

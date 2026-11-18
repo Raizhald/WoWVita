@@ -23,7 +23,7 @@ No game files are included. Do not share your converted files.
 
 **Offline** in the main menu plays without a server. Without anything else it is a small Northshire sample; with
 **`offline.w3do`** in `ux0:data/wowvita/` it is the whole Eastern Kingdoms: creatures with their loot, red ones attack,
-yellow ones only fight back, 473 vendors (buy, sell, wear what you buy). Not there yet: quests, trainers, talents,
+yellow ones only fight back, 473 vendors (buy, sell, wear what you buy), about 1000 quests. Not there yet: trainers, talents,
 most creature spells. The character saves every 20 s. How to make `offline.w3do`: [`docs/OFFLINE_WORLD.md`](docs/OFFLINE_WORLD.md).
 
 ## Controls

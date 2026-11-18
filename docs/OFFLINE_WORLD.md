@@ -28,10 +28,18 @@ Vendors: the pack's `VEND` section (npc_vendor / npc_vendor_template; limited-st
 vendor opens its list, buying and selling change the backpack and the money, and backpack items can be worn
 (`CMSG_AUTOEQUIP_ITEM`: weapon damage and armour follow). No buyback, repairs or bags yet.
 
+Quests (`QST2`, `QLOT`, `GOSS` sections, `net/offline/offline_quests.cpp`): the server database's quest_template with
+the creatures that give and take each quest. Quest giver marks, the quest list / gossip with the NPC's greeting,
+details, accept, kill and item progress (quest drops only while a quest wants the item), request items, offer
+reward, reward choice, money and experience (Quest::XPValue), chains (the next quest offered at once), abandon.
+The log and the turned-in quests are saved. Left out by the exporter, because the offline core cannot finish them:
+exploration and scripted events, game objects, spell casts, professions / reputation, timed quests, and items
+that cannot be got on the map. Eastern Kingdoms: 1055 quests (Northshire 11 of 12, Elwynn 26 of 36, Westfall 22 of 35).
+
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.
 
-Still missing (the offline core's own limits): quests, trainers, talents, creature spells beyond the
+Still missing (the offline core's own limits): trainers, talents, creature spells beyond the
 documented subset, pathfinding, other maps. The start is Northshire Abbey.
 
 Test: `net/tests/run_offline_grid.sh offline.w3do`.

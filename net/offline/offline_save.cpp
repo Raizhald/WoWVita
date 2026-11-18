@@ -101,6 +101,10 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         for (uint16_t k : q.items) payload.u16(k);
         payload.u8(q.complete ? 1 : 0);
     }
+    // WoWVita: the turned-in quests. Older readers stop before it; an older save simply has none.
+    payload.u32(0x31445151u);   // "QQD1"
+    payload.u32((uint32_t)d.rewarded.size());
+    for (uint32_t id : d.rewarded) payload.u32(id);
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -189,6 +193,14 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
         for (uint16_t& k : q.items) k = p.u16();
         q.complete = p.u8() != 0;
         d.quests.push_back(q);
+    }
+    if (!p.bad && p.left() >= 8) {   // WoWVita: the turned-in quests
+        const uint32_t magic = p.u32();
+        if (magic == 0x31445151u) {
+            const uint32_t n = p.u32();
+            if (n > 16384 || (size_t)n * 4 > p.left()) { err = "malformed quest history"; return false; }
+            for (uint32_t i = 0; i < n; ++i) d.rewarded.push_back(p.u32());
+        }
     }
     if (p.bad) { err = "malformed save payload"; return false; }
     out = std::move(d);

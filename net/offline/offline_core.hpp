@@ -20,6 +20,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -175,6 +176,31 @@ struct Spawn {
 
 struct HostilePair { uint32_t a = 0, b = 0; };
 
+// WoWVita: a quest from the server database ("QST2" section): what the original quest_template holds that the
+// client shows or the offline server needs. Objectives: up to 4 kills, 4 items.
+struct QuestFull {
+    uint32_t id = 0;
+    uint16_t level = 1, minLevel = 0;
+    uint32_t races = 0, classes = 0, zoneOrSort = 0, type = 0, flags = 0, special = 0;
+    int32_t prev = 0;                  // PrevQuestId: > 0 must have been rewarded, < 0 must be in the log
+    uint32_t nextInChain = 0, srcItem = 0;
+    uint8_t srcCount = 1;
+    int32_t money = 0;                 // RewOrReqMoney (< 0: the quest costs that much)
+    uint32_t moneyMaxLevel = 0;        // RewMoneyMaxLevel: the experience is derived from it (Quest::XPValue)
+    std::string title, details, objectives, offerReward, requestItems, endText;
+    std::string objText[4];
+    uint32_t killEntry[4] = {0, 0, 0, 0};
+    uint16_t killCount[4] = {0, 0, 0, 0};
+    uint32_t itemEntry[4] = {0, 0, 0, 0};
+    uint16_t itemCount[4] = {0, 0, 0, 0};
+    uint32_t choiceItem[6] = {0, 0, 0, 0, 0, 0};
+    uint16_t choiceCount[6] = {0, 0, 0, 0, 0, 0};
+    uint32_t rewItem[4] = {0, 0, 0, 0};
+    uint16_t rewCount[4] = {0, 0, 0, 0};
+    std::vector<uint32_t> starters, enders;   // creature entries
+};
+struct QuestDrop { uint32_t item = 0; uint16_t chance = 0; };   // chance in 1/100 %
+
 // WoWVita: what a vendor sells ("VEND" section): the item and how many come in one purchase (arrows: 200)
 struct VendorGoods { uint32_t item = 0; uint16_t buyCount = 1; };
 
@@ -192,6 +218,15 @@ struct WorldData {
     std::vector<HostilePair> hostility;
     std::array<BotTemplate, kMaxParty> bots{};
     std::unordered_map<uint32_t, std::vector<VendorGoods>> vendors;   // WoWVita: creature entry -> its goods
+    std::vector<QuestFull> questsFull;                                // WoWVita "QST2"
+    std::unordered_map<uint32_t, uint32_t> questIndex;                // quest id -> questsFull index
+    std::unordered_map<uint32_t, std::vector<uint32_t>> questsStarted, questsEnded;   // creature entry -> quest ids
+    std::unordered_map<uint32_t, std::vector<QuestDrop>> questLoot;   // "QLOT": loot id -> quest drops
+    std::unordered_map<uint32_t, std::string> greetings;              // "GOSS": creature entry -> greeting
+    const QuestFull* questFull(uint32_t id) const {
+        auto it = questIndex.find(id);
+        return it == questIndex.end() ? nullptr : &questsFull[it->second];
+    }
 
     const CreatureTemplate* creature(uint32_t entry) const;
     const LootTable* lootTable(uint32_t id) const;
@@ -435,6 +470,13 @@ public:
     // player: 1 cannot be worn, 2 too low level, 3 no room for the off-hand item. *slotsOut: the equipment slots
     // that changed (up to 2).
     int equipFromBag(int index, int slotsOut[2]);
+    // WoWVita quests: kill credit (the creature's entry and guid), quest drops while a quest wants them,
+    // the bag for item objectives and turn-ins
+    std::function<void(uint32_t entry, uint64_t guid)> onKillCredit;
+    std::function<bool(uint32_t item)> questItemWanted;
+    uint32_t countPlayerItem(uint32_t entry) const;
+    uint32_t removePlayerItem(uint32_t entry, uint32_t count);   // how many were removed
+    void syncPlayerMoney() { if (player_) profiles_[0].money = player_->money; }
     void recomputeGear();   // weapon damage / speed and armour from what is worn
     void addMoneyToPlayer(uint32_t copper, uint32_t nowMs);
     void addXp(Entity& e, uint32_t xp, uint32_t nowMs);

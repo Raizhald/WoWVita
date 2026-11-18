@@ -13,10 +13,12 @@
 // server would have produced after LOGIN_VERIFY_WORLD.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <functional>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include "../client.hpp"
 #include "offline_core.hpp"
@@ -39,6 +41,8 @@ public:
     // WoWVita: diagnostics (login.cpp writes them to offline_trace.txt): NPC interaction and each opcode the
     // offline server does not handle (once per opcode)
     std::function<void(const std::string&)> trace;
+    // tests: a quest counts as turned in (to reach the middle of a chain)
+    void testMarkRewarded(uint32_t id) { if (std::find(save_.rewarded.begin(), save_.rewarded.end(), id) == save_.rewarded.end()) save_.rewarded.push_back(id); questFieldsDirty_ = true; }
     // Load the profile, or create a fresh one. The four companions come from the .w3do templates.
     bool open(std::string& err);
     bool save(std::string* err = nullptr);
@@ -111,7 +115,10 @@ private:
     // ---- WoWVita: quests (offline_quests.cpp)
     bool handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool questHello(uint64_t npc, uint16_t op, bool vendor);
-    void questKill(uint32_t entry, uint64_t guid);
+    void questKill(uint32_t entry, uint64_t guid, bool go = false);
+    bool questWantsObject(uint32_t goEntry) const;
+    struct Giver { bool ok = false, go = false; uint32_t entry = 0; float x = 0, y = 0; };
+    Giver giverOf(uint64_t guid) const;
     void questItem(uint32_t item, uint32_t count);
     bool questWantsItem(uint32_t item) const;
     const QuestFull* questDef(uint32_t id) const;
@@ -120,8 +127,8 @@ private:
     bool questDone(const QuestLogEntry& e) const;
     bool questCanTake(const QuestFull& q) const;
     uint32_t questXp(const QuestFull& q) const;
-    uint32_t questMarkFor(const Entity& npc) const;
-    std::vector<std::pair<uint32_t, uint32_t>> questMenu(const Entity& npc) const;
+    uint32_t questMarkFor(uint32_t entry, bool go) const;
+    std::vector<std::pair<uint32_t, uint32_t>> questMenu(uint32_t entry, bool go) const;
     void questLogFields(std::vector<std::pair<uint16_t, uint32_t>>& f) const;
     void sendQuestStatus(uint64_t npc);
     void sendQuestDetails(uint64_t npc, const QuestFull& q);
@@ -129,6 +136,28 @@ private:
     void sendQuestOfferReward(uint64_t npc, const QuestFull& q);
     void sendQuestQuery(uint32_t id);
     bool questFieldsDirty_ = false;
+
+    // ---- WoWVita: game objects around the player (offline_server.cpp, "game objects")
+    bool handleGameObject(uint16_t op, const Bytes& data, uint32_t nowMs);
+    void updateGameObjects(uint32_t nowMs, bool force);
+    void goCreate(uint32_t idx);
+    uint32_t goDynFlags(uint32_t idx) const;
+    void goRefreshDynFlags();
+    void goDespawn(uint32_t idx, uint32_t nowMs);
+    bool handleGoLoot(uint16_t op, const Bytes& data, uint32_t nowMs);
+    static uint64_t goGuid(uint32_t entry, uint32_t idx) { return 0xF110000000000000ull | ((uint64_t)(entry & 0xFFFFFF) << 24) | (uint64_t)(idx + 1); }
+    std::unordered_map<int64_t, std::vector<uint32_t>> goCells_;
+    std::vector<uint32_t> goRespawnAt_;
+    std::vector<uint8_t> goActiveFlag_;
+    std::vector<uint32_t> goActive_;                 // spawn indexes with an object on the client
+    std::unordered_map<uint32_t, uint32_t> goDynSent_;
+    uint32_t goNextScan_ = 0;
+    struct GoLootState {
+        uint64_t guid = 0;
+        uint32_t idx = 0, money = 0;
+        uint8_t n = 0;
+        struct Slot { uint32_t item = 0; uint16_t count = 0; bool taken = false; } slots[16];
+    } goLootState_;
 
     // ---- events / state
     void dispatchEvents(uint32_t nowMs);

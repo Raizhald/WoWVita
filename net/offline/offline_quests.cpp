@@ -106,19 +106,21 @@ uint32_t OfflineSession::questXp(const QuestFull& q) const {
     return xp;
 }
 
-uint32_t OfflineSession::questMarkFor(const Entity& npc) const {
-    if (!data_ || !npc.alive()) return kMarkNone;
+uint32_t OfflineSession::questMarkFor(uint32_t entry, bool go) const {
+    if (!data_) return kMarkNone;
     uint32_t mark = kMarkNone;
-    auto en = data_->questsEnded.find(npc.entry);
-    if (en != data_->questsEnded.end())
+    const auto& ended = go ? data_->goQuestsEnded : data_->questsEnded;
+    const auto& started = go ? data_->goQuestsStarted : data_->questsStarted;
+    auto en = ended.find(entry);
+    if (en != ended.end())
         for (uint32_t id : en->second) {
             const int s = questSlot(id);
             if (s < 0) continue;
             if (questDone(save_.quests[(size_t)s])) return kMarkReward;
             mark = kMarkIncomplete;
         }
-    auto st = data_->questsStarted.find(npc.entry);
-    if (st != data_->questsStarted.end())
+    auto st = started.find(entry);
+    if (st != started.end())
         for (uint32_t id : st->second)
             if (const QuestFull* q = questDef(id))
                 if (questCanTake(*q)) return kMarkAvailable;
@@ -126,17 +128,19 @@ uint32_t OfflineSession::questMarkFor(const Entity& npc) const {
 }
 
 // The quests a giver shows: those ending here that are in the log, then those it can give now.
-std::vector<std::pair<uint32_t, uint32_t>> OfflineSession::questMenu(const Entity& npc) const {
+std::vector<std::pair<uint32_t, uint32_t>> OfflineSession::questMenu(uint32_t entry, bool go) const {
     std::vector<std::pair<uint32_t, uint32_t>> out;   // quest id, icon (the client's QuestMark)
     if (!data_) return out;
-    auto en = data_->questsEnded.find(npc.entry);
-    if (en != data_->questsEnded.end())
+    const auto& ended = go ? data_->goQuestsEnded : data_->questsEnded;
+    const auto& started = go ? data_->goQuestsStarted : data_->questsStarted;
+    auto en = ended.find(entry);
+    if (en != ended.end())
         for (uint32_t id : en->second) {
             const int s = questSlot(id);
             if (s >= 0) out.push_back({id, questDone(save_.quests[(size_t)s]) ? kMarkReward : kMarkIncomplete});
         }
-    auto st = data_->questsStarted.find(npc.entry);
-    if (st != data_->questsStarted.end())
+    auto st = started.find(entry);
+    if (st != started.end())
         for (uint32_t id : st->second) {
             const QuestFull* q = questDef(id);
             if (q && questCanTake(*q) && std::none_of(out.begin(), out.end(), [&](auto& x) { return x.first == id; }))
@@ -165,14 +169,29 @@ void OfflineSession::questLogFields(std::vector<std::pair<uint16_t, uint32_t>>& 
 }
 
 // ---------------------------------------------------------------- packets
+OfflineSession::Giver OfflineSession::giverOf(uint64_t guid) const {
+    Giver g;
+    if ((guid >> 48) == 0xF110) {   // a game object of ours
+        const uint32_t idx = (uint32_t)(guid & 0xFFFFFF);
+        if (!data_ || idx == 0 || idx > data_->goSpawns.size() || idx > goActiveFlag_.size() || !goActiveFlag_[idx - 1]) return g;
+        const GoSpawn& s = data_->goSpawns[idx - 1];
+        g.ok = true; g.go = true; g.entry = s.entry; g.x = s.x; g.y = s.y;
+        return g;
+    }
+    const Entity* e = world_.entity(guid);
+    if (!e || !e->alive()) return g;
+    g.ok = true; g.entry = e->entry; g.x = e->x; g.y = e->y;
+    return g;
+}
+
 void OfflineSession::sendQuestStatus(uint64_t npc) {
-    const Entity* e = world_.entity(npc);
+    const Giver gv = giverOf(npc);
     Writer w;
     w.u64(npc);
-    const uint32_t mark = e ? questMarkFor(*e) : kMarkNone;
+    const uint32_t mark = gv.ok ? questMarkFor(gv.entry, gv.go) : kMarkNone;
     w.u32(mark);
     send(SMSG_QUESTGIVER_STATUS, w.b);
-    if (trace && e && mark) trace("quest mark " + std::to_string(mark) + " for " + std::to_string(e->entry));
+    if (trace && gv.ok && mark) trace("quest mark " + std::to_string(mark) + " for " + std::to_string(gv.entry) + (gv.go ? " (object)" : ""));
 }
 
 void OfflineSession::sendQuestDetails(uint64_t npc, const QuestFull& q) {
@@ -264,7 +283,8 @@ void OfflineSession::sendQuestQuery(uint32_t id) {
     w.cstr(q->details);
     w.cstr(q->endText);
     for (int k = 0; k < 4; ++k) {
-        w.u32(q->killEntry[k]);
+        const int32_t c = (int32_t)q->killEntry[k];   // an object (< 0) goes on the wire as entry | 0x80000000
+        w.u32(c < 0 ? ((uint32_t)(-c) | 0x80000000u) : (uint32_t)c);
         w.u32(q->killEntry[k] ? q->killCount[k] : 0);
         w.u32(q->itemEntry[k]);
         w.u32(q->itemEntry[k] ? q->itemCount[k] : 0);
@@ -275,11 +295,11 @@ void OfflineSession::sendQuestQuery(uint32_t id) {
 
 // The giver's menu: a quest list (quests only), or gossip (a greeting, a vendor option, the quests).
 bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
-    const Entity* e = world_.entity(npc);
-    if (!e || !data_) return false;
-    const auto menu = questMenu(*e);
+    const Giver gv = giverOf(npc);
+    if (!gv.ok || !data_) return false;
+    const auto menu = questMenu(gv.entry, gv.go);
     if (menu.empty()) return false;   // nothing to do with quests: the caller opens the vendor (or says so)
-    const auto gr = data_->greetings.find(e->entry);
+    const auto gr = gv.go ? data_->greetings.end() : data_->greetings.find(gv.entry);
     if (!vendor && op == CMSG_QUESTGIVER_HELLO) {
         // one quest and nothing else: straight to it, as the original does
         if (menu.size() == 1) {
@@ -301,7 +321,7 @@ bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
     }
     Writer w;
     w.u64(npc);
-    w.u32(kGreetingTextId | (e->entry & 0xFFFF));
+    w.u32(kGreetingTextId | (gv.entry & 0xFFFF));
     w.u32(vendor ? 1u : 0u);
     if (vendor) { w.u32(1); w.u8(1); w.u8(0); w.cstr("I want to browse your goods."); }   // option 1: the vendor
     w.u32((uint32_t)menu.size());
@@ -314,16 +334,26 @@ bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
 }
 
 // ---------------------------------------------------------------- progress
-void OfflineSession::questKill(uint32_t entry, uint64_t guid) {
+bool OfflineSession::questWantsObject(uint32_t goEntry) const {
+    const uint32_t key = (uint32_t)(-(int32_t)goEntry);
+    for (const QuestLogEntry& e : save_.quests)
+        if (const QuestFull* q = questDef(e.id))
+            for (int k = 0; k < 4; ++k)
+                if (q->killEntry[k] == key && q->killCount[k] && e.kills[k] < q->killCount[k]) return true;
+    return false;
+}
+
+void OfflineSession::questKill(uint32_t entry, uint64_t guid, bool go) {
+    const uint32_t key = go ? (uint32_t)(-(int32_t)entry) : entry;   // (objects: -entry, as quest_template has it)
     for (QuestLogEntry& e : save_.quests) {
         const QuestFull* q = questDef(e.id);
         if (!q) continue;
         for (int k = 0; k < 4; ++k) {
-            if (q->killEntry[k] != entry || !q->killCount[k] || e.kills[k] >= q->killCount[k]) continue;
+            if (q->killEntry[k] != key || !q->killCount[k] || e.kills[k] >= q->killCount[k]) continue;
             const bool before = questDone(e);
             ++e.kills[k];
             Writer w;
-            w.u32(q->id); w.u32(entry); w.u32(e.kills[k]); w.u32(q->killCount[k]); w.u64(guid);
+            w.u32(q->id); w.u32(go ? (entry | 0x80000000u) : entry); w.u32(e.kills[k]); w.u32(q->killCount[k]); w.u64(guid);
             send(SMSG_QUESTUPDATE_ADD_KILL, w.b);
             if (!before && questDone(e)) { Writer c; c.u32(q->id); send(SMSG_QUESTUPDATE_COMPLETE, c.b); }
             questFieldsDirty_ = true;
@@ -365,10 +395,18 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
     Reader r(data);
     Entity* p = world_.player();
     if (!p || !data_) return false;
-    auto npcNear = [&](uint64_t g) -> const Entity* {
-        const Entity* e = world_.entity(g);
-        if (!e || !e->alive() || std::hypot(e->x - p->x, e->y - p->y) > kQuestReach) return nullptr;
-        return e;
+    auto npcNear = [&](uint64_t g) -> Giver {
+        Giver gv = giverOf(g);
+        if (gv.ok && std::hypot(gv.x - p->x, gv.y - p->y) > kQuestReach) gv.ok = false;
+        return gv;
+    };
+    auto gives = [](const QuestFull& q, const Giver& gv) {
+        const auto& v = gv.go ? q.goStarters : q.starters;
+        return std::find(v.begin(), v.end(), gv.entry) != v.end();
+    };
+    auto takes = [](const QuestFull& q, const Giver& gv) {
+        const auto& v = gv.go ? q.goEnders : q.enders;
+        return std::find(v.begin(), v.end(), gv.entry) != v.end();
     };
     switch (op) {
         case CMSG_QUESTGIVER_STATUS_QUERY: {
@@ -404,7 +442,8 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             const uint64_t g = r.u64();
             const uint32_t opt = r.u32();
             if (r.bad) return true;
-            const Entity* e = npcNear(g);
+            const Giver gv = npcNear(g);
+            const Entity* e = gv.ok && !gv.go ? world_.entity(g) : nullptr;
             if (e && opt == 1 && (e->npcFlags & 4)) { send(SMSG_GOSSIP_COMPLETE); sendListInventory(g); }
             return true;
         }
@@ -412,20 +451,19 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             const uint64_t g = r.u64();
             const uint32_t id = r.u32();
             if (r.bad) return true;
-            const Entity* e = npcNear(g);
+            const Giver gv = npcNear(g);
             const QuestFull* q = questDef(id);
-            if (!e || !q) return true;
-            const bool gives = std::find(q->starters.begin(), q->starters.end(), e->entry) != q->starters.end();
-            if (gives && questCanTake(*q)) sendQuestDetails(g, *q);
+            if (!gv.ok || !q) return true;
+            if (gives(*q, gv) && questCanTake(*q)) sendQuestDetails(g, *q);
             return true;
         }
         case CMSG_QUESTGIVER_ACCEPT_QUEST: {
             const uint64_t g = r.u64();
             const uint32_t id = r.u32();
             if (r.bad) return true;
-            const Entity* e = npcNear(g);
+            const Giver gv = npcNear(g);
             const QuestFull* q = questDef(id);
-            if (!e || !q || std::find(q->starters.begin(), q->starters.end(), e->entry) == q->starters.end()) return true;
+            if (!gv.ok || !q || !gives(*q, gv)) return true;
             if (!questCanTake(*q)) { Writer w; w.u32(questSlot(id) >= 0 ? 13u : 2u); send(SMSG_QUESTGIVER_QUEST_INVALID, w.b); return true; }
             if ((int)save_.quests.size() >= kLogSize) { send(SMSG_QUESTLOG_FULL); return true; }
             if (q->srcItem && world_.countPlayerItem(q->srcItem) == 0) {
@@ -448,10 +486,10 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             const uint64_t g = r.u64();
             const uint32_t id = r.u32();
             if (r.bad) return true;
-            const Entity* e = npcNear(g);
+            const Giver gv = npcNear(g);
             const QuestFull* q = questDef(id);
             const int s = questSlot(id);
-            if (!e || !q || s < 0 || std::find(q->enders.begin(), q->enders.end(), e->entry) == q->enders.end()) return true;
+            if (!gv.ok || !q || s < 0 || !takes(*q, gv)) return true;
             const bool done = questDone(save_.quests[(size_t)s]);
             bool needsItems = q->money < 0;
             for (int k = 0; k < 4; ++k) needsItems = needsItems || (q->itemEntry[k] && q->itemCount[k]);
@@ -465,7 +503,7 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             if (r.bad) return true;
             const QuestFull* q = questDef(id);
             const int s = questSlot(id);
-            if (npcNear(g) && q && s >= 0 && questDone(save_.quests[(size_t)s])) sendQuestOfferReward(g, *q);
+            if (npcNear(g).ok && q && s >= 0 && questDone(save_.quests[(size_t)s])) sendQuestOfferReward(g, *q);
             return true;
         }
         case CMSG_QUESTGIVER_CHOOSE_REWARD: {
@@ -473,11 +511,10 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             const uint32_t id = r.u32();
             const uint32_t choice = r.u32();
             if (r.bad) return true;
-            const Entity* e = npcNear(g);
+            const Giver gv = npcNear(g);
             const QuestFull* q = questDef(id);
             const int s = questSlot(id);
-            if (!e || !q || s < 0 || !questDone(save_.quests[(size_t)s]) ||
-                std::find(q->enders.begin(), q->enders.end(), e->entry) == q->enders.end())
+            if (!gv.ok || !q || s < 0 || !questDone(save_.quests[(size_t)s]) || !takes(*q, gv))
                 return true;
             // room for the rewards (the 16 backpack slots)
             uint32_t newSlots = 0;
@@ -517,8 +554,7 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             if (trace) trace("quest done: " + std::to_string(id) + " " + q->title + " xp " + std::to_string(xp));
             // the next one in the chain, from the same NPC: offered at once, as the original does
             if (const QuestFull* next = questDef(q->nextInChain))
-                if (std::find(next->starters.begin(), next->starters.end(), e->entry) != next->starters.end() && questCanTake(*next))
-                    sendQuestDetails(g, *next);
+                if (gives(*next, gv) && questCanTake(*next)) sendQuestDetails(g, *next);
             return true;
         }
         case CMSG_QUESTGIVER_CANCEL:

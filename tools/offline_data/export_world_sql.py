@@ -27,11 +27,17 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
-          "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text"}
+          "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text",
+          "gameobject", "gameobject_template", "gameobject_loot_template", "gameobject_questrelation",
+          "gameobject_involvedrelation", "gameobject_spawn_entry"}
+
+# game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
+# 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects). Doors, traps, transports, mailboxes stay out.
+GO_TYPES = {1, 2, 3, 5, 8, 9, 10}
 
 CREATE_RE = re.compile(r"^CREATE TABLE `(\w+)`")
 COL_RE = re.compile(r"^\s+`(\w+)`")
@@ -393,6 +399,46 @@ def build(tables, factions, map_id, report, player_faction=1):
             vendors[t["entry"]] = goods[:255]
             item_needed.update(goods)
 
+    # ---- game objects of the map: templates, spawns, chest loot (quest drops flagged)
+    go_t = {int(num(g(r, "entry"))): r for r in tables.get("gameobject_template", [])}
+    go_spawn_entry = {}
+    for r in tables.get("gameobject_spawn_entry", []):
+        go_spawn_entry.setdefault(int(num(g(r, "guid"))), []).append(int(num(g(r, "entry"))))
+    go_spawns = []
+    for r in tables.get("gameobject", []):
+        if int(num(g(r, "map"))) != map_id:
+            continue
+        gid = int(num(g(r, "id")))
+        if not gid:
+            ch = sorted(go_spawn_entry.get(int(num(g(r, "guid"))), []))
+            gid = ch[int(num(g(r, "guid"))) % len(ch)] if ch else 0
+        t = go_t.get(gid)
+        if not t or int(num(g(t, "type"))) not in GO_TYPES or not int(num(g(t, "displayId"))):
+            continue
+        go_spawns.append((gid, num(g(r, "position_x")), num(g(r, "position_y")), num(g(r, "position_z")),
+                          num(g(r, "orientation")), [num(g(r, f"rotation{i}")) for i in range(4)],
+                          max(5000, int(num(g(r, "spawntimesecsmin", "spawntimesecs", default=300))) * 1000)))
+    go_used = sorted({s_[0] for s_ in go_spawns})
+    go_loot_rows = {}
+    for r in tables.get("gameobject_loot_template", []):
+        go_loot_rows.setdefault(int(num(g(r, "entry"))), []).append(r)
+    go_loot = {}            # loot id -> (min gold, max gold, [(item, chance, min, max, quest only)])
+    for e in go_used:
+        t = go_t[e]
+        if int(num(g(t, "type"))) != 3:
+            continue
+        lid = int(num(g(t, "data1")))
+        if not lid or lid in go_loot:
+            continue
+        quest_drops = []
+        ents = [(i, c, mn, mx, 0) for (i, c, mn, mx) in entries_of(go_loot_rows.get(lid, [])) if i in items_db]
+        ents += [(i, c, 1, 1, 1) for (i, c) in quest_drops if i in items_db]
+        ents.sort(key=lambda x: (-x[4], -x[1]))
+        go_loot[lid] = (int(num(g(t, "mingold"))), int(num(g(t, "maxgold"))), ents[:16])
+        for x in ents[:16]:
+            item_needed.add(x[0])
+    go_spawned = set(go_used)
+
     # ---- quests: given and taken by creatures of this map; only kinds the offline core can finish
     spawned = {t["entry"] for t in crea}
     starters, enders = {}, {}
@@ -404,6 +450,15 @@ def build(tables, factions, map_id, report, player_faction=1):
         c = int(num(g(r, "id")))
         if c in spawned:
             enders.setdefault(int(num(g(r, "quest"))), []).append(c)
+    go_starters, go_enders = {}, {}       # quest givers that are objects (wanted posters, books)
+    for r in tables.get("gameobject_questrelation", []):
+        c = int(num(g(r, "id")))
+        if c in go_spawned:
+            go_starters.setdefault(int(num(g(r, "quest"))), []).append(c)
+    for r in tables.get("gameobject_involvedrelation", []):
+        c = int(num(g(r, "id")))
+        if c in go_spawned:
+            go_enders.setdefault(int(num(g(r, "quest"))), []).append(c)
     obtainable = set()                       # items a player can get here: creature loot, quest drops, vendors
     for lid, lo, hi, ents in loot_tables:
         obtainable.update(e[0] for e in ents)
@@ -411,9 +466,11 @@ def build(tables, factions, map_id, report, player_faction=1):
         obtainable.update(i for i, _ in drops)
     for goods in vendors.values():
         obtainable.update(goods)
+    for _lo, _hi, ents in go_loot.values():
+        obtainable.update(x[0] for x in ents)
     quests_db = newest_patch(tables.get("quest_template", []), ("entry",))
     for qid, q in quests_db.items():         # ... and what quests given here hand out (letters, rewards)
-        if qid in starters:
+        if qid in starters or qid in go_starters:
             for k in ["SrcItemId"] + [f"RewItemId{i}" for i in (1, 2, 3, 4)] + [f"RewChoiceItemId{i}" for i in range(1, 7)]:
                 v = int(num(g(q, k)))
                 if v:
@@ -425,8 +482,8 @@ def build(tables, factions, map_id, report, player_faction=1):
 
     for qid in sorted(quests_db):
         q = quests_db[qid]
-        if qid not in starters or qid not in enders:
-            continue                         # not given and taken on this map by creatures
+        if (qid not in starters and qid not in go_starters) or (qid not in enders and qid not in go_enders):
+            continue                         # not given and taken on this map
         if int(num(g(q, "SpecialFlags"))) & 2 or int(num(g(q, "QuestFlags"))) & 4:
             skip("exploration / scripted event"); continue
         if int(num(g(q, "LimitTime"))) > 0:
@@ -439,11 +496,11 @@ def build(tables, factions, map_id, report, player_faction=1):
         for i in (1, 2, 3, 4):
             c = int(num(g(q, f"ReqCreatureOrGOId{i}")))
             n = int(num(g(q, f"ReqCreatureOrGOCount{i}")))
-            if c < 0 and n:
-                bad = "use a game object"
-            elif c and n and c not in spawned:
+            if c < 0 and n and -c not in go_spawned:
+                bad = "use a game object not on this map"
+            elif c > 0 and n and c not in spawned:
                 bad = "kill a creature not on this map"
-            objs.append((max(0, c), n if c > 0 else 0))
+            objs.append((c & 0xFFFFFFFF if n else 0, n if c else 0))   # (a game object: -entry, as the wire has it)
         src = int(num(g(q, "SrcItemId")))
         items_req = []
         for i in (1, 2, 3, 4):
@@ -472,7 +529,8 @@ def build(tables, factions, map_id, report, player_faction=1):
                                                              "RequestItemsText", "EndText")],
             objtext=[str(g(q, f"ObjectiveText{i}", default="") or "") for i in (1, 2, 3, 4)],
             kills=objs, items=items_req, rew=rew, cho=cho,
-            starters=sorted(set(starters[qid])), enders=sorted(set(enders[qid]))))
+            starters=sorted(set(starters.get(qid, []))), enders=sorted(set(enders.get(qid, []))),
+            go_starters=sorted(set(go_starters.get(qid, []))), go_enders=sorted(set(go_enders.get(qid, [])))))
     kept = {q["id"] for q in quests}
     for q in quests:                         # a step left out of a chain must not lock the rest
         if q["prev"] and abs(q["prev"]) not in kept:
@@ -603,6 +661,12 @@ def build(tables, factions, map_id, report, player_faction=1):
         qb.u16(len(q["enders"]))
         for c in q["enders"]:
             qb.u32(c)
+        qb.u16(len(q["go_starters"]))
+        for c in q["go_starters"]:
+            qb.u32(c)
+        qb.u16(len(q["go_enders"]))
+        for c in q["go_enders"]:
+            qb.u32(c)
     sec["QST2"] = qb.b
 
     lq = Bin()   # "QLOT": quest drops per loot table, rolled only while a quest wants the item
@@ -612,6 +676,32 @@ def build(tables, factions, map_id, report, player_faction=1):
         for i, c in qloot[lid]:
             lq.u32(i); lq.u16(max(1, min(10000, int(round(c * 100)))))
     sec["QLOT"] = lq.b
+
+    ob = Bin()   # "GOBJ": game object templates (the SMSG_GAMEOBJECT_QUERY_RESPONSE content)
+    ob.u32(len(go_used))
+    for e in go_used:
+        t = go_t[e]
+        ob.u32(e); ob.u32(int(num(g(t, "type")))); ob.u32(int(num(g(t, "displayId")))); ob.s(str(g(t, "name", default="")))
+        ob.u32(int(num(g(t, "faction")))); ob.u32(int(num(g(t, "flags")))); ob.f32(num(g(t, "size", default=1.0)) or 1.0)
+        for k in range(24):
+            ob.u32(int(num(g(t, f"data{k}"))) & 0xFFFFFFFF)
+    sec["GOBJ"] = ob.b
+    sb = Bin()   # "GOSP": their spawns
+    sb.u32(len(go_spawns))
+    for (e, x, y, z, o, rot, respawn) in go_spawns:
+        sb.u32(e); sb.f32(x); sb.f32(y); sb.f32(z); sb.f32(o)
+        for v in rot:
+            sb.f32(v)
+        sb.u32(respawn)
+    sec["GOSP"] = sb.b
+    lb2 = Bin()   # "GLOT": chest loot (u8 1 = only while a quest wants the item)
+    lb2.u32(len(go_loot))
+    for lid in sorted(go_loot):
+        lo, hi, ents = go_loot[lid]
+        lb2.u32(lid); lb2.u32(lo); lb2.u32(max(lo, hi)); lb2.u16(len(ents))
+        for (i, c, mn, mx, qo) in ents:
+            lb2.u32(i); lb2.u16(max(1, min(10000, int(round(c * 100))))); lb2.u16(min(65535, mn)); lb2.u16(min(65535, mx)); lb2.u8(qo)
+    sec["GLOT"] = lb2.b
 
     gb = Bin()   # "GOSS": an NPC's greeting
     gb.u32(len(greetings))
@@ -641,7 +731,8 @@ def build(tables, factions, map_id, report, player_faction=1):
                             items=len(items), loot=len(loot_tables), hostile_factions=hostile_n,
                             neutral_factions=neutral_n, vendors=len(vlist),
                             vendor_items=sum(len(gl) for _, gl in vlist), quests=len(quests),
-                            quest_drop_tables=len(qloot), greetings=len(greetings),
+                            quest_drop_tables=len(qloot), greetings=len(greetings), objects=len(go_used),
+                            object_spawns=len(go_spawns), chest_loot=len(go_loot),
                             **{"quests_left_out_" + k.replace(" ", "_").replace("/", ""): v for k, v in skipped_q.items()})
     return sec
 

@@ -915,6 +915,8 @@ void OfflineSession::sendCastFailed(const Entity& caster, uint32_t spell, uint8_
 // ---------------------------------------------------------------- login
 void OfflineSession::loginPackets(uint32_t nowMs) {
     questFieldsDirty_ = true;   // WoWVita: the quest log goes with the first update
+    goCells_.clear();           // WoWVita: the objects are sent again around the new position
+    goNextScan_ = 0;
     (void)nowMs;
     Entity* p = world_.player();
     if (!p || !data_) return;
@@ -1089,6 +1091,7 @@ void OfflineSession::handleCast(const Bytes& data, uint32_t nowMs) {
 void OfflineSession::handleLoot(uint16_t op, const Bytes& data, uint32_t nowMs) {
     Entity* p = world_.player();
     if (!p) return;
+    if (op != CMSG_LOOT && (lootGuid_ >> 48) == 0xF110 && handleGoLoot(op, data, nowMs)) return;   // WoWVita: a chest
     Reader r(data);
     if (op == CMSG_LOOT) {
         const uint64_t g = r.u64();
@@ -1209,8 +1212,9 @@ void OfflineSession::handleQuery(uint16_t op, const Bytes& data, uint32_t nowMs)
     switch (op) {
         case CMSG_NAME_QUERY: sendPlayerName(r.u64()); break;
         case CMSG_CREATURE_QUERY: { uint32_t entry = r.u32(); r.u64(); sendCreatureQuery(entry); break; }
-        case CMSG_GAMEOBJECT_QUERY: {
-            uint32_t entry = r.u32();
+        case CMSG_GAMEOBJECT_QUERY: {   // WoWVita: the pack's objects
+            if (handleGameObject(op, data, nowMs)) break;
+            const uint32_t entry = r.u32();
             Writer w;
             w.u32(entry | 0x80000000u);
             send(SMSG_GAMEOBJECT_QUERY_RESPONSE, w.b);
@@ -1611,6 +1615,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 send(0x04D);   // SMSG_LOGOUT_COMPLETE
                 break;
             default:
+                if (handleGameObject(op, p.second, nowMs)) break;   // WoWVita
                 if (handleQuest(op, p.second, nowMs)) break;   // WoWVita
                 if (trace && std::find(unhandledSeen_.begin(), unhandledSeen_.end(), op) == unhandledSeen_.end() &&
                     unhandledSeen_.size() < 64) {
@@ -1644,7 +1649,8 @@ void OfflineSession::update(uint32_t nowMs) {
             sendPartyStats();
         }
     }
-    if (questFieldsDirty_ && inWorld_) sendSelfFields();   // WoWVita: quest progress
+    if (inWorld_) updateGameObjects(nowMs, false);   // WoWVita: the objects around the player
+    if (questFieldsDirty_ && inWorld_) { goRefreshDynFlags(); sendSelfFields(); }   // WoWVita: quest progress
     // WoWVita: every 20 s, and 2 s after anything worth keeping (a purchase, loot, a level) - the Vita is often
     // closed with the PS button, which never reaches leaveWorld()
     if (nowMs - lastSave_ >= 20000 || (saveSoon_ && nowMs - lastSave_ >= 2000)) {
@@ -1666,6 +1672,264 @@ void OfflineSession::update(uint32_t nowMs) {
         }
     }
     flush();
+}
+
+
+// ================================================================ WoWVita: game objects
+// The map's objects ("GOSP" spawns, "GOBJ" templates): those within 100 yd of the player are on the client
+// (UPDATE_OBJECT type 5 with a position block), farther than 130 yd they go (DESTROY_OBJECT). Chests are looted
+// ("GLOT", quest items only while a quest wants them) and come back after their respawn time; quest givers show
+// their quests; objects a quest wants used give the credit. Herbs and ore are chests with a skill lock: the client
+// asks for the profession before it ever sends the use, as the original does.
+namespace {
+constexpr float kGoCell = 64.0f, kGoAppear = 100.0f, kGoVanish = 130.0f;
+constexpr uint16_t CMSG_GAMEOBJ_USE = 0x0B1;
+constexpr uint16_t GO_DISPLAYID = 8, GO_FLAGS = 9, GO_ROTATION = 10, GO_STATE = 14, GO_POS_X = 15, GO_POS_Y = 16,
+                   GO_POS_Z = 17, GO_FACING = 18, GO_DYN_FLAGS = 19, GO_FACTION = 20, GO_TYPE_ID = 21;
+inline int64_t goCellKey(int cx, int cy) { return ((int64_t)cx << 32) ^ (int64_t)(uint32_t)cy; }
+inline int goCellOf(float v) { return (int)std::floor(v / kGoCell); }
+inline uint32_t fbits(float f) { uint32_t u; std::memcpy(&u, &f, 4); return u; }
+}  // namespace
+
+uint32_t OfflineSession::goDynFlags(uint32_t idx) const {
+    if (!data_ || idx >= data_->goSpawns.size()) return 0;
+    const GoSpawn& sp = data_->goSpawns[idx];
+    auto t = data_->goTemplates.find(sp.entry);
+    if (t == data_->goTemplates.end()) return 0;
+    if (questWantsObject(sp.entry)) return 1;   // GO_DYNFLAG_LO_ACTIVATE: usable for one of our quests
+    if (t->second.type == 3) {
+        auto l = data_->goLoot.find(t->second.data[1]);
+        if (l != data_->goLoot.end())
+            for (const GoLootItem& it : l->second.items)
+                if (it.questOnly && questWantsItem(it.item)) return 1;
+    }
+    return 0;
+}
+
+void OfflineSession::goCreate(uint32_t idx) {
+    const GoSpawn& sp = data_->goSpawns[idx];
+    auto ti = data_->goTemplates.find(sp.entry);
+    if (ti == data_->goTemplates.end()) return;
+    const GoTemplate& t = ti->second;
+    const uint64_t g = goGuid(sp.entry, idx);
+    FieldSet f;
+    f.set(UF::OBJECT_GUID, (uint32_t)g);
+    f.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(g >> 32));
+    f.set(UF::OBJECT_TYPE, 0x21u);   // object | game object
+    f.set(UF::OBJECT_ENTRY, sp.entry);
+    f.set(UF::OBJECT_SCALE_X, fbits(t.size > 0.01f ? t.size : 1.0f));
+    f.set(GO_DISPLAYID, t.displayId);
+    f.set(GO_FLAGS, t.flags);
+    for (int i = 0; i < 4; ++i) f.set((uint16_t)(GO_ROTATION + i), fbits(sp.rot[i]));
+    f.set(GO_STATE, 1u);   // ready
+    f.set(GO_POS_X, fbits(sp.x)); f.set(GO_POS_Y, fbits(sp.y)); f.set(GO_POS_Z, fbits(sp.z));
+    f.set(GO_FACING, fbits(sp.o));
+    const uint32_t dyn = goDynFlags(idx);
+    f.set(GO_DYN_FLAGS, dyn);
+    f.set(GO_FACTION, t.faction);
+    f.set(GO_TYPE_ID, t.type);
+    goDynSent_[idx] = dyn;
+    Writer b;
+    b.u8(kUpdateCreate2);
+    b.packedGuid(g);
+    b.u8(5);   // TYPEID_GAMEOBJECT
+    b.u8((uint8_t)(kUfAll | kUfPosition));
+    b.f32(sp.x); b.f32(sp.y); b.f32(sp.z); b.f32(sp.o);
+    b.u32(1);   // UPDATEFLAG_ALL
+    writeFields(b, f);
+    UpdateBuilder u;
+    u.raw(b.b);
+    sendUpdateObject(u.finish());
+}
+
+void OfflineSession::goDespawn(uint32_t idx, uint32_t nowMs) {
+    if (!data_ || idx >= goActiveFlag_.size() || !goActiveFlag_[idx]) return;
+    Writer w;
+    w.u64(goGuid(data_->goSpawns[idx].entry, idx));
+    send(0x0AA, w.b);   // SMSG_DESTROY_OBJECT
+    goActiveFlag_[idx] = 0;
+    goActive_.erase(std::remove(goActive_.begin(), goActive_.end(), idx), goActive_.end());
+    goDynSent_.erase(idx);
+    goRespawnAt_[idx] = nowMs + data_->goSpawns[idx].respawnMs;
+}
+
+void OfflineSession::updateGameObjects(uint32_t nowMs, bool force) {
+    const Entity* p = world_.player();
+    if (!p || !data_ || data_->goSpawns.empty()) return;
+    if (goCells_.empty() || goRespawnAt_.size() != data_->goSpawns.size()) {
+        goCells_.clear();
+        goRespawnAt_.assign(data_->goSpawns.size(), 0);
+        goActiveFlag_.assign(data_->goSpawns.size(), 0);
+        goActive_.clear();
+        goDynSent_.clear();
+        for (uint32_t i = 0; i < (uint32_t)data_->goSpawns.size(); ++i)
+            goCells_[goCellKey(goCellOf(data_->goSpawns[i].x), goCellOf(data_->goSpawns[i].y))].push_back(i);
+    }
+    if (!force && nowMs < goNextScan_) return;
+    goNextScan_ = nowMs + 500;
+    // out of range: gone (they keep no state - a looted chest is gone until its respawn anyway)
+    for (size_t i = 0; i < goActive_.size();) {
+        const uint32_t idx = goActive_[i];
+        const GoSpawn& sp = data_->goSpawns[idx];
+        if (std::hypot(sp.x - p->x, sp.y - p->y) > kGoVanish && goLootState_.idx != idx + 1) {
+            Writer w;
+            w.u64(goGuid(sp.entry, idx));
+            send(0x0AA, w.b);
+            goActiveFlag_[idx] = 0;
+            goDynSent_.erase(idx);
+            goActive_.erase(goActive_.begin() + (long)i);
+            continue;
+        }
+        ++i;
+    }
+    // in range: come (at most 300 on the client)
+    const int r = (int)std::ceil(kGoAppear / kGoCell);
+    const int cx0 = goCellOf(p->x), cy0 = goCellOf(p->y);
+    for (int cy = cy0 - r; cy <= cy0 + r; ++cy)
+        for (int cx = cx0 - r; cx <= cx0 + r; ++cx) {
+            auto it = goCells_.find(goCellKey(cx, cy));
+            if (it == goCells_.end()) continue;
+            for (uint32_t idx : it->second) {
+                if (goActiveFlag_[idx] || goActive_.size() >= 300) continue;
+                if (goRespawnAt_[idx] && nowMs < goRespawnAt_[idx]) continue;
+                const GoSpawn& sp = data_->goSpawns[idx];
+                if (std::hypot(sp.x - p->x, sp.y - p->y) > kGoAppear) continue;
+                goActiveFlag_[idx] = 1;
+                goActive_.push_back(idx);
+                goCreate(idx);
+            }
+        }
+}
+
+void OfflineSession::goRefreshDynFlags() {
+    if (!data_) return;
+    for (uint32_t idx : goActive_) {
+        const uint32_t dyn = goDynFlags(idx);
+        auto it = goDynSent_.find(idx);
+        if (it != goDynSent_.end() && it->second == dyn) continue;
+        goDynSent_[idx] = dyn;
+        FieldSet f;
+        f.set(GO_DYN_FLAGS, dyn);
+        UpdateBuilder u;
+        addValues(u, goGuid(data_->goSpawns[idx].entry, idx), f);
+        sendUpdateObject(u.finish());
+    }
+}
+
+bool OfflineSession::handleGameObject(uint16_t op, const Bytes& data, uint32_t nowMs) {
+    if (!data_) return false;
+    Reader r(data);
+    if (op == CMSG_GAMEOBJECT_QUERY) {
+        const uint32_t entry = r.u32();
+        if (r.bad) return true;
+        Writer w;
+        auto t = data_->goTemplates.find(entry);
+        if (t == data_->goTemplates.end()) { w.u32(entry | 0x80000000u); send(SMSG_GAMEOBJECT_QUERY_RESPONSE, w.b); return true; }
+        w.u32(entry);
+        w.u32(t->second.type);
+        w.u32(t->second.displayId);
+        w.cstr(t->second.name);
+        w.u8(0); w.u8(0); w.u8(0);   // name2..4
+        w.u8(0);                     // icon name
+        for (uint32_t d : t->second.data) w.u32(d);
+        send(SMSG_GAMEOBJECT_QUERY_RESPONSE, w.b);
+        return true;
+    }
+    if (op != CMSG_GAMEOBJ_USE) return false;
+    const uint64_t g = r.u64();
+    Entity* p = world_.player();
+    if (r.bad || !p || (g >> 48) != 0xF110) return true;
+    const uint32_t idx = (uint32_t)(g & 0xFFFFFF) - 1;
+    if (idx >= data_->goSpawns.size() || idx >= goActiveFlag_.size() || !goActiveFlag_[idx]) return true;
+    const GoSpawn& sp = data_->goSpawns[idx];
+    auto ti = data_->goTemplates.find(sp.entry);
+    if (ti == data_->goTemplates.end()) return true;
+    const GoTemplate& t = ti->second;
+    if (std::hypot(sp.x - p->x, sp.y - p->y) > 10.0f) { errorLine("You are too far away.", nowMs); return true; }
+    if (trace) trace("use object " + std::to_string(sp.entry) + " " + t.name + " type " + std::to_string(t.type));
+    // a quest that wants this object used
+    if (questWantsObject(sp.entry)) questKill(sp.entry, g, true);
+    if (t.type == 2) {   // quest giver (wanted poster, book)
+        if (!questHello(g, 0x184, false)) errorLine("There is nothing here for you.", nowMs);
+        return true;
+    }
+    if (t.type == 3) {   // chest (also herbs / ore: the client checked the skill)
+        auto l = data_->goLoot.find(t.data[1]);
+        GoLootState& st = goLootState_;
+        st = GoLootState();
+        st.guid = g;
+        st.idx = idx + 1;
+        if (l != data_->goLoot.end()) {
+            const GoLoot& gl = l->second;
+            st.money = gl.moneyMax > gl.moneyMin ? gl.moneyMin + (uint32_t)(std::rand() % (int)(gl.moneyMax - gl.moneyMin + 1)) : gl.moneyMin;
+            for (const GoLootItem& it : gl.items) {
+                if (st.n >= 16) break;
+                if (it.questOnly && !questWantsItem(it.item)) continue;
+                if ((uint32_t)(std::rand() % 10000) >= it.chance) continue;
+                auto& sl = st.slots[st.n++];
+                sl.item = it.item;
+                sl.count = (uint16_t)(it.maxCount > it.minCount ? it.minCount + std::rand() % (it.maxCount - it.minCount + 1) : it.minCount);
+                if (!sl.count) sl.count = 1;
+            }
+        }
+        lootGuid_ = g;
+        Writer w;
+        w.u64(g);
+        w.u8(1);
+        w.u32(st.money);
+        w.u8(st.n);
+        for (uint8_t i = 0; i < st.n; ++i) {
+            const ItemTemplate* it = data_->item(st.slots[i].item);
+            w.u8(i); w.u32(st.slots[i].item); w.u32(st.slots[i].count); w.u32(it ? it->displayId : 0);
+            w.u32(0); w.u32(0); w.u8(0);
+        }
+        send(SMSG_LOOT_RESPONSE, w.b);
+        return true;
+    }
+    return true;   // decorations, campfires, goobers: the quest credit above is all
+}
+
+bool OfflineSession::handleGoLoot(uint16_t op, const Bytes& data, uint32_t nowMs) {
+    GoLootState& st = goLootState_;
+    if (!st.guid || lootGuid_ != st.guid) return false;
+    Reader r(data);
+    if (op == CMSG_LOOT_MONEY) {
+        if (st.money) {
+            if (Entity* p = world_.player()) { p->money += st.money; world_.syncPlayerMoney(); }
+            char line[64];
+            std::snprintf(line, sizeof line, "You loot %u copper.", (unsigned)st.money);
+            st.money = 0;
+            send(SMSG_LOOT_CLEAR_MONEY);
+            sendSelfFields();
+            sendChat(0x0A, 0, line);
+            saveSoon_ = true;
+        }
+        return true;
+    }
+    if (op == CMSG_AUTOSTORE_LOOT_ITEM) {
+        const uint8_t slot = r.u8();
+        if (r.bad || slot >= st.n || st.slots[slot].taken) return true;
+        int why = 0;
+        if (!world_.buyItem(st.slots[slot].item, st.slots[slot].count, 0, nowMs, &why)) { errorLine("Inventory is full.", nowMs); return true; }
+        st.slots[slot].taken = true;
+        Writer w;
+        w.u8(slot);
+        send(SMSG_LOOT_REMOVED, w.b);
+        sendInventory();
+        return true;
+    }
+    if (op == CMSG_LOOT_RELEASE) {
+        Writer w;
+        w.u64(st.guid);
+        w.u8(1);
+        send(SMSG_LOOT_RELEASE_RESPONSE, w.b);
+        // an opened chest goes until its respawn time (the original: despawned once looted)
+        if (st.idx) goDespawn(st.idx - 1, nowMs);
+        st = GoLootState();
+        lootGuid_ = 0;
+        return true;
+    }
+    return false;
 }
 
 }  // namespace offline

@@ -198,7 +198,19 @@ struct QuestFull {
     uint32_t rewItem[4] = {0, 0, 0, 0};
     uint16_t rewCount[4] = {0, 0, 0, 0};
     std::vector<uint32_t> starters, enders;   // creature entries
+    std::vector<uint32_t> goStarters, goEnders;   // game object entries (wanted posters, books ...)
 };
+
+// WoWVita: game objects ("GOBJ" templates, "GOSP" spawns, "GLOT" chest loot)
+struct GoTemplate {
+    uint32_t entry = 0, type = 0, displayId = 0, faction = 0, flags = 0;
+    float size = 1.0f;
+    std::string name;
+    uint32_t data[24] = {};
+};
+struct GoSpawn { uint32_t entry = 0; float x = 0, y = 0, z = 0, o = 0; float rot[4] = {0, 0, 0, 1}; uint32_t respawnMs = 300000; };
+struct GoLootItem { uint32_t item = 0; uint16_t chance = 0, minCount = 1, maxCount = 1; bool questOnly = false; };
+struct GoLoot { uint32_t moneyMin = 0, moneyMax = 0; std::vector<GoLootItem> items; };
 struct QuestDrop { uint32_t item = 0; uint16_t chance = 0; };   // chance in 1/100 %
 
 // WoWVita: what a vendor sells ("VEND" section): the item and how many come in one purchase (arrows: 200)
@@ -223,6 +235,10 @@ struct WorldData {
     std::unordered_map<uint32_t, std::vector<uint32_t>> questsStarted, questsEnded;   // creature entry -> quest ids
     std::unordered_map<uint32_t, std::vector<QuestDrop>> questLoot;   // "QLOT": loot id -> quest drops
     std::unordered_map<uint32_t, std::string> greetings;              // "GOSS": creature entry -> greeting
+    std::unordered_map<uint32_t, std::vector<uint32_t>> goQuestsStarted, goQuestsEnded;   // object entry -> quest ids
+    std::unordered_map<uint32_t, GoTemplate> goTemplates;             // "GOBJ"
+    std::vector<GoSpawn> goSpawns;                                    // "GOSP"
+    std::unordered_map<uint32_t, GoLoot> goLoot;                      // "GLOT": loot id (data1 of a chest) -> loot
     const QuestFull* questFull(uint32_t id) const {
         auto it = questIndex.find(id);
         return it == questIndex.end() ? nullptr : &questsFull[it->second];

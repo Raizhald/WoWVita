@@ -317,14 +317,23 @@ bool readQuests2(Bin& b, WorldData& w) {   // WoWVita
         uint16_t ne = b.u16();
         if (ne > 64) return false;
         for (uint16_t k = 0; k < ne && !b.bad; ++k) q.enders.push_back(b.u32());
+        uint16_t gs = b.u16();
+        if (gs > 64) return false;
+        for (uint16_t k = 0; k < gs && !b.bad; ++k) q.goStarters.push_back(b.u32());
+        uint16_t ge = b.u16();
+        if (ge > 64) return false;
+        for (uint16_t k = 0; k < ge && !b.bad; ++k) q.goEnders.push_back(b.u32());
         if (!b.bad) w.questsFull.push_back(std::move(q));
     }
     w.questIndex.clear(); w.questsStarted.clear(); w.questsEnded.clear();
+    w.goQuestsStarted.clear(); w.goQuestsEnded.clear();
     for (uint32_t i = 0; i < (uint32_t)w.questsFull.size(); ++i) {
         const QuestFull& q = w.questsFull[i];
         w.questIndex[q.id] = i;
         for (uint32_t c : q.starters) w.questsStarted[c].push_back(q.id);
         for (uint32_t c : q.enders) w.questsEnded[c].push_back(q.id);
+        for (uint32_t c : q.goStarters) w.goQuestsStarted[c].push_back(q.id);
+        for (uint32_t c : q.goEnders) w.goQuestsEnded[c].push_back(q.id);
     }
     return !b.bad;
 }
@@ -340,6 +349,55 @@ bool readQuestLoot(Bin& b, WorldData& w) {   // WoWVita
         std::vector<QuestDrop> v;
         for (uint16_t j = 0; j < k && !b.bad; ++j) { QuestDrop d; d.item = b.u32(); d.chance = b.u16(); v.push_back(d); }
         w.questLoot[lid] = std::move(v);
+    }
+    return !b.bad;
+}
+
+bool readGoTemplates(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.goTemplates.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        GoTemplate t;
+        t.entry = b.u32(); t.type = b.u32(); t.displayId = b.u32(); t.name = b.str();
+        t.faction = b.u32(); t.flags = b.u32(); t.size = b.f32();
+        for (uint32_t& d : t.data) d = b.u32();
+        if (!b.bad) w.goTemplates[t.entry] = std::move(t);
+    }
+    return !b.bad;
+}
+
+bool readGoSpawns(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 262144) return false;
+    w.goSpawns.clear();
+    w.goSpawns.reserve(n);
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        GoSpawn s;
+        s.entry = b.u32(); s.x = b.f32(); s.y = b.f32(); s.z = b.f32(); s.o = b.f32();
+        for (float& r : s.rot) r = b.f32();
+        s.respawnMs = b.u32();
+        if (!b.bad) w.goSpawns.push_back(s);
+    }
+    return !b.bad;
+}
+
+bool readGoLoot(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.goLoot.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t id = b.u32();
+        GoLoot l;
+        l.moneyMin = b.u32(); l.moneyMax = b.u32();
+        const uint16_t k = b.u16();
+        if (k > 64) return false;
+        for (uint16_t j = 0; j < k && !b.bad; ++j) {
+            GoLootItem it;
+            it.item = b.u32(); it.chance = b.u16(); it.minCount = b.u16(); it.maxCount = b.u16(); it.questOnly = b.u8() != 0;
+            l.items.push_back(it);
+        }
+        if (!b.bad) w.goLoot[id] = std::move(l);
     }
     return !b.bad;
 }
@@ -536,6 +594,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("QST2"): ok = readQuests2(b, out); break;
             case fourcc("QLOT"): ok = readQuestLoot(b, out); break;
             case fourcc("GOSS"): ok = readGreetings(b, out); break;
+            case fourcc("GOBJ"): ok = readGoTemplates(b, out); break;
+            case fourcc("GOSP"): ok = readGoSpawns(b, out); break;
+            case fourcc("GLOT"): ok = readGoLoot(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }
         if (!ok) { err = "malformed section"; return false; }

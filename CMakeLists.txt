@@ -68,6 +68,10 @@ target_link_options(${EXE} PRIVATE -Wl,--wrap=fopen,--wrap=open,--wrap=mkdir,--w
 
 if(VITA)
   target_compile_options(${EXE} PRIVATE -mcpu=cortex-a9 -mfpu=neon)
+  # WoWVita: vita-elf-create puts the module's SCE data right after the text segment; when the text ends just before the
+  # data segment's 64 KiB boundary ("Cannot allocate ... for SCE data at end of segment 0; segment 1 overlaps") there is
+  # no room. vitasdk's linker script leaves __sce_headroom bytes free before that boundary.
+  target_link_options(${EXE} PRIVATE -Wl,--defsym,__sce_headroom=0x4000)
   target_link_libraries(${EXE}
     vitaGL vitashark SceShaccCgExt mathneon taihen_stub SceShaccCg_stub SceKernelDmacMgr_stub
     SceAppMgr_stub SceAppUtil_stub SceAudio_stub SceCtrl_stub SceTouch_stub SceCommonDialog_stub SceDisplay_stub

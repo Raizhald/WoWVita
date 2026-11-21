@@ -41,6 +41,9 @@ public:
     void setAreaTriggers(const AreaTriggerTable* t) { triggers_ = t; }
     // WoWVita: the client's taxi.txt (TaxiNodes, TaxiPath) and transports.txt (TaxiPathNode points): the flight masters
     void setTaxi(const TaxiTable* t, const std::string& transportsPath);
+    // WoWVita: the area under the player (the client's area grid) with its AreaTable exploration level and explore bit:
+    // a new one gives exploration XP (SMSG_EXPLORATION_EXPERIENCE)
+    void reportArea(uint32_t area, uint32_t level, uint32_t bit);
     bool flying() const { return flight_.active; }
     std::function<uint32_t()> wallClock;   // WoWVita: unix time for the rested bonus between sessions (default time())
     bool resting() const { return resting_; }
@@ -124,6 +127,8 @@ private:
     bool handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool questHello(uint64_t npc, uint16_t op, bool vendor);
     void questKill(uint32_t entry, uint64_t guid, bool go = false);
+    bool isExploreQuest(uint32_t id) const;
+    void questAreaTrigger(uint32_t trigger);
     bool questWantsObject(uint32_t goEntry) const;
     struct Giver { bool ok = false, go = false; uint32_t entry = 0; float x = 0, y = 0; };
     Giver giverOf(uint64_t guid) const;
@@ -184,6 +189,18 @@ private:
     uint32_t reclaimAtMs_ = 0;
     bool awaitTeleportAck_ = false;
     uint32_t teleportSentMs_ = 0, teleportCounter_ = 1;
+    // food, drink, potions (offline_items.cpp)
+    bool useConsumable(int index, uint32_t nowMs);
+    void stopEating(uint32_t nowMs);
+    void updateEating(uint32_t nowMs);
+    bool inCombat() const;
+    struct Eating {
+        bool active = false;
+        uint32_t spell = 0, startMs = 0, endMs = 0, nextTickMs = 0;
+        uint32_t hpLeft = 0, manaLeft = 0, hpTick = 0, manaTick = 0;
+        float x = 0, y = 0;
+    } eat_;
+    std::unordered_map<uint32_t, uint32_t> itemReady_;   // item category -> when it may be used again
     // bank and mail (offline_bank_mail.cpp)
     bool handleBank(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool handleMail(uint16_t op, const Bytes& data, uint32_t nowMs);
@@ -230,6 +247,7 @@ private:
     const AreaTriggerTable* tavernShapesOf_ = nullptr;
     size_t tavernShapesCount_ = 0;
     bool resting_ = false;
+    uint32_t lastArea_ = 0;
     uint32_t restTickMs_ = 0, restSent_ = 0;
 
     // ---- events / state

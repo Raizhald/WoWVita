@@ -51,6 +51,7 @@ public:
     float orientation() const { return world_.orientation(); }
     uint32_t mapId() const { return world_.mapId(); }
     const glue::Texts& glueTexts() const { return texts_; }   // glue.txt: GlueStrings, zone names
+    w3n::offline::OfflineSession& offlineSession() { return offlineSession_; }   // WoWVita: exploration (main.cpp)
     const w3n::Timings& authTimings() const { return auth_.timings(); }
     const w3n::Timings& worldTimings() const { return world_.timings(); }
     uint32_t latencyMs() const { return world_.lastLatencyMs(); }

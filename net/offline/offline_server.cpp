@@ -432,6 +432,8 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     flight_ = Flight();
     awaitTeleportAck_ = false;
     zone_ = 0;                    // (the client says it: CMSG_ZONEUPDATE)
+    lastArea_ = 0;
+    eat_ = Eating();
     // WoWVita: every character carries a Hearthstone (an older save gets one)
     if (data_->item(kHearthstoneItem)) {
         CharacterProfile& pr = save_.player;
@@ -564,6 +566,7 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_FLAGS, (ghost_ ? 0x10u : 0u) | (resting_ ? 0x20u : 0u));   // WoWVita: resting (an inn, a capital)
     f.set(UF::UNIT_FLAGS, flight_.active ? 0x00100004u : 0u);                  // WoWVita: TAXI_FLIGHT | DISABLE_MOVE
     f.set(UF::UNIT_MOUNTDISPLAYID, flight_.active ? flight_.mount : 0u);       // the gryphon
+    f.set(UF::UNIT_BYTES_1, eat_.active ? 1u : 0u);                            // WoWVita: sitting while eating (stand state 1)
     {   // WoWVita: rested experience
         const CharacterProfile& pr = world_.playerProfile();
         restSent_ = (uint32_t)pr.restBonus;
@@ -866,6 +869,7 @@ void OfflineSession::sendItemQuery(uint32_t entry) {
     Writer w;
     const ItemTemplate* t = data_ ? data_->item(entry) : nullptr;
     if (!t) { w.u32(entry | 0x80000000u); send(SMSG_ITEM_QUERY_SINGLE_RESPONSE, w.b); return; }
+    const ItemExt* ext = data_ ? data_->ext(entry) : nullptr;   // WoWVita: bags, durability, use
     w.u32(entry);
     w.u32(t->cls);
     w.u32(t->subclass);
@@ -884,7 +888,7 @@ void OfflineSession::sendItemQuery(uint32_t entry) {
     for (int i = 0; i < 5; ++i) w.u32(0);   // spell, honor, city, rep faction, rep rank
     w.u32(0);                 // max count
     w.u32(t->maxStack);
-    w.u32(0);                 // container slots
+    w.u32(ext ? ext->slots : 0u);   // container slots (WoWVita: bags)
     for (int i = 0; i < 10; ++i) { w.u32(0); w.u32(0); }   // stats
     for (int i = 0; i < 5; ++i) {
         w.f32(i == 0 ? t->dmgMin : 0.0f);
@@ -896,10 +900,13 @@ void OfflineSession::sendItemQuery(uint32_t entry) {
     w.u32(t->delayMs);
     w.u32(0);                 // ammo type
     w.f32(0.0f);              // ranged range modifier
-    for (int i = 0; i < 5; ++i) {   // spell, trigger, charges, cd, category, cat cd (WoWVita: the Hearthstone's)
+    for (int i = 0; i < 5; ++i) {   // spell, trigger, charges, cd, category, cat cd (WoWVita: the Hearthstone's, food, potions)
         const bool hearth = i == 0 && entry == kHearthstoneItem;
-        w.u32(hearth ? kHearthstoneSpell : 0); w.u32(0); w.u32(0);
-        w.u32(hearth ? 0xFFFFFFFFu : 0); w.u32(0); w.u32(hearth ? 0xFFFFFFFFu : 0);
+        const bool use = i == 0 && ext && ext->kind;
+        w.u32(hearth ? kHearthstoneSpell : use ? ext->spell : 0); w.u32(0);
+        w.u32(use && (ext->flags & 2) ? 0xFFFFFFFFu : 0);   // charges -1: used up
+        w.u32(hearth ? 0xFFFFFFFFu : 0); w.u32(use ? ext->category : 0);
+        w.u32(hearth ? 0xFFFFFFFFu : use ? ext->cooldownMs : 0);
     }
     w.u32(0);                 // bonding
     w.cstr(t->description);
@@ -907,7 +914,7 @@ void OfflineSession::sendItemQuery(uint32_t entry) {
     w.u32(0);                 // start quest
     w.u32(0);                 // lock id
     for (int i = 0; i < 5; ++i) w.u32(0);   // material, sheath, random property, block, item set
-    w.u32(t->inventoryType ? 60u : 0u);     // max durability
+    w.u32(ext && ext->maxDurability ? ext->maxDurability : (t->inventoryType ? 60u : 0u));   // max durability
     send(SMSG_ITEM_QUERY_SINGLE_RESPONSE, w.b);
 }
 
@@ -1119,6 +1126,7 @@ void OfflineSession::handleMovement(const Bytes& data, uint32_t nowMs) {
     awaitTeleportAck_ = false;
     // WoWVita: moving breaks a cast (the Hearthstone), as in the original
     if (p->castSpell && std::hypot(m.x - p->x, m.y - p->y) > 0.3f) world_.stopCast(*p, 35, nowMs);
+    if (eat_.active && std::hypot(m.x - eat_.x, m.y - eat_.y) > 0.3f) stopEating(nowMs);   // WoWVita: standing up ends a meal
     // The client is the authority for its own position in offline mode; the simulation consumes it.
     float o = m.o;
     if (!(o >= 0.0f)) o = 0.0f;
@@ -1437,6 +1445,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 if (!a) break;
                 Writer w;
                 const uint32_t total = (uint32_t)std::max<int32_t>(0, e.value);
+                if (e.flags & 1) { sendSelfFields(); break; }   // WoWVita: exploration (SMSG_EXPLORATION_EXPERIENCE says it)
                 w.u64(e.b);          // the victim (0: quest XP)
                 w.u32(total);
                 w.u8(e.b ? 0 : 1);   // 0 kill, 1 other
@@ -1698,6 +1707,7 @@ void OfflineSession::update(uint32_t nowMs) {
     dispatchEvents(nowMs);
     updateRest(nowMs);   // WoWVita: rested experience
     updateFlight(nowMs);   // WoWVita: on a gryphon
+    updateEating(nowMs);   // WoWVita: food and drink
     sendMovementToClient(nowMs);
     if (nowMs - lastPartyStats_ >= 1000) {
         lastPartyStats_ = nowMs;

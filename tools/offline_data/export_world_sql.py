@@ -27,13 +27,14 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
           "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text",
           "gameobject", "gameobject_template", "gameobject_loot_template", "gameobject_questrelation",
-          "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone", "areatrigger_tavern"}
+          "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone", "areatrigger_tavern",
+          "spell_template", "exploration_basexp", "areatrigger_involvedrelation"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -476,6 +477,11 @@ def build(tables, factions, map_id, report, player_faction=1):
                 if v:
                     obtainable.add(v)
     quests, skipped_q = [], {}
+    # exploration quests: reaching an area trigger completes them (areatrigger_involvedrelation; the trigger's shape is
+    # the client's AreaTrigger.dbc, which reports it with CMSG_AREATRIGGER)
+    quest_triggers = {}
+    for r in tables.get("areatrigger_involvedrelation", []):
+        quest_triggers.setdefault(int(num(g(r, "quest"))), []).append(int(num(g(r, "id"))))
 
     def skip(why):
         skipped_q[why] = skipped_q.get(why, 0) + 1
@@ -484,8 +490,8 @@ def build(tables, factions, map_id, report, player_faction=1):
         q = quests_db[qid]
         if (qid not in starters and qid not in go_starters) or (qid not in enders and qid not in go_enders):
             continue                         # not given and taken on this map
-        if int(num(g(q, "SpecialFlags"))) & 2 or int(num(g(q, "QuestFlags"))) & 4:
-            skip("exploration / scripted event"); continue
+        if (int(num(g(q, "SpecialFlags"))) & 2 or int(num(g(q, "QuestFlags"))) & 4) and qid not in quest_triggers:
+            skip("scripted event"); continue
         if int(num(g(q, "LimitTime"))) > 0:
             skip("timed"); continue
         if int(num(g(q, "RequiredSkill"))) or int(num(g(q, "RepObjectiveFaction"))):
@@ -571,6 +577,47 @@ def build(tables, factions, map_id, report, player_faction=1):
             cls=int(num(g(r, "class"))), sub=int(num(g(r, "subclass"))),
             buycount=max(1, int(num(g(r, "BuyCount", "buy_count", default=1))))))
     known_items = {i["entry"] for i in items}
+
+    # ---- "ITX1": what an item is besides its basics: a bag's slots, its durability, and what using it does
+    # (food 84 / drink 85 auras, healing potions effect 10, mana potions effect 30 - from spell_template = Spell.dbc).
+    # SpellDuration.dbc is not in the database: the food durations are its rows (1 10 s, 8 15 s, 85 18 s, 86 21 s,
+    # 106 24 s, 205 27 s, 9 30 s, 42 1 h).
+    spells = {int(num(g(r, "Id"))): r for r in tables.get("spell_template", [])}
+    dur_ms = {1: 10000, 8: 15000, 85: 18000, 86: 21000, 106: 24000, 205: 27000, 9: 30000, 42: 3600000}
+    itx = []
+    for entry in sorted(known_items):
+        r = items_db.get(entry)
+        slots = int(num(g(r, "ContainerSlots"))) if int(num(g(r, "class"))) == 1 else 0
+        maxdur = int(num(g(r, "MaxDurability")))
+        use = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        sid = int(num(g(r, "spellid_1")))
+        s = spells.get(sid) if int(num(g(r, "spelltrigger_1"))) == 0 else None
+        if s:
+            hp, mana, kind, dur = [0, 0], [0, 0], 0, 0
+            for k in (1, 2, 3):
+                eff, aura = int(num(g(s, f"Effect{k}"))), int(num(g(s, f"EffectApplyAuraName{k}")))
+                bp, die = int(num(g(s, f"EffectBasePoints{k}"))), int(num(g(s, f"EffectDieSides{k}")))
+                if eff == 6 and aura in (84, 85):   # food / drink: the tooltip's "over N sec" = (bp + 1) per 5 s
+                    d = dur_ms.get(int(num(g(s, "DurationIndex"))))
+                    if not d:
+                        continue
+                    dur = d
+                    tot = (bp + 1) * d // 5000
+                    if aura == 84: hp = [tot, tot]; kind |= 1
+                    else: mana = [tot, tot]; kind |= 2
+                elif eff == 10:                     # heal
+                    hp = [bp + 1, bp + max(1, die)]; kind |= 4
+                elif eff == 30 and int(num(g(s, f"EffectMiscValue{k}"))) == 0:   # energize: mana
+                    mana = [bp + 1, bp + max(1, die)]; kind |= 8
+            if kind:
+                cd = int(num(g(r, "spellcategorycooldown_1")))
+                if cd <= 0: cd = int(num(g(r, "spellcooldown_1")))
+                if cd <= 0: cd = int(num(g(s, "CategoryRecoveryTime"))) or int(num(g(s, "RecoveryTime")))
+                flags = 1 if int(num(g(s, "Attributes"))) & 0x10000000 else 0   # not in combat (food, drink)
+                if int(num(g(r, "spellcharges_1"))) < 0: flags |= 2                # used up
+                use = (kind, sid, hp[0], hp[1], mana[0], mana[1], dur, max(0, cd), int(num(g(r, "spellcategory_1"))), flags)
+        if slots or maxdur or use[0]:
+            itx.append((entry, slots, maxdur) + use)
 
     # ---- hostility towards the player's faction template (1: Human; the companions use it too)
     host = []
@@ -738,6 +785,27 @@ def build(tables, factions, map_id, report, player_faction=1):
     for t in tav:
         tb.u32(t)
     sec["TAVN"] = tb.b
+
+    xb = Bin()   # "ITX1"
+    xb.u32(len(itx))
+    for (entry, slots, maxdur, kind, sid, h0, h1, m0, m1, dur, cd, cat, fl) in itx:
+        xb.u32(entry); xb.u8(min(slots, 36)); xb.u16(min(maxdur, 65535)); xb.u8(kind); xb.u32(sid)
+        xb.u32(h0); xb.u32(h1); xb.u32(m0); xb.u32(m1); xb.u32(dur); xb.u32(cd); xb.u16(cat); xb.u8(fl)
+    sec["ITX1"] = xb.b
+    tb2 = Bin()   # "QTRG": area trigger -> the exploration quest it completes
+    pairs = sorted((t, q["id"]) for q in quests for t in quest_triggers.get(q["id"], []))
+    tb2.u32(len(pairs))
+    for t, qid in pairs:
+        tb2.u32(t); tb2.u32(qid)
+    sec["QTRG"] = tb2.b
+    eb = Bin()   # "EXPL": exploration_basexp - the XP of discovering an area, by its level
+    ex = sorted((int(num(g(r, "level"))), int(num(g(r, "basexp")))) for r in tables.get("exploration_basexp", []))
+    eb.u32(len(ex))
+    for lv, xp in ex:
+        eb.u8(min(lv, 255)); eb.u32(xp)
+    sec["EXPL"] = eb.b
+    report["counts_items_ext"] = dict(usable=sum(1 for x in itx if x[3]), bags=sum(1 for x in itx if x[1]),
+                                      with_durability=sum(1 for x in itx if x[2]))
 
     hb = Bin()
     hb.u32(len(host))

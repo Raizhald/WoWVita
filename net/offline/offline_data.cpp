@@ -402,6 +402,45 @@ bool readGraveyards(Bin& b, WorldData& w) {   // WoWVita
     return !b.bad;
 }
 
+bool readItemExt(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 262144) return false;
+    w.itemExt.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t entry = b.u32();
+        ItemExt x;
+        x.slots = b.u8(); x.maxDurability = b.u16(); x.kind = b.u8(); x.spell = b.u32();
+        x.hpMin = b.u32(); x.hpMax = b.u32(); x.manaMin = b.u32(); x.manaMax = b.u32();
+        x.durationMs = b.u32(); x.cooldownMs = b.u32(); x.category = b.u16(); x.flags = b.u8();
+        if (!b.bad) w.itemExt[entry] = x;
+    }
+    return !b.bad;
+}
+
+bool readExploration(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 256) return false;
+    w.explorationXp.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint8_t lv = b.u8();
+        const uint32_t xp = b.u32();
+        if (w.explorationXp.size() <= lv) w.explorationXp.resize((size_t)lv + 1, 0);
+        w.explorationXp[lv] = xp;
+    }
+    return !b.bad;
+}
+
+bool readQuestTriggers(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.questTriggers.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t t = b.u32(), q = b.u32();
+        if (!b.bad) w.questTriggers.emplace(t, q);
+    }
+    return !b.bad;
+}
+
 bool readTaverns(Bin& b, WorldData& w) {   // WoWVita
     const uint32_t n = b.u32();
     if (b.bad || n > 4096) return false;
@@ -635,6 +674,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("GOSP"): ok = readGoSpawns(b, out); break;
             case fourcc("GRAV"): ok = readGraveyards(b, out); break;
             case fourcc("TAVN"): ok = readTaverns(b, out); break;
+            case fourcc("ITX1"): ok = readItemExt(b, out); break;
+            case fourcc("EXPL"): ok = readExploration(b, out); break;
+            case fourcc("QTRG"): ok = readQuestTriggers(b, out); break;
             case fourcc("GLOT"): ok = readGoLoot(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

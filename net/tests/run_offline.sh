@@ -38,7 +38,7 @@ $N/factions.cpp $N/game_factions.cpp $N/game_vendor.cpp $N/game_quests.cpp $N/ga
 $N/game_friends.cpp $N/game_services.cpp $N/game_mail.cpp $N/game_auction.cpp $N/game_trade.cpp $N/game_water.cpp \
 $N/tables.cpp $N/offline/offline_data.cpp $N/offline/offline_world.cpp $N/offline/offline_bots.cpp \
 $N/offline/offline_nn.cpp $N/offline/offline_save.cpp $N/offline/offline_server.cpp $N/offline/offline_quests.cpp \
-$N/offline/offline_life.cpp $N/offline/offline_taxi.cpp $N/offline/offline_bank_mail.cpp"
+$N/offline/offline_life.cpp $N/offline/offline_taxi.cpp $N/offline/offline_bank_mail.cpp $N/offline/offline_items.cpp"
 
 echo "== building the offline test and tools"
 $CXX -std=c++20 -O1 -g -Wall -Wextra -I "$N" "$N/tests/offline_test.cpp" $SRC -o "$OUT/offline_test$EXE" $LIBS

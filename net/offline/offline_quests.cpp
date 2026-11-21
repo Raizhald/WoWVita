@@ -70,7 +70,30 @@ bool OfflineSession::questDone(const QuestLogEntry& e) const {
         const Entity* p = world_.player();
         if (!p || p->money < (uint32_t)(-q->money)) return false;
     }
+    if (isExploreQuest(q->id) && !e.complete) return false;   // WoWVita: the place not reached yet
     return true;
+}
+
+// WoWVita: exploration quests - their area trigger (CMSG_AREATRIGGER, areatrigger_involvedrelation)
+bool OfflineSession::isExploreQuest(uint32_t id) const {
+    if (!data_) return false;
+    for (const auto& [t, q] : data_->questTriggers)
+        if (q == id) return true;
+    return false;
+}
+
+void OfflineSession::questAreaTrigger(uint32_t trigger) {
+    if (!data_) return;
+    auto range = data_->questTriggers.equal_range(trigger);
+    for (auto it = range.first; it != range.second; ++it)
+        for (QuestLogEntry& e : save_.quests) {
+            if (e.id != it->second || e.complete) continue;
+            const bool before = questDone(e);
+            e.complete = true;
+            questFieldsDirty_ = true;
+            saveSoon_ = true;
+            if (!before && questDone(e)) { Writer c; c.u32(e.id); send(SMSG_QUESTUPDATE_COMPLETE, c.b); }
+        }
 }
 
 bool OfflineSession::questCanTake(const QuestFull& q) const {

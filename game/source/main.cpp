@@ -1521,6 +1521,11 @@ int main() {
                 if (!gs.areaName) gs.areaName = zoneNameOf;
                 g_zoneBanner.update(g_login.mapId(), audio::area(), g_login.sessionMs(), zoneNameOf, zoneParentOf);
                 gs.reportZone(g_zoneBanner.zone(), g_login.sessionMs());   // WoWVita: CMSG_ZONEUPDATE (the offline graveyards use it)
+                {   // WoWVita: the offline world's exploration XP (the area under the player and its AreaTable level / bit)
+                    const uint32_t area = audio::area();
+                    uint32_t lvl = 0, bit = 0;
+                    if (area && g_login.glueTexts().zoneExplore(area, &lvl, &bit)) g_login.offlineSession().reportArea(area, lvl, bit);
+                }
                 if (g_zoneBanner.zone()) gs.updateDefaultChannels(g_zoneBanner.zone(), zoneNameOf(g_zoneBanner.zone()), g_login.sessionMs());   // the original's General / Trade / LocalDefense / LFG
             }
             if (uiOut.faceYaw && walk) {   // turn to the target (spell, loot, BADFACING); the camera follows

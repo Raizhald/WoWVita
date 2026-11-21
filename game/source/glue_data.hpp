@@ -63,6 +63,13 @@ public:
     bool outfit(uint8_t race, uint8_t cls, uint8_t sex, uint32_t display[19], uint8_t inv[19]) const;
     const std::string* zone(uint32_t areaId) const;
     uint32_t zoneParent(uint32_t areaId) const;   // the zone of a subzone (0 = it is a zone, or glue.txt is older)
+    // WoWVita: the exploration level and explore bit of an area (false: glue.txt from an older converter)
+    bool zoneExplore(uint32_t areaId, uint32_t* level, uint32_t* bit) const {
+        auto it = zoneExplore_.find(areaId);
+        if (it == zoneExplore_.end()) return false;
+        *level = it->second.first; *bit = it->second.second;
+        return true;
+    }
     // 7.18: the game language from glue.txt ("L ruRU"), what the server localizes its quests, NPC names and gossip by.
     // Empty on an older glue.txt: the client then announces enUS as before.
     const std::string& gameLocale() const { return gameLocale_; }
@@ -75,6 +82,7 @@ private:
     std::unordered_map<std::string, std::string> texts_;
     std::unordered_map<uint32_t, std::string> zones_;
     std::unordered_map<uint32_t, uint32_t> zoneParents_;
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> zoneExplore_;   // WoWVita
     std::unordered_map<uint32_t, std::vector<std::pair<uint32_t, uint8_t>>> outfits_;
 };
 

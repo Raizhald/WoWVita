@@ -162,6 +162,11 @@ bool OfflineSession::handleLife(uint16_t op, const Bytes& data, uint32_t nowMs) 
         case MSG_MOVE_TELEPORT_ACK:
             awaitTeleportAck_ = false;
             return true;
+        case 0x0B4: {   // CMSG_AREATRIGGER: the exploration quests
+            const uint32_t t = r.u32();
+            if (!r.bad) questAreaTrigger(t);
+            return true;
+        }
         case MSG_CORPSE_QUERY: {
             Writer w;
             if (!ghost_ || !corpseSet_) {
@@ -223,6 +228,7 @@ bool OfflineSession::handleLife(uint16_t op, const Bytes& data, uint32_t nowMs) 
             if (r.bad || bag != 255 || slot < 23 || slot > 38) return false;
             const CharacterProfile& pr = world_.playerProfile();
             const int index = slot - 23;
+            if (index < pr.bagCount && pr.bag[index].entry != kHearthstoneItem) return useConsumable(index, nowMs);   // food, potions
             if (index >= pr.bagCount || pr.bag[index].entry != kHearthstoneItem) return false;
             if (ghost_ || !p->alive()) { errorLine("You can't do that while dead.", nowMs); return true; }
             world_.tryCast(*p, kHearthstoneSpell, p->guid, nowMs);
@@ -250,6 +256,33 @@ void OfflineSession::hearthHome(uint32_t nowMs) {
     if (pr.homeSet) teleportPlayer(pr.homeX, pr.homeY, pr.homeZ, world_.player() ? world_.player()->o : 0.0f, nowMs);
     else if (data_) teleportPlayer(data_->spawnX, data_->spawnY, data_->spawnZ, data_->spawnO, nowMs);
     saveSoon_ = true;
+}
+
+// ---------------------------------------------------------------- exploration
+// vMaNGOS Player::CheckAreaExploreAndOutdoor: an area seen for the first time gives exploration_basexp of its level
+// (5 levels below the character or more: less, 5 % per level; above it: as for level + 5); nothing at level 60.
+void OfflineSession::reportArea(uint32_t area, uint32_t level, uint32_t bit) {
+    Entity* p = world_.player();
+    if (!inWorld_ || !p || !data_ || ghost_ || !area || bit >= 64 * 32 || area == lastArea_) return;
+    lastArea_ = area;
+    CharacterProfile& pr = world_.playerProfile();
+    if (pr.explored[bit / 32] & (1u << (bit % 32))) return;
+    pr.explored[bit / 32] |= 1u << (bit % 32);
+    saveSoon_ = true;
+    if (!level) return;   // (an area without a level gives nothing, and says nothing)
+    auto base = [&](uint32_t lv) { return lv < data_->explorationXp.size() ? data_->explorationXp[lv] : 0u; };
+    uint32_t xp = 0;
+    if (p->level < 60) {
+        const int diff = (int)p->level - (int)level;
+        if (diff < -5) xp = base(p->level + 5);
+        else if (diff > 5) xp = base(level) * (uint32_t)std::clamp(100 - (diff - 5) * 5, 0, 100) / 100;
+        else xp = base(level);
+    }
+    if (xp) world_.addXp(*p, xp, world_.nowMs(), 0, true);
+    Writer w;
+    w.u32(area);
+    w.u32(xp);
+    send(0x1F8, w.b);   // SMSG_EXPLORATION_EXPERIENCE
 }
 
 // ---------------------------------------------------------------- rested experience

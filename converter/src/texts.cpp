@@ -381,7 +381,8 @@ bool exportAreaTriggers(const DataDir& data, const std::string& path, bool verbo
 //                       CLASS_INFO_*, ...); "\n" stays as the two characters
 //   L code              the game language (7.18): the client sends it at login, so the server answers in it
 //   O race class sex disp inv ... (12 pairs)   CharStartOutfit.dbc: the clothes a new character is shown in
-//   Z area name parent  AreaTable.dbc: the area names (the character list, the zone banner); parent = the zone of a subzone
+//   Z area name parent level bit  AreaTable.dbc: the area names (the character list, the zone banner); parent = the zone of
+//                a subzone; WoWVita: the exploration level and the explore bit (the offline world's exploration XP)
 bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose) {
     std::string out = "# wow3ds glue screens: T key text | O race class sex (display invtype) x N | Z area name\n";
     std::string loc = gameLocaleDir();   // 7.18: the game language; the client announces it at login (server texts)
@@ -474,7 +475,10 @@ bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose)
             for (uint32_t r = 0; r < at.records; ++r) {
                 std::string v = clean(at.loc(r, best, 8));   // 7.14: best is the English column; +locale inside loc()
                 if (v.empty()) continue;
-                out += "Z\t" + std::to_string(at.u32(r, 0)) + "\t" + v + "\t" + std::to_string(at.u32(r, 2)) + "\n";   // + the parent zone (0 = a zone)
+                // + the parent zone (0 = a zone); WoWVita: + the exploration level (the column before the name,
+                // AreaTableEntry::area_level) and the explore bit (column 3, PLAYER_EXPLORED_ZONES) for the offline world
+                out += "Z\t" + std::to_string(at.u32(r, 0)) + "\t" + v + "\t" + std::to_string(at.u32(r, 2)) + "\t" +
+                       std::to_string(at.u32(r, best - 1)) + "\t" + std::to_string(at.u32(r, 3)) + "\n";
                 ++nz;
             }
     }

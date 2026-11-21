@@ -971,6 +971,20 @@ bool World::buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t now
     return true;
 }
 
+bool World::takeFromBag(int index, uint16_t n) {
+    CharacterProfile& p = profiles_[0];
+    if (index < 0 || index >= p.bagCount || !p.bag[index].entry) return false;
+    const uint16_t have = p.bag[index].count ? p.bag[index].count : 1;
+    if (n >= have) removeBagItem(index);
+    else p.bag[index].count = (uint16_t)(have - n);
+    return true;
+}
+
+void World::removeAuraSpell(Entity& e, uint32_t spell) {
+    for (int i = 0; i < e.auraCount; ++i)
+        if (e.auras[i].spell == spell) { removeAura(e, i); return; }
+}
+
 void World::removeBagItem(int index) {
     CharacterProfile& p = profiles_[0];
     if (index < 0 || index >= p.bagCount) return;
@@ -1089,7 +1103,7 @@ void World::addMoneyToPlayer(uint32_t copper, uint32_t nowMs) {
     (void)nowMs;
 }
 
-void World::addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim) {
+void World::addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim, bool silent) {
     if (!e.self && !e.bot) return;
     if (!xp) return;
     // WoWVita: rested - a kill gives as much again from the pool, which shrinks by that (vMaNGOS Player::GetXPRestBonus)
@@ -1102,7 +1116,7 @@ void World::addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim) {
     }
     xp += rested;
     e.levelXp += xp;
-    emit(SimEvent::XpGain, e.guid, victim, rested, (int32_t)xp);
+    emit(SimEvent::XpGain, e.guid, victim, rested, (int32_t)xp, 0, silent ? 1 : 0);
     while (e.nextLevelXp && e.levelXp >= e.nextLevelXp && e.level < 60) {
         e.levelXp -= e.nextLevelXp;
         ++e.level;
@@ -1150,6 +1164,20 @@ void World::tickAuras(Entity& e, uint32_t nowMs) {
 void World::tickRegen(Entity& e, uint32_t nowMs) {
     if (!e.alive()) return;
     const bool combat = e.victim != 0 || (nowMs - e.lastDamageMs < 5000);
+    if (e.self) {
+        // WoWVita: the player regenerates as in the original - a tick every 2 s (Player::RegenerateAll), health only
+        // out of combat (about 3 % of it; food and drink are what refills faster), mana a little in combat too
+        if ((nowMs / 2000) == ((nowMs - kSimStepMs) / 2000)) return;
+        if (e.powerType == 0 && e.power < (int32_t)e.maxPower)
+            e.power = std::min<int32_t>(e.power + std::max<int32_t>(1, (int32_t)e.maxPower * (combat ? 1 : 3) / 100), (int32_t)e.maxPower);
+        else if (e.powerType == 3 && e.power < (int32_t)e.maxPower)
+            e.power = std::min<int32_t>(e.power + 20, (int32_t)e.maxPower);   // energy: 20 per 2 s
+        else if (e.powerType == 1 && !combat && e.power > 0)
+            e.power = std::max<int32_t>(0, e.power - 2);                     // rage decays
+        if (!combat && e.hp < (int32_t)e.maxHp)
+            e.hp = std::min<int32_t>(e.hp + std::max<int32_t>(1, (int32_t)e.maxHp * 3 / 100), (int32_t)e.maxHp);
+        return;
+    }
     if (e.powerType == 0) {   // mana
         const int32_t gain = std::max<int32_t>(1, (int32_t)(e.maxPower / (combat ? 100 : 35)));
         if (e.power < (int32_t)e.maxPower) {

@@ -271,6 +271,8 @@ bool Texts::load(const char* path) {
             const uint32_t zid = (uint32_t)strtoul(c[1].c_str(), nullptr, 10);
             zones_[zid] = c[2];
             if (c.size() >= 4) zoneParents_[zid] = (uint32_t)strtoul(c[3].c_str(), nullptr, 10);
+            if (c.size() >= 6)   // WoWVita: exploration level, explore bit
+                zoneExplore_[zid] = {(uint32_t)strtoul(c[4].c_str(), nullptr, 10), (uint32_t)strtoul(c[5].c_str(), nullptr, 10)};
         } else if (c[0] == "O" && c.size() >= 4) {
             std::vector<std::pair<uint32_t, uint8_t>> items;
             for (size_t i = 4; i + 1 < c.size(); i += 2)

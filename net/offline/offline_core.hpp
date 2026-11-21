@@ -223,6 +223,18 @@ struct VendorGoods { uint32_t item = 0; uint16_t buyCount = 1; };
 struct Graveyard { uint32_t id = 0; float x = 0, y = 0, z = 0, o = 0; };
 struct GraveyardLink { uint32_t id = 0, zone = 0; uint16_t faction = 0; };
 
+// WoWVita: "ITX1" - a bag's slots, the durability, and what using the item does (food / drink / potions)
+struct ItemExt {
+    uint8_t slots = 0;                // a bag
+    uint16_t maxDurability = 0;
+    uint8_t kind = 0;                 // bits: 1 food (health over time), 2 drink (mana over time), 4 heal, 8 mana
+    uint32_t spell = 0;
+    uint32_t hpMin = 0, hpMax = 0, manaMin = 0, manaMax = 0;   // food / drink: the total over durationMs
+    uint32_t durationMs = 0, cooldownMs = 0;
+    uint16_t category = 0;
+    uint8_t flags = 0;                // 1 not in combat, 2 used up
+};
+
 struct WorldData {
     uint16_t formatVersion = 1;
     std::string name;
@@ -249,6 +261,10 @@ struct WorldData {
     std::vector<Graveyard> graveyards;                                // "GRAV"
     std::vector<GraveyardLink> graveyardLinks;
     std::vector<uint32_t> taverns;                                    // "TAVN": the inns' area trigger ids
+    std::unordered_map<uint32_t, ItemExt> itemExt;                    // "ITX1"
+    std::vector<uint32_t> explorationXp;                              // "EXPL": by area level
+    std::unordered_multimap<uint32_t, uint32_t> questTriggers;        // "QTRG": area trigger -> exploration quest
+    const ItemExt* ext(uint32_t item) const { auto it = itemExt.find(item); return it == itemExt.end() ? nullptr : &it->second; }
     const QuestFull* questFull(uint32_t id) const {
         auto it = questIndex.find(id);
         return it == questIndex.end() ? nullptr : &questsFull[it->second];
@@ -421,6 +437,7 @@ struct CharacterProfile {
     bool logoutResting = false;       // in an inn or a capital then
     std::array<uint32_t, 8> taxiMask{};   // WoWVita: the flight paths discovered (TaxiNodes ids as bits; the "TAX1" block)
     std::array<BagItem, 24> bank{};       // WoWVita: the bank's 24 slots (inventory slots 39..62; the "BNK1" block)
+    std::array<uint32_t, 64> explored{};  // WoWVita: the AreaTable explore bits found (the "EXP1" block)
 };
 
 // WoWVita: a letter between the characters of this save (the "MAL1" block)
@@ -515,6 +532,8 @@ public:
     // Sells (count 0 = all) of backpack slot 'index'; the copper paid, 0 = nothing sold.
     uint32_t sellBagItem(int index, uint32_t count, uint32_t nowMs);
     void removeBagItem(int index);   // WoWVita: the whole stack leaves the backpack (the bank, a letter)
+    bool takeFromBag(int index, uint16_t n);   // WoWVita: n of a stack are used up (food)
+    void removeAuraSpell(Entity& e, uint32_t spell);   // WoWVita
     // Puts backpack slot 'index' on (what was worn there goes to the backpack). 0 = done, else a reason for the
     // player: 1 cannot be worn, 2 too low level, 3 no room for the off-hand item. *slotsOut: the equipment slots
     // that changed (up to 2).
@@ -528,7 +547,7 @@ public:
     void syncPlayerMoney() { if (player_) profiles_[0].money = player_->money; }
     void recomputeGear();   // weapon damage / speed and armour from what is worn
     void addMoneyToPlayer(uint32_t copper, uint32_t nowMs);
-    void addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim = 0);   // WoWVita: a kill (victim) uses the rested bonus
+    void addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim = 0, bool silent = false);   // WoWVita: a kill (victim) uses the rested bonus
     // Player resurrection (corpse reclaim / spirit healer): clears combat and restores a share of HP.
     void revive(Entity& e, int32_t hpPercent, uint32_t nowMs);
     // Cancel an in-progress cast (player pressed cancel / an interrupt landed).

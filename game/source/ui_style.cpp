@@ -10,8 +10,8 @@ namespace ui {
 int g_lang = 0;   // 6.20: English by default (0), also in the main menu
 
 namespace {
-const char* const kLangCodes[kLangCount] = {"enUS", "ruRU", "esES", "deDE", "frFR"};
-const char* const kLangNames[kLangCount] = {"English", "Русский", "Español", "Deutsch", "Français"};
+const char* const kLangCodes[kLangCount] = {"enUS", "ruRU", "esES", "deDE", "frFR", "csCZ"};
+const char* const kLangNames[kLangCount] = {"English", "Русский", "Español", "Deutsch", "Français", "Čeština"};
 std::unordered_map<std::string, std::string> g_tr;
 int g_loadedLang = -1;
 

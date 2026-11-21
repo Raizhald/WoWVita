@@ -13,7 +13,7 @@ namespace ui {
 extern int g_lang;   // 0 English, 1 Russian, 2 Spanish, 3 German, 4 French
 // 7.15: the interface languages. Russian is built in (the second argument of tr); the others are loaded from
 // sdmc:/3ds/w3dproto/lang_<code>.txt (or romfs:/lang_<code>.txt), a table of English<TAB>translation.
-constexpr int kLangCount = 5;
+constexpr int kLangCount = 6;   // WoWVita: + Czech
 constexpr int kLangSpanish = 2, kLangGerman = 3, kLangFrench = 4;
 void setLanguage(int lang);                 // switches g_lang and loads that language's table
 bool loadLanguageTable(const char* path);   // loads one lang_<code>.txt (tests / tools; setLanguage uses it)

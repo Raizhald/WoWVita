@@ -88,6 +88,7 @@ if(VITA)
     FILE ${ROOT}/data/lang_deDE.txt lang_deDE.txt
     FILE ${ROOT}/data/lang_esES.txt lang_esES.txt
     FILE ${ROOT}/data/lang_frFR.txt lang_frFR.txt
+    FILE ${ROOT}/data/lang_csCZ.txt lang_csCZ.txt
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/icon0.png sce_sys/icon0.png
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/bg.png sce_sys/livearea/contents/bg.png
     FILE ${CMAKE_CURRENT_SOURCE_DIR}/sce_sys/livearea/contents/startup.png sce_sys/livearea/contents/startup.png

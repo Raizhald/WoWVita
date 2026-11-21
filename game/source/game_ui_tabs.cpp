@@ -79,12 +79,15 @@ const char* slotShortName(int s) {
                                  "Ring", "Ring", "Schmuck", "Schmuck", "Rücken", "Haupthand", "Nebenhand", "Distanz", "Wappenrock"};
     static const char* fr[19] = {"Tête", "Cou", "Épaule", "Chemise", "Torse", "Taille", "Jambes", "Pieds", "Poignet", "Mains",
                                  "Anneau", "Anneau", "Bijou", "Bijou", "Dos", "Main droite", "Main gauche", "Distance", "Tabard"};
+    static const char* cs[19] = {"Hlava", "Krk", "Ramena", "Košile", "Hruď", "Pás", "Nohy", "Chodidla", "Zápěstí", "Ruce",
+                                 "Prsten", "Prsten", "Trinket", "Trinket", "Záda", "Hlavní", "Vedlejší", "Dálková", "Tabard"};   // WoWVita
     if (s < 0 || s >= 19) return s >= 19 && s < 23 ? tr("Bag", "Сумка") : "";
     // 7.15: the slot short names have their own table: "Back" / "Off" are also buttons and toggles in tr().
     if (g_lang == 1) return ru[s];
     if (g_lang == 2) return es[s];
     if (g_lang == 3) return de[s];
     if (g_lang == 4) return fr[s];
+    if (g_lang == 5) return cs[s];
     return en[s];
 }
 

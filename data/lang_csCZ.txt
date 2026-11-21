@@ -1,0 +1,732 @@
+All bags	Všechny tašky
+Backpack	Batoh
+Quiver	Toulec
+Ammo pouch	Brašna na střelivo
+Soul bag	Taška duší
+Leatherwork	Kožedělná
+Herb bag	Taška na byliny
+Enchanting	Očarování
+Engineering	Inženýrství
+Keyring	Klíčenka
+Bag	Taška
+That button is fixed: pick another	Toto tlačítko je pevné: vyber jiné
+Empty slot: drag a spell here (Spells tab)	Prázdné místo: přetáhni sem kouzlo (karta Kouzla)
+Tap an item, then Buy / Sell	Ťukni na předmět, pak Koupit / Prodat
+Tap a spell, then Train	Ťukni na kouzlo, pak Naučit
+Type a message or /command	Napiš zprávu nebo /příkaz
+Message	Zpráva
+Tab pinned: no automatic switching	Karta připnuta: bez automatického přepínání
+Tabs switch with combat again	Karty se zase přepínají s bojem
+Sell 	Prodat 
+Sell grey items:	Prodat šedé věci:
+Unlearn 	Zapomenout 
+? Its progress is lost.	? Jeho postup se ztratí.
+Only 5 quests can be followed.	Sledovat jde jen 5 questů.
+Abandon "	Zrušit „
+"?	“?
+Passive: cannot be put on a bar	Pasivní: nejde dát na lištu
+Press the button (or tap the cell) to clear	Stiskni tlačítko (nebo ťukni na políčko) pro smazání
+Quit the game?	Ukončit hru?
+Log out to the character list?	Odhlásit se do výběru postav?
+Whisper to 	Šeptat: 
+Destroy 	Zničit 
+Channel name (then password after a space)	Název kanálu (heslo za mezerou)
+Friend's name	Jméno přítele
+Name to ignore	Jméno k ignorování
+Invite whom?	Koho pozvat?
+Remove 	Odebrat 
+ from friends?	 z přátel?
+Leave your guild?	Opustit guildu?
+Buy a bank bag slot?	Koupit místo na tašku v bance?
+You have no pet	Nemáš mazlíčka
+Pet's name (2-12 letters)	Jméno mazlíčka (2–12 písmen)
+Abandon the pet FOR GOOD? It cannot be called back.	Opustit mazlíčka NAVŽDY? Nepůjde přivolat zpět.
+Dismiss the pet?	Propustit mazlíčka?
+You do not have the reagents	Nemáš potřebné suroviny
+Delete the letter with what is attached?	Smazat dopis i s přílohou?
+To	Komu
+Subject	Předmět
+Text	Text
+Copper (100 = 1s)	Měďáky (100 = 1s)
+Item name (empty = all)	Název věci (prázdné = vše)
+Buy out	Vykoupit
+Bid	Přihodit
+Starting bid, copper	Vyvolávací cena, měďáky
+Buyout, copper (0 = none)	Výkupní cena, měďáky (0 = žádná)
+Cancel this auction? The deposit is lost.	Zrušit aukci? Záloha propadne.
+Tap one of your items first	Nejdřív ťukni na svou věc
+All six slots are used	Všech šest míst je plných
+Copper to give	Kolik měďáků dát
+Cancel	Zrušit
+Say	Říct
+Yell	Křičet
+Party	Parta
+Raid	Raid
+Guild	Guilda
+Whisper	Šeptat
+h	h
+m	m
+Group and nearby	Parta a okolí
+Offline	Offline
+Ghost	Duch
+Dead	Mrtvý
+yd	yd
+Nobody around.	Nikdo poblíž.
+Target of target	Cíl cíle
+(none)	(žádný)
+No target	Žádný cíl
+Your effects	Tvoje efekty
+none	žádné
+Cooldowns	Obnovení
+all ready	vše připraveno
+Cancel the cast	Zrušit sesílání
+no ui.w3dp	chybí ui.w3dp
+ui.w3dp has no maps (log_ui: maps)	ui.w3dp nemá mapy (log_ui: maps)
+no map #%u in ui.w3dp (%u maps)	v ui.w3dp chybí mapa #%u (%u map)
+Kalimdor	Kalimdor
+Eastern Kingdoms	Východní království
+World	Svět
+Zone	Zóna
+Contin.	Kontin.
+x%d drag	x%d táhni
+Mobs	Tvorové
+Quests	Questy
+Mail!	Pošta!
+All	Vše
+Group	Parta
+Whisp.	Šept.
+Chan.	Kan.
+System	Systém
+No messages.	Žádné zprávy.
+Write	Psát
+More	Další
+Phrases	Fráze
+Emotes	Emoce
+Channels	Kanály
+Who	Kdo
+Leave	Odejít
+Not in any channel.	Nejsi v žádném kanálu.
+Join channel...	Připojit kanál...
+Stand	Vstát
+Bags	Tašky
+Equipment	Výbava
+Your bags are empty.	Tašky jsou prázdné.
+Use	Použít
+Bind	Přiřadit
+Open	Otevřít
+Equip	Obléct
+Del	Smaž
+free	volno
+Level	Úroveň
+Durability	Odolnost
+Remove	Odebrat
+Info	Info
+Book	Kniha
+Talents	Talenty
+Skills	Dovednosti
+Crafting	Výroba
+Passive	Pasivní
+Clear a button	Vymazat tlačítko
+bar	lišta
+points:	body:
+No talents for this class.	Toto povolání nemá talenty.
+No talents.txt on the SD card	Na kartě chybí talents.txt
+(w3dconv --ui or --texts-only writes it)	(zapíše ho w3dconv --ui nebo --texts-only)
+Tiers ▲	Řady ▲
+Tiers ▼	Řady ▼
+Tap a talent.	Ťukni na talent.
+Rank	Stupeň
+Needs %u points in %s	Chce %u bodů v %s
+Needs: 	Chce: 
+Next: 	Další: 
+Learn	Naučit
+No skills.txt on the SD card	Na kartě chybí skills.txt
+No skills yet.	Zatím žádné dovednosti.
+No description.	Bez popisu.
+Tap a skill for its description. Tap a title to fold the group.	Ťukni na dovednost pro popis. Ťuknutím na nadpis skupinu sbalíš.
+Unlearn	Zapomenout
+No recipes.txt on the SD card	Na kartě chybí recipes.txt
+You know no crafting recipes.	Neznáš žádné recepty.
+Learn a profession from a trainer.	Nauč se profesi u trenéra.
+pick an item	vyber věc
+No item to use this on.	Není na co to použít.
+Nothing this enchant fits.	Tohle očarování se nikam nehodí.
+Back	Zpět
+No recipes.	Žádné recepty.
+Tools: 	Nástroje: 
+Reagents:	Suroviny:
+Stop	Stop
+Enchant	Očarovat
+Create	Vyrobit
+Have mats	Mám suroviny
+Nothing you can make now.	Teď nic nevyrobíš.
+Reputation	Reputace
+No factions.txt on the SD card.	Na kartě chybí factions.txt.
+No reputations yet.	Zatím žádné reputace.
+(complete)	(hotovo)
+(failed)	(nesplněno)
+Description	Popis
+Choose one reward:	Vyber si jednu odměnu:
+You will also receive:	Dostaneš také:
+You will receive:	Dostaneš:
+Money: 	Peníze: 
+(asking the server...)	(ptám se serveru...)
+Untrack	Nesledovat
+Track	Sledovat
+Abandon	Zrušit
+Your quest log is empty.	Deník questů je prázdný.
+failed	nesplněno
+done	hotovo
+Friends	Přátelé
+Ignore	Ignorovat
+You are not in a group.	Nejsi v partě.
+Invite	Pozvat
+Kick	Vyhodit
+Leader	Vůdce
+You are not in a guild.	Nejsi v guildě.
+offline	offline
+No friends yet.	Zatím žádní přátelé.
+Add	Přidat
+Nobody is ignored.	Nikoho neignoruješ.
+Controls	Ovládání
+Graphics/sound	Grafika/zvuk
+Interface	Rozhraní
+Scheme	Schéma
+Run from	Běh od
+Face movement	Otočit při pohybu
+On	Zap
+Off	Vyp
+Hold	Držet
+Toggle	Přepnout
+Camera	Kamera
+Invert Y	Obrátit Y
+Ground spells	Plošná kouzla
+Aim	Mířit
+At target	Na cíl
+Draw distance	Dohled
+Near	Blízko
+Normal	Normální
+Far	Daleko
+Max	Max
+Auto	Auto
+Crowds	Davy
+World objects	Objekty světa
+Fade in: on	Prolínání: zap
+Fade in: off	Prolínání: vyp
+Particles	Částice
+Low	Nízko
+High	Vysoko
+Top screen	Horní obrazovka
+Music	Hudba
+Effects	Efekty
+Ambience	Prostředí
+off	vyp
+Language	Jazyk
+Text size	Velikost textu
+Large	Velký
+Dim HUD / bubbles	Ztlumit HUD / bubliny
+Dim: on	Ztlumit: zap
+Dim: off	Ztlumit: vyp
+Bubbles: on	Bubliny: zap
+Bubbles: off	Bubliny: vyp
+Auto tabs	Auto karty
+Quest on top	Quest nahoře
+FPS / ping	FPS / ping
+Log / GPU / Frame	Log / GPU / Snímek
+Log	Log
+no log	bez logu
+GPU early	GPU brzy
+GPU end	GPU na konci
+Auto 60/30	Auto 60/30
+Steady 30	Stálých 30
+Free	Volně
+Horizon	Horizont
+Debug page	Ladění
+Quit	Konec
+Chat	Chat
+Spells	Kouzla
+Buffs	Buffy
+Settings	Nastavení
+Free camera	Volná kamera
+Pet	Mazlíček
+Characters	Postavy
+Close	Zavřít
+Attack	Útok
+Interact	Interakce
+Assist	Pomoct
+Clear target	Zrušit cíl
+Uninvite	Vyhodit
+Make leader	Udělat vůdcem
+Leave party	Opustit partu
+Trade	Obchod
+Add friend	Přidat přítele
+Guild invite	Pozvat do guildy
+Inspect	Prohlédnout
+Follow	Následovat
+Duel	Duel
+Stop following	Přestat následovat
+Out of range	Mimo dosah
+You	Ty
+Honorable kills	Čestná zabití
+Today	Dnes
+tap an item for its tooltip	ťukni na věc pro popis
+No buffs or debuffs.	Žádné buffy ani debuffy.
+Cancel buff	Zrušit buff
+tap a buff to cancel it	ťukni na buff pro zrušení
+g	g
+s	s
+c	c
+Fight	Boj
+Map	Mapa
+Social	Sociální
+Setup	Nastavení
+Clear which button?	Které tlačítko vymazat?
+Bind: 	Přiřadit: 
+Drop it on a button	Pusť to na tlačítko
+Tap a cell or press the button	Ťukni na políčko nebo stiskni tlačítko
+Resurrection	Oživení
+Loot: 	Loot: 
+corpse	mrtvola
+Vendor	Obchodník
+Quest	Quest
+Trainer	Trenér
+Innkeeper	Hostinský
+Bank	Banka
+Flight master	Letecký mistr
+Mailbox	Schránka
+Auction house	Aukce
+Item	Předmět
+Spell	Kouzlo
+Buffs and debuffs	Buffy a debuffy
+Loot roll 	Házení o loot 
+Loot roll	Házení o loot
+Group invitation	Pozvánka do party
+Guild invitation	Pozvánka do guildy
+Menu	Menu
+Are you sure?	Opravdu?
+Target	Cíl
+Stable master	Stájník
+Combat	Boj
+Spellbook	Kniha kouzel
+Quest log	Deník questů
+challenges you to a duel.	tě vyzývá na duel.
+Accept	Přijmout
+Decline	Odmítnout
+Duel requested. Waiting...	Duel vyžádán. Čekám...
+invites you to a group.	tě zve do party.
+invites you to the guild 	tě zve do guildy 
+Do you want to make this inn	Chceš si z tohoto hostince
+your new home?	udělat nový domov?
+Yes	Ano
+No	Ne
+very long	velmi dlouho
+long	dlouho
+medium	středně
+short	krátce
+You have died.	Zemřel jsi.
+Release Spirit	Uvolnit ducha
+You will return as a ghost at the nearest graveyard.	Vrátíš se jako duch na nejbližším hřbitově.
+You are a ghost.	Jsi duch.
+Your corpse: %.0f yd %s	Tvoje mrtvola: %.0f yd %s
+Your corpse is on another map.	Tvoje mrtvola je na jiné mapě.
+Looking for your corpse...	Hledám tvoji mrtvolu...
+Resurrect	Oživit
+You can resurrect in %u s	Oživit se můžeš za %u s
+Run back to your body (within 39 yd)	Doběhni ke svému tělu (do 39 yd)
+Spirit healer: %.0f yd %s	Duchovní léčitel: %.0f yd %s
+The spirit healer is on another map.	Duchovní léčitel je na jiné mapě.
+No spirit healer seen yet.	Zatím žádný duchovní léčitel.
+Talk to the spirit healer	Promluv s duchovním léčitelem
+Return to life now? You will suffer resurrection sickness.	Vrátit se hned k životu? Dostaneš nemoc z oživení.
+Someone	Někdo
+ wants to resurrect you.	 tě chce oživit.
+Money	Peníze
+(empty)	(prázdné)
+Take all	Vzít vše
+ s	 s
+Need	Potřebuju
+Greed	Chci
+Pass	Nechci
+Goodbye	Sbohem
+Buy	Koupit
+Sell	Prodat
+Buyback	Výkup
+Repair	Opravit
+This vendor has nothing to sell.	Tento obchodník nemá co prodat.
+Buy 5	Koupit 5
+tap an item	ťukni na věc
+Sell junk	Prodat šedé
+tap an item to sell it	ťukni na věc pro prodej
+Nothing sold here yet.	Zatím jsi tu nic neprodal.
+Buy back	Vykoupit zpět
+tap an item to buy it back	ťukni na věc pro výkup
+Show: all	Ukázat: vše
+Show: learnable	Ukázat: k naučení
+I can teach you nothing.	Nemám tě co naučit.
+You know everything I can teach.	Umíš všechno, co tě můžu naučit.
+Train	Naučit
+not available yet	zatím nedostupné
+tap a spell	ťukni na kouzlo
+To chat	Do chatu
+Cooldown: %.1f s	Obnovení: %.1f s
+%u s left	zbývá %u s
+Debuff	Debuff
+Buff	Buff
+In your spell book: drag it to a button or tap Bind.	V knize kouzel: přetáhni na tlačítko nebo ťukni na Přiřadit.
+Quest Objectives	Cíle questu
+Required items	Potřebné věci
+Continue	Pokračovat
+not done yet	zatím nesplněno
+Complete	Dokončit
+bag slots	místa na tašky
+The bank is empty.	Banka je prázdná.
+To the bags	Do tašek
+To the bank	Do banky
+Buy bag slot	Koupit místo na tašku
+Node 	Bod 
+From: 	Odkud: 
+You know no other flight path here.	Odsud neznáš žádnou jinou leteckou trasu.
+Fly	Letět
+tap a destination	ťukni na cíl
+(none: tap)	(žádný: ťukni)
+Send	Odeslat
+postage 30c	poštovné 30c
+(loading the text...)	(načítám text...)
+Take 	Vzít 
+Take item	Vzít věc
+Cash on delivery: 	Dobírka: 
+Delete	Smazat
+Letters	Dopisy
+Checking the mail...	Kontroluju poštu...
+No mail.	Žádná pošta.
+New letter	Nový dopis
+Browse	Procházet
+My auctions	Moje aukce
+Search: everything (tap)	Hledat: vše (ťukni)
+Refresh	Obnovit
+Searching...	Hledám...
+Nothing found.	Nic nenalezeno.
+Bid 	Přihodit 
+Buy 	Koupit 
+in all	celkem
+You have no auctions here.	Nemáš tu žádné aukce.
+Cancel auction	Zrušit aukci
+Buyout 	Výkup 
+Tap an item to sell.	Ťukni na věc k prodeji.
+someone	někdo
+wants to trade with you.	s tebou chce obchodovat.
+Waiting for 	Čekám na 
+Offer	Nabídnout
+Gold	Zlato
+Accepted	Přijato
+You have no pet.	Nemáš mazlíčka.
+Feed Pet: pick the food	Nakrmit mazlíčka: vyber jídlo
+No food in the bags.	V taškách není jídlo.
+Happy	Spokojený
+Content	Klidný
+Unhappy	Nespokojený
+loyalty	věrnost
+Orders	Rozkazy
+Pet spells	Kouzla mazlíčka
+Feed	Nakrmit
+Rename	Přejmenovat
+Dismiss	Propustit
+Stable slots	Místa ve stáji
+No pets here.	Žádní mazlíčci.
+with you	s tebou
+in the stable	ve stáji
+Stable it	Do stáje
+Swap	Vyměnit
+Take out	Vyzvednout
+Buy a slot	Koupit místo
+PvP	PvP
+RP	RP
+RP PvP	RP PvP
+Medium	Střední
+Skin Color	Barva pleti
+Face	Obličej
+Hair Style	Účes
+Hair Color	Barva vlasů
+Facial Hair	Vousy
+Okay	OK
+Delete 	Smazat 
+Server	Server
+Account Name	Jméno účtu
+Account Password	Heslo účtu
+Login	Přihlásit
+Realm Selection	Výběr realmu
+Realm Name	Název realmu
+Type	Typ
+Chars	Postavy
+Population	Obsazenost
+No realms	Žádné realmy
+Change Realm	Změnit realm
+No characters	Žádné postavy
+Create New Character	Vytvořit postavu
+Enter World	Vstoupit do světa
+L / R: turn	L / R: otočit
+Alliance	Aliance
+Horde	Horda
+Female	Žena
+Male	Muž
+Randomize	Náhodně
+Name	Jméno
+Y: enter a name	Y: zadej jméno
+Account Login	Přihlášení
+Account	Účet
+(tap to enter)	(ťukni a zadej)
+Password	Heslo
+Protocol	Protokol
+on	zap
+D-pad, A: the top screen	Šipky, A: horní obrazovka
+The password is never saved	Heslo se nikdy neukládá
+ chars	 postav
+No characters on this realm yet	Na tomto realmu zatím nemáš postavy
+Race	Rasa
+Class	Povolání
+Racial traits	Rasové vlastnosti
+Races	Rasy
+away	pryč
+passive	pasivní
+stay	zůstaň
+attack	útoč
+loading...	načítám...
+Average item level	Průměrná úroveň věcí
+items known	známých věcí
+Attributes	Vlastnosti
+Armor	Brnění
+Resistance	Odolnost
+Melee	Na blízko
+Damage	Poškození
+Attack power	Síla útoku
+Crit	Krit
+Defense	Obrana
+Dodge	Uhnutí
+Parry	Vykrytí
+Block	Blok
+Ranged	Na dálku
+Bonus damage	Bonus poškození
+Lootable	Lze lootovat
+Leaving the duel area: you lose in %u s	Opouštíš místo duelu: prohraješ za %u s
+Following 	Následuješ: 
+C-Stick aim | again: cast | cancel	Pravá páčka: mířit | znovu: seslat | zrušit
+Congratulations, you have reached level %u!	Gratulace, dosáhl jsi úrovně %u!
+Server: host or host:port (3724 by default)	Server: adresa nebo adresa:port (výchozí 3724)
+Account name	Jméno účtu
+Connecting...	Připojuji...
+That realm is offline.	Tento realm je offline.
+Connecting to 	Připojuji k 
+Deleting character...	Mažu postavu...
+Name (2 to 12 letters)	Jméno (2 až 12 písmen)
+Creating character...	Vytvářím postavu...
+Entering world...	Vstupuji do světa...
+Authenticating...	Ověřuji...
+Position in queue:	Pořadí ve frontě:
+Retrieving character list...	Načítám seznam postav...
+Disconnected: 	Odpojeno: 
+The server did not answer.	Server neodpověděl.
+You can't log out now.	Teď se nemůžeš odhlásit.
+Logging out... move to cancel.	Odhlašuji... pohybem zrušíš.
+Logout cancelled.	Odhlášení zrušeno.
+Warrior	Válečník
+Paladin	Paladin
+Hunter	Lovec
+Rogue	Zloděj
+Priest	Kněz
+Shaman	Šaman
+Mage	Mág
+Warlock	Černokněžník
+Druid	Druid
+Head	Hlava
+Neck	Krk
+Shoul	Ramena
+Shirt	Košile
+Chest	Hruď
+Waist	Pás
+Legs	Nohy
+Feet	Boty
+Wrist	Zápěstí
+Hands	Ruce
+Ring	Prsten
+Trink	Cetka
+Main	Hlavní
+Range	Dálka
+Tabard	Tabard
+north	sever
+north-east	severovýchod
+east	východ
+south-east	jihovýchod
+south	jih
+south-west	jihozápad
+west	západ
+north-west	severozápad
+Hello!	Ahoj!
+Thanks!	Díky!
+Need help?	Potřebuješ pomoct?
+Ready.	Připraven.
+Wait a moment.	Chvilku počkej.
+Follow me.	Pojď za mnou.
+Good game!	Dobrá hra!
+Bye!	Čau!
+Human	Člověk
+Orc	Ork
+Dwarf	Trpaslík
+Night Elf	Noční elf
+Undead	Nemrtvý
+Tauren	Tauren
+Gnome	Gnóm
+Troll	Troll
+Goblin	Goblin
+High Elf	Vznešený elf
+Private	Vojín
+Corporal	Desátník
+Sergeant	Seržant
+Master Sergeant	Nadrotmistr
+Sergeant Major	Štábní rotmistr
+Knight	Rytíř
+Knight-Lieutenant	Rytíř-poručík
+Knight-Captain	Rytíř-kapitán
+Knight-Champion	Rytíř-šampion
+Lieutenant Commander	Podplukovník
+Commander	Velitel
+Marshal	Maršál
+Field Marshal	Polní maršál
+Grand Marshal	Velký maršál
+Scout	Zvěd
+Grunt	Pěšák
+Senior Sergeant	Starší seržant
+First Sergeant	První seržant
+Stone Guard	Kamenný strážce
+Blood Guard	Krvavý strážce
+Legionnaire	Legionář
+Centurion	Centurion
+Champion	Šampion
+Lieutenant General	Generálporučík
+General	Generál
+Warlord	Vojevůdce
+High Warlord	Velký vojevůdce
+Loot	Loot
+Talk	Mluvit
+Mail	Pošta
+Auction	Aukce
+Herb	Bylina
+Mine	Těžit
+Pick	Páčit
+Requires Herbalism	Vyžaduje bylinkářství
+Requires Mining	Vyžaduje hornictví
+Requires Lockpicking	Vyžaduje páčení zámků
+Requires a key	Vyžaduje klíč
+You can't open that	Tohle neotevřeš
+Too far away	Příliš daleko
+You are too far away	Jsi příliš daleko
+You are too far away to loot that corpse	Jsi příliš daleko od mrtvoly
+Nothing to loot	Není co lootovat
+It is hostile to you	Je k tobě nepřátelský
+Ghosts can only talk to spirit healers	Duch může mluvit jen s duchovním léčitelem
+You are dead (release your spirit first)	Jsi mrtvý (nejdřív uvolni ducha)
+Your bags are full.	Tašky jsou plné.
+You don't have enough money.	Nemáš dost peněz.
+Trade cancelled.	Obchod zrušen.
+Trade complete.	Obchod dokončen.
+Mail sent.	Pošta odeslána.
+You have new mail.	Máš novou poštu.
+Auction created.	Aukce vytvořena.
+Auction cancelled.	Aukce zrušena.
+Bid accepted.	Příhoz přijat.
+You take a flight.	Letíš.
+New flight path discovered!	Objevena nová letecká trasa!
+You have no talent points.	Nemáš body talentů.
+You need the talent before it first.	Nejdřív potřebuješ předchozí talent.
+You already know every rank of that talent.	Tento talent už máš na nejvyšším stupni.
+You bought a bank slot.	Koupil jsi místo v bance.
+You are already there.	Už tam jsi.
+You haven't learned that flight path yet.	Tuhle leteckou trasu ještě neznáš.
+There is no flight path to that destination.	Do tohoto cíle nevede letecká trasa.
+Your bid is too low.	Tvůj příhoz je moc nízký.
+You cannot bid on your own auction.	Na vlastní aukci přihodit nemůžeš.
+Unequip it first.	Nejdřív to sundej.
+You are already trading.	Už obchoduješ.
+Whom to send it to?	Komu to poslat?
+A letter needs a subject.	Dopis potřebuje předmět.
+You don't have enough money (postage is 30c).	Nemáš dost peněz (poštovné je 30c).
+Choose a reward first.	Nejdřív vyber odměnu.
+Choose a reward first (tap it)	Nejdřív vyber odměnu (ťukni na ni)
+Your target is dead	Tvůj cíl je mrtvý
+You cannot attack that target	Tento cíl nemůžeš napadnout
+Already casting	Už sesíláš
+You are dead.	Jsi mrtvý.
+You are alive again.	Zase žiješ.
+Friend added	Přítel přidán
+Friend removed	Přítel odebrán
+Player not found	Hráč nenalezen
+Player ignored	Hráč ignorován
+No longer ignored	Už neignorován
+Already on your friend list	Už je mezi přáteli
+Trade declined	Obchod odmítnut
+That player is busy	Hráč je zaneprázdněn
+Trade target is too far away	Obchodník je příliš daleko
+Your corpse could not be found.	Tvoje mrtvola nejde najít.
+Nothing to repair.	Není co opravit.
+Your quest log is full.	Deník questů je plný.
+That item is sold out.	Tato věc je vyprodaná.
+No recent enemy	Žádný nedávný nepřítel
+Your target has no target	Tvůj cíl nemá cíl
+Target a player first	Nejdřív vyber hráče
+Binding cancelled	Přiřazení zrušeno
+You are dead	Jsi mrtvý
+You have no target	Nemáš cíl
+Invalid target	Neplatný cíl
+Not enough mana	Málo many
+Not enough rage	Málo vzteku
+Not enough energy	Málo energie
+Not enough focus	Málo soustředění
+Spell is not ready yet	Kouzlo ještě není připravené
+Ability is not ready yet	Schopnost ještě není připravená
+Item is not ready yet	Věc ještě není připravená
+Another action is in progress	Probíhá jiná akce
+Interrupted	Přerušeno
+You are facing the wrong way	Díváš se špatným směrem
+You must be standing	Musíš stát
+Inventory is full	Inventář je plný
+That bag is full	Taška je plná
+Out of ammo	Došlo střelivo
+Target not in line of sight	Cíl není na dohled
+Can't do that while moving	To nejde za pohybu
+You can't do that yet	To zatím nemůžeš
+You can't carry any more of those items	Víc těchto věcí neuneseš
+You can't carry any more of those items.	Víc těchto věcí neuneseš.
+You can't learn that yet.	To se zatím nemůžeš naučit.
+You don't have permission to loot that corpse.	Tuto mrtvolu nesmíš lootovat.
+You are too far away to loot that corpse.	Jsi příliš daleko od mrtvoly.
+You cannot loot that.	Tohle nejde lootovat.
+Someone is already looting that corpse.	Mrtvolu už někdo lootuje.
+You must be facing the corpse to loot it.	Musíš se dívat na mrtvolu.
+You need to be standing up to loot something!	Ke lootování musíš stát!
+Target is friendly	Cíl je přátelský
+Target is hostile	Cíl je nepřátelský
+Target needs to be in front of you	Cíl musí být před tebou
+You must be in front of your target	Musíš být před cílem
+Target too close	Cíl je moc blízko
+You are already in a duel	Už jsi v duelu
+You decline the duel.	Odmítl jsi duel.
+The duel was cancelled.	Duel byl zrušen.
+You loot 	Lootuješ 
+You are no longer following 	Už nenásleduješ 
+You have requested a duel with 	Vyzval jsi na duel: 
+Quest accepted: 	Quest přijat: 
+You have learned a new spell: 	Naučil ses nové kouzlo: 
+You gain 	Získáváš 
+Sold 	Prodáno: 
+Bought 	Koupeno: 
+Your corpse is 	Tvoje mrtvola je 
+You can resurrect in 	Oživit se můžeš za 
+Nothing to do with 	Nedá se nic dělat s 
+None left: 	Došlo: 
+Empty slot	Prázdné místo
+Hotbar page 	Strana lišty 
+Bound to 	Přiřazeno k 
+Cleared 	Vymazáno 
+Press a button (or tap a bar cell) for 	Stiskni tlačítko (nebo ťukni na políčko) pro 
+You need 	Potřebuješ 
+D-pad	Šipky
+Spells: hold Y to look, tap Y to chat	Kouzla: drž Y pro rozhled, ťukni Y pro chat

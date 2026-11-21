@@ -19,6 +19,8 @@ std::vector<uint32_t> uiCodepoints() {
     // 7.15: the whole Latin-1 supplement (á é í ó ú ñ ü ß ç à ...) for the Spanish / German / French UI. It replaces the
     // old sparse 0xA0/A9/AB/B0/B7/BB/D7 list (all of them are in this range).
     for (uint32_t c = 0xA0; c < 0x100; ++c) cps.push_back(c);
+    for (uint32_t c = 0x100; c < 0x180; ++c) cps.push_back(c);   // WoWVita: Latin Extended-A (the Czech UI)
+    for (uint32_t c : {0x2018u, 0x2019u, 0x201Au, 0x201Cu, 0x201Du, 0x201Eu}) cps.push_back(c);   // and its quotes
     cps.push_back(0x401u);
     for (uint32_t c = 0x410; c < 0x450; ++c) cps.push_back(c);
     for (uint32_t c : {0x451u, 0x2013u, 0x2014u, 0x2022u, 0x2026u, 0x2116u, 0x2190u, 0x2191u, 0x2192u, 0x2193u, 0x25B2u,

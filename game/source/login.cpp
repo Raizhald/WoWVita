@@ -426,6 +426,7 @@ void LoginFlow::network() {
     // > Language). A Turtle client keeps its own enUS unless glue.txt names a language.
     const std::string& gameLocale = texts_.gameLocale();
     ver.locale = !gameLocale.empty() ? gameLocale : (turtle_ ? std::string("enUS") : std::string(ui::languageCode(ui::g_lang)));
+    if (ver.locale == "csCZ") ver.locale = "enUS";   // WoWVita: there was no Czech game client: the server texts in English
     if (pending_ == Pending::Auth) {   // the "Connecting..." dialog was drawn last frame
         pending_ = Pending::None;
         bool ok = auth_.start(server_, account_, password_, ver);

@@ -51,7 +51,13 @@ character carries the Hearthstone (10 s cast, broken by moving, 1 hour cooldown)
 No durability loss (the offline core has no durability).
 Rested experience (`TAVN`: areatrigger_tavern; the shapes are the client's areatriggers.txt): resting in an inn or a
 capital (the portrait's zZ) fills the pool by 5 % of a level per 8 hours, time away by the same in an inn or a capital,
-a quarter elsewhere; a kill gives double XP from the pool (at most 1.5 levels of kills), "(+N exp Rested bonus)". Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
+a quarter elsewhere; a kill gives double XP from the pool (at most 1.5 levels of kills), "(+N exp Rested bonus)".
+
+Flight masters (net/offline/offline_taxi.cpp): the client's taxi.txt (TaxiNodes, TaxiPath) and transports.txt (every
+TaxiPathNode point, matched to a path by its ends). Talking to one discovers its point and opens the map; a flight costs
+its legs (several legs: ACTIVATETAXIEXPRESS), mounts the character (gryphon / wind rider / bat), flies the real path at
+32 yd/s as a flying spline, creatures leave it alone. A new character knows its race's capital. Without the two files
+flight masters only talk. Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
 
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.

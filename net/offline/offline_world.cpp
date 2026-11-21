@@ -258,6 +258,7 @@ bool World::inMeleeRange(const Entity& a, const Entity& b) const {
 
 bool World::hostileTowards(const Entity& a, const Entity& b) const {
     if (a.guid == b.guid || a.dead || b.dead) return false;
+    if (a.untargetable || b.untargetable) return false;   // WoWVita: a flight
     if (a.npcFlags & 3u) return false;          // gossip / quest NPCs are never hostile in this subset
     if (b.npcFlags & 3u) return false;
     if (a.faction == 0 || b.faction == 0) return false;
@@ -267,6 +268,7 @@ bool World::hostileTowards(const Entity& a, const Entity& b) const {
 bool World::canAttack(const Entity& a, const Entity& b) const {
     if (hostileTowards(a, b)) return true;
     if (a.guid == b.guid || a.dead || b.dead) return false;
+    if (a.untargetable || b.untargetable) return false;
     if ((a.npcFlags & 3u) || (b.npcFlags & 3u)) return false;
     if (a.faction == 0 || b.faction == 0) return false;
     return data_ && data_->attackable(a.faction, b.faction);

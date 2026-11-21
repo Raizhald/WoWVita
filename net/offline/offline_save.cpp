@@ -120,6 +120,10 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         payload.u32(c.logoutTime);
         payload.u8(c.logoutResting ? 1 : 0);
     }
+    // WoWVita: the flight paths discovered
+    payload.u32(0x31584154u);   // "TAX1"
+    for (const CharacterProfile& c : d.roster)
+        for (uint32_t m : c.taxiMask) payload.u32(m);
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -236,6 +240,13 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                 c.logoutTime = p.u32();
                 c.logoutResting = p.u8() != 0;
             }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        }
+    }
+    if (!p.bad && p.left() >= 4 + 4 * 32) {   // WoWVita: the flight paths
+        if (p.u32() == 0x31584154u) {
+            for (CharacterProfile& c : d.roster)
+                for (uint32_t& m : c.taxiMask) m = p.u32();
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         }
     }

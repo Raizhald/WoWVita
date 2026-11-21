@@ -295,6 +295,7 @@ struct Entity {
     uint32_t entry = 0;
     uint8_t objType = 3;               // ObjType: 3 unit, 4 player
     bool self = false, bot = false, playerLike = false;
+    bool untargetable = false;         // WoWVita: on a flight (creatures neither see nor attack it)
     int8_t botIndex = -1;
 
     float x = 0, y = 0, z = 0, o = 0;
@@ -418,6 +419,7 @@ struct CharacterProfile {
     float restBonus = 0;
     uint32_t logoutTime = 0;          // unix time of the last save
     bool logoutResting = false;       // in an inn or a capital then
+    std::array<uint32_t, 8> taxiMask{};   // WoWVita: the flight paths discovered (TaxiNodes ids as bits; the "TAX1" block)
 };
 
 struct QuestLogEntry {

@@ -39,6 +39,9 @@ public:
     void setParty(bool on) { partyEnabled_ = on; }
     // WoWVita: the client's AreaTrigger.dbc shapes (areatriggers.txt): the inns are triggers ("TAVN")
     void setAreaTriggers(const AreaTriggerTable* t) { triggers_ = t; }
+    // WoWVita: the client's taxi.txt (TaxiNodes, TaxiPath) and transports.txt (TaxiPathNode points): the flight masters
+    void setTaxi(const TaxiTable* t, const std::string& transportsPath);
+    bool flying() const { return flight_.active; }
     std::function<uint32_t()> wallClock;   // WoWVita: unix time for the rested bonus between sessions (default time())
     bool resting() const { return resting_; }
 
@@ -181,6 +184,28 @@ private:
     uint32_t reclaimAtMs_ = 0;
     bool awaitTeleportAck_ = false;
     uint32_t teleportSentMs_ = 0, teleportCounter_ = 1;
+    // flight masters (offline_taxi.cpp)
+    bool handleTaxi(uint16_t op, const Bytes& data, uint32_t nowMs);
+    bool taxiHello(uint64_t npc, bool near, bool viaGossipOption, uint32_t nowMs);
+    void loadTaxiPaths();
+    uint32_t taxiNodeFor(const Entity& npc) const;
+    bool taxiKnown(uint32_t node) const;
+    void taxiLearn(uint32_t node);
+    void taxiInitial();
+    void sendShowTaxi(uint64_t npc, uint32_t node);
+    void startFlight(const std::vector<std::array<float, 3>>& pts, uint32_t fromNode, uint32_t nowMs);
+    void updateFlight(uint32_t nowMs);
+    static constexpr uint32_t kGossipTaxi = 3;   // "Show me where I can fly."
+    const TaxiTable* taxi_ = nullptr;
+    std::string transportsPath_;
+    bool taxiPathsLoaded_ = false;
+    std::unordered_map<uint64_t, std::vector<std::array<float, 3>>> taxiLegs_;   // from << 32 | to -> the points
+    struct Flight {
+        bool active = false;
+        std::vector<std::array<float, 3>> pts;
+        std::vector<float> cum;
+        uint32_t startMs = 0, durMs = 0, mount = 0;
+    } flight_;
     // rested experience (offline_life.cpp)
     void updateRest(uint32_t nowMs);
     void restOnLogin();

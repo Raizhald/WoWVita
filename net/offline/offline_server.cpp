@@ -428,6 +428,8 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     ghost_ = false;
     corpseSet_ = false;           // WoWVita
     restOnLogin();
+    taxiInitial();
+    flight_ = Flight();
     awaitTeleportAck_ = false;
     zone_ = 0;                    // (the client says it: CMSG_ZONEUPDATE)
     // WoWVita: every character carries a Hearthstone (an older save gets one)
@@ -468,6 +470,9 @@ void OfflineSession::syncProfiles() {
     save_.player = world_.playerProfile();
     if (const Entity* p = world_.player())   // WoWVita: the Hearthstone's cooldown goes with the character
         save_.player.hearthCdSec = (world_.cooldownLeft(*p, kHearthstoneSpell, world_.nowMs()) + 999) / 1000;
+    if (flight_.active && !flight_.pts.empty()) {   // WoWVita: a flight ends where it goes
+        save_.player.x = flight_.pts.back()[0]; save_.player.y = flight_.pts.back()[1]; save_.player.z = flight_.pts.back()[2];
+    }
     save_.player.logoutTime = wallNow();   // WoWVita: rested experience between sessions
     save_.player.logoutResting = resting_;
     for (int i = 0; i < kMaxParty; ++i) save_.bots[(size_t)i] = world_.botProfile(i);
@@ -556,6 +561,8 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_NEXT_LEVEL_XP, p->nextLevelXp);
     f.set(UF::PLAYER_FIELD_COINAGE, p->money);
     f.set(UF::PLAYER_FLAGS, (ghost_ ? 0x10u : 0u) | (resting_ ? 0x20u : 0u));   // WoWVita: resting (an inn, a capital)
+    f.set(UF::UNIT_FLAGS, flight_.active ? 0x00100004u : 0u);                  // WoWVita: TAXI_FLIGHT | DISABLE_MOVE
+    f.set(UF::UNIT_MOUNTDISPLAYID, flight_.active ? flight_.mount : 0u);       // the gryphon
     {   // WoWVita: rested experience
         const CharacterProfile& pr = world_.playerProfile();
         restSent_ = (uint32_t)pr.restBonus;
@@ -678,6 +685,7 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
         case CMSG_LIST_INVENTORY:
             if (!v) return;
             if (op != CMSG_LIST_INVENTORY && lifeHello(npc, near, nowMs)) return;   // WoWVita: a spirit healer
+            if (op != CMSG_LIST_INVENTORY && taxiHello(npc, near, false, nowMs)) return;   // WoWVita: a flight master
             // WoWVita: a quest giver shows its quests (and its goods as a gossip option)
             if (op != CMSG_LIST_INVENTORY && near && questHello(npc, op, isVendor)) return;
             if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
@@ -1085,6 +1093,7 @@ void OfflineSession::handleMovement(const Bytes& data, uint32_t nowMs) {
     if (!(m.x > -1e6f && m.x < 1e6f && m.y > -1e6f && m.y < 1e6f && m.z > -1e6f && m.z < 1e6f)) return;
     // WoWVita: after a teleport the client's older packets still name the old place: wait for its MSG_MOVE_TELEPORT_ACK
     if (awaitTeleportAck_ && nowMs - teleportSentMs_ < 5000) return;
+    if (flight_.active) return;   // WoWVita: on a flight the server moves the character
     awaitTeleportAck_ = false;
     // WoWVita: moving breaks a cast (the Hearthstone), as in the original
     if (p->castSpell && std::hypot(m.x - p->x, m.y - p->y) > 0.3f) world_.stopCast(*p, 35, nowMs);
@@ -1645,6 +1654,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 send(0x04D);   // SMSG_LOGOUT_COMPLETE
                 break;
             default:
+                if (handleTaxi(op, p.second, nowMs)) break;   // WoWVita: flight masters
                 if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone
                 if (handleGameObject(op, p.second, nowMs)) break;   // WoWVita
                 if (handleQuest(op, p.second, nowMs)) break;   // WoWVita
@@ -1663,6 +1673,7 @@ void OfflineSession::update(uint32_t nowMs) {
     world_.step(nowMs);    ++stats.steps;
     dispatchEvents(nowMs);
     updateRest(nowMs);   // WoWVita: rested experience
+    updateFlight(nowMs);   // WoWVita: on a gryphon
     sendMovementToClient(nowMs);
     if (nowMs - lastPartyStats_ >= 1000) {
         lastPartyStats_ = nowMs;

@@ -105,8 +105,10 @@ public:
     // The cheapest route from -> to over the nodes 'usable' allows (both ends included); empty when none.
     template <class Usable> std::vector<uint32_t> route(uint32_t from, uint32_t to, const Usable& usable, uint32_t* cost) const;
     uint32_t directCost(uint32_t from, uint32_t to) const;   // 0 when there is no direct path
-private:
     struct Path { uint32_t from, to, cost; };
+    const std::vector<Path>& paths() const { return paths_; }   // WoWVita: the offline flight masters
+    void addPathFull(uint32_t from, uint32_t to, uint32_t cost) { paths_.push_back({from, to, cost}); }
+private:
     std::unordered_map<uint32_t, TaxiNode> nodes_;
     std::vector<Path> paths_;
 };

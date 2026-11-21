@@ -734,6 +734,12 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
         return;
     }
     int32_t dmg = rng_.range((int32_t)a.dmgMin, (int32_t)a.dmgMax);
+    // WoWVita: wear (vMaNGOS DurabilityLossChance.Damage 0.5 %): the weapon that hits, a piece of armour that is hit
+    if (a.self && rng_.below(1000) < 5) wearSlot(15, 1);
+    if (b.self && rng_.below(1000) < 5) {
+        static const int armour[] = {0, 2, 4, 5, 6, 7, 8, 9, 14, 16};
+        wearSlot(armour[rng_.below(10)], 1);
+    }
     const bool crit = (int32_t)rng_.below(100) < kCritChancePct;
     if (crit) dmg *= 2;
     applyDamage(a, b, dmg, 0, 0, nowMs);
@@ -750,6 +756,7 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
 }
 
 void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
+    if (e.self && killer.objType == 3) durabilityLossAll(10);   // WoWVita: killed by a creature: 10 % durability
     e.dead = true;
     e.hp = 0;
     e.victim = 0;
@@ -971,6 +978,15 @@ bool World::buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t now
     return true;
 }
 
+bool World::putBagItem(const BagItem& b) {
+    CharacterProfile& p = profiles_[0];
+    if (!b.entry || p.bagCount >= 16) return false;
+    p.bag[p.bagCount] = b;
+    p.bag[p.bagCount].slot = p.bagCount;
+    ++p.bagCount;
+    return true;
+}
+
 bool World::takeFromBag(int index, uint16_t n) {
     CharacterProfile& p = profiles_[0];
     if (index < 0 || index >= p.bagCount || !p.bag[index].entry) return false;
@@ -983,6 +999,25 @@ bool World::takeFromBag(int index, uint16_t n) {
 void World::removeAuraSpell(Entity& e, uint32_t spell) {
     for (int i = 0; i < e.auraCount; ++i)
         if (e.auras[i].spell == spell) { removeAura(e, i); return; }
+}
+
+void World::wearSlot(int slot, uint16_t points) {
+    if (!player_ || slot < 0 || slot >= 19) return;
+    CharacterProfile& p = profiles_[0];
+    const uint16_t m = maxDurability(p.equipment[(size_t)slot]);
+    if (!m || !points || p.equipLost[(size_t)slot] >= m) return;
+    const bool was = broken(p.equipment[(size_t)slot], p.equipLost[(size_t)slot]);
+    p.equipLost[(size_t)slot] = (uint16_t)std::min<uint32_t>(m, (uint32_t)p.equipLost[(size_t)slot] + points);
+    if (!was && broken(p.equipment[(size_t)slot], p.equipLost[(size_t)slot])) recomputeGear();
+    emit(SimEvent::Durability, player_->guid, 0, 0, slot);
+}
+
+void World::durabilityLossAll(uint32_t percent) {
+    if (!player_) return;
+    for (int s = 0; s < 19; ++s) {
+        const uint16_t m = maxDurability(profiles_[0].equipment[(size_t)s]);
+        if (m) wearSlot(s, (uint16_t)std::max<uint32_t>(1, m * percent / 100));
+    }
 }
 
 void World::removeBagItem(int index) {
@@ -1036,7 +1071,7 @@ void World::recomputeGear() {
     const CharacterProfile& p = profiles_[0];
     Entity& e = *player_;
     e.dmgMin = 3; e.dmgMax = 6; e.attackMs = 2000;
-    if (const ItemTemplate* it = data_ ? data_->item(p.equipment[15]) : nullptr) {
+    if (const ItemTemplate* it = data_ && !broken(p.equipment[15], p.equipLost[15]) ? data_->item(p.equipment[15]) : nullptr) {
         if (it->delayMs >= 500) e.attackMs = it->delayMs;
         if (it->dmgMax > 0) {
             e.dmgMin = (uint32_t)std::max(1.0f, it->dmgMin);
@@ -1045,7 +1080,8 @@ void World::recomputeGear() {
     }
     uint32_t armor = 0;
     for (int s = 0; s < 19; ++s)
-        if (const ItemTemplate* it = data_ ? data_->item(p.equipment[(size_t)s]) : nullptr) armor += it->armor;
+        if (const ItemTemplate* it = data_ && !broken(p.equipment[(size_t)s], p.equipLost[(size_t)s]) ? data_->item(p.equipment[(size_t)s]) : nullptr)
+            armor += it->armor;
     e.armor = armor;
 }
 
@@ -1071,11 +1107,15 @@ int World::equipFromBag(int index, int slotsOut[2]) {
         freeSlot = twoHand ? 16 : 15;
     }
     const uint32_t newEntry = p.bag[index].entry;
+    const uint16_t newLost = p.bag[index].lost;   // WoWVita: durability goes with the item
     const uint32_t old = p.equipment[(size_t)slot];
+    const uint16_t oldLost = p.equipLost[(size_t)slot];
     p.equipment[(size_t)slot] = newEntry;
+    p.equipLost[(size_t)slot] = newLost;
     if (old) {
         p.bag[index].entry = old;
         p.bag[index].count = 1;
+        p.bag[index].lost = oldLost;
     } else {
         for (int i = index; i + 1 < p.bagCount; ++i) { p.bag[i] = p.bag[i + 1]; p.bag[i].slot = (uint8_t)i; }
         --p.bagCount;
@@ -1087,8 +1127,10 @@ int World::equipFromBag(int index, int slotsOut[2]) {
         b.entry = p.equipment[(size_t)freeSlot];
         b.count = 1;
         b.slot = p.bagCount;
+        b.lost = p.equipLost[(size_t)freeSlot];
         ++p.bagCount;
         p.equipment[(size_t)freeSlot] = 0;
+        p.equipLost[(size_t)freeSlot] = 0;
         slotsOut[1] = freeSlot;
     }
     recomputeGear();

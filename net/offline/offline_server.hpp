@@ -44,6 +44,7 @@ public:
     // WoWVita: the area under the player (the client's area grid) with its AreaTable exploration level and explore bit:
     // a new one gives exploration XP (SMSG_EXPLORATION_EXPERIENCE)
     void reportArea(uint32_t area, uint32_t level, uint32_t bit);
+    void setDurabilityFile(const std::string& path);   // WoWVita: the client's repair cost tables (durability.txt)
     bool flying() const { return flight_.active; }
     std::function<uint32_t()> wallClock;   // WoWVita: unix time for the rested bonus between sessions (default time())
     bool resting() const { return resting_; }
@@ -201,6 +202,13 @@ private:
         float x = 0, y = 0;
     } eat_;
     std::unordered_map<uint32_t, uint32_t> itemReady_;   // item category -> when it may be used again
+    bool handleRepair(uint16_t op, const Bytes& data, uint32_t nowMs);
+    uint32_t repairCost(uint32_t entry, uint16_t lost);
+    static uint64_t itemGuidOf(bool equipment, int slot) { return 0x40000000ull | (uint64_t)(equipment ? (0x1000 + slot) : (0x2000 + slot)); }
+    std::string durabilityPath_;
+    bool durabilityLoaded_ = false;
+    std::unordered_map<uint32_t, std::array<uint32_t, 29>> repairCosts_;
+    std::unordered_map<uint32_t, float> repairQuality_;
     // bank and mail (offline_bank_mail.cpp)
     bool handleBank(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool handleMail(uint16_t op, const Bytes& data, uint32_t nowMs);

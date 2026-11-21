@@ -7,6 +7,8 @@
 // One item of the stack is used up; items of one category share its cooldown (potions 2 minutes).
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 #include "offline_server.hpp"
 #include "../objects.hpp"
@@ -110,6 +112,79 @@ void OfflineSession::updateEating(uint32_t nowMs) {
         return;
     }
     if (changed) sendSelfFields();
+}
+
+// ---------------------------------------------------------------- repairs
+// vMaNGOS Item::GetRepairCost / Player::DurabilityRepair: lost points * DurabilityCosts[itemLevel][subclass] *
+// DurabilityQuality[(quality + 1) * 2]; the tables are the client's (durability.txt from the converter). Without the
+// file: a stand-in multiplier (item level / 2, quality 1). An NPC with UNIT_NPC_FLAG_REPAIR (0x4000), near.
+void OfflineSession::setDurabilityFile(const std::string& path) { durabilityPath_ = path; durabilityLoaded_ = false; }
+
+uint32_t OfflineSession::repairCost(uint32_t entry, uint16_t lost) {
+    if (!lost || !data_) return 0;
+    if (!durabilityLoaded_) {
+        durabilityLoaded_ = true;
+        if (FILE* f = std::fopen(durabilityPath_.c_str(), "r")) {
+            char line[512];
+            while (std::fgets(line, sizeof line, f)) {
+                if (line[0] == 'C' && line[1] == '\t') {
+                    char* q = line + 2;
+                    const uint32_t lv = (uint32_t)std::strtoul(q, &q, 10);
+                    std::array<uint32_t, 29> m{};
+                    for (uint32_t& v : m) v = (uint32_t)std::strtoul(q, &q, 10);
+                    repairCosts_[lv] = m;
+                } else if (line[0] == 'Q' && line[1] == '\t') {
+                    char* q = line + 2;
+                    const uint32_t id = (uint32_t)std::strtoul(q, &q, 10);
+                    repairQuality_[id] = (float)std::strtod(q, &q);
+                }
+            }
+            std::fclose(f);
+        }
+    }
+    const ItemTemplate* t = data_->item(entry);
+    if (!t) return 0;
+    const int col = t->cls == 2 ? (int)t->subclass : t->cls == 4 ? 21 + (int)t->subclass : -1;
+    double mult = std::max(1.0, t->itemLevel / 2.0), qmod = 1.0;
+    auto c = repairCosts_.find(t->itemLevel);
+    if (c != repairCosts_.end() && col >= 0 && col < 29) mult = c->second[(size_t)col];
+    auto q = repairQuality_.find((t->quality + 1) * 2);
+    if (q != repairQuality_.end()) qmod = q->second;
+    return std::max<uint32_t>(1, (uint32_t)(lost * mult * qmod));
+}
+
+bool OfflineSession::handleRepair(uint16_t op, const Bytes& data, uint32_t nowMs) {
+    if (op != 0x2A8) return false;   // CMSG_REPAIR_ITEM: u64 npc, u64 item (0 = everything)
+    Entity* p = world_.player();
+    if (!p) return true;
+    Reader r(data);
+    const uint64_t npc = r.u64(), item = r.u64();
+    if (r.bad) return true;
+    const Entity* v = world_.entity(npc);
+    if (!v || !(v->npcFlags & 0x4000u) || std::hypot(v->x - p->x, v->y - p->y) > 15.0f) return true;
+    CharacterProfile& pr = world_.playerProfile();
+    struct Fix { uint16_t* lost; uint32_t entry; };
+    std::vector<Fix> fix;
+    for (int s = 0; s < 19; ++s)
+        if (pr.equipment[(size_t)s] && pr.equipLost[(size_t)s] && (!item || item == itemGuidOf(true, s)))
+            fix.push_back({&pr.equipLost[(size_t)s], pr.equipment[(size_t)s]});
+    for (int i = 0; i < pr.bagCount; ++i)
+        if (pr.bag[i].entry && pr.bag[i].lost && (!item || item == itemGuidOf(false, i))) fix.push_back({&pr.bag[i].lost, pr.bag[i].entry});
+    uint32_t cost = 0;
+    for (const Fix& f : fix) cost += repairCost(f.entry, *f.lost);
+    if (fix.empty()) return true;
+    if (p->money < cost) { errorLine("You don't have enough money.", nowMs); return true; }
+    p->money -= cost;
+    pr.money = p->money;
+    for (const Fix& f : fix) *f.lost = 0;
+    world_.recomputeGearPublic();
+    // the items come again with their durability
+    for (int s = 0; s < 19; ++s) { Writer w; w.u64(itemGuidOf(true, s)); send(0x0AA, w.b); }
+    for (int i = 0; i < pr.bagCount; ++i) { Writer w; w.u64(itemGuidOf(false, i)); send(0x0AA, w.b); }
+    sendInventory();
+    sendSelfFields();
+    saveSoon_ = true;
+    return true;
 }
 
 }  // namespace offline

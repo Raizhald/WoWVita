@@ -93,6 +93,10 @@ void OfflineSession::backToLife(int32_t hpPercent, bool sickness, uint32_t nowMs
     world_.revive(*p, hpPercent, nowMs);
     if (p->powerType == 1) p->power = 0;   // rage starts empty
     else p->power = (int32_t)p->maxPower / 2;
+    if (sickness) {   // WoWVita: the spirit healer takes another 25 % of the durability
+        world_.durabilityLossAll(25);
+        send(0x2BD);   // SMSG_DURABILITY_DAMAGE_DEATH
+    }
     if (sickness && p->level > 10) {
         const uint32_t min = p->level >= 20 ? 10u : (uint32_t)(p->level - 10);
         world_.addTimedAura(*p, kResurrectionSickness, min * 60000u);

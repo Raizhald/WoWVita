@@ -132,6 +132,13 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     payload.u32(0x31505845u);   // "EXP1"
     for (const CharacterProfile& c : d.roster)
         for (uint32_t m : c.explored) payload.u32(m);
+    // WoWVita: durability (worn, backpack, bank)
+    payload.u32(0x31525544u);   // "DUR1"
+    for (const CharacterProfile& c : d.roster) {
+        for (uint16_t l : c.equipLost) payload.u16(l);
+        for (const BagItem& b : c.bag) payload.u16(b.lost);
+        for (const BagItem& b : c.bank) payload.u16(b.lost);
+    }
     // WoWVita: the mail
     payload.u32(0x314C414Du);   // "MAL1"
     payload.u32(d.nextMailId);
@@ -282,6 +289,19 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {
             p.pos = mark;   // (an older save: the mail follows)
+        }
+    }
+    if (!p.bad && p.left() >= 4 + 4 * 63 * 2) {   // WoWVita: durability
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31525544u) {
+            for (CharacterProfile& c : d.roster) {
+                for (uint16_t& l : c.equipLost) l = p.u16();
+                for (BagItem& b : c.bag) b.lost = p.u16();
+                for (BagItem& b : c.bank) b.lost = p.u16();
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
         }
     }
     if (!p.bad && p.left() >= 12) {   // WoWVita: the mail

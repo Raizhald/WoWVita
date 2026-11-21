@@ -339,6 +339,7 @@ bool LoginFlow::startOffline() {
     offlineSession_.setParty(fileExists("sdmc:/3ds/w3dproto/offline_party.txt"));
     offlineSession_.setAreaTriggers(&game_.areaTriggers);   // WoWVita: the inns (rested experience)
     offlineSession_.setTaxi(&game_.taxiTable, "sdmc:/3ds/w3dproto/transports.txt");   // WoWVita: the flight masters
+    offlineSession_.setDurabilityFile("sdmc:/3ds/w3dproto/durability.txt");          // WoWVita: repair costs
     offlineSession_.trace = [](const std::string& line) { offlineTrace("%s", line.c_str()); };
     offlineTrace("startOffline: setup done");
     if (!offlineSession_.open(err)) {

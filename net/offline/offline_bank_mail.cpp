@@ -147,7 +147,7 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             }
             if (left) {
                 BagItem& b = pr.bank[(size_t)freeSlot];
-                b.entry = moving.entry; b.count = (uint16_t)left; b.slot = (uint8_t)freeSlot;
+                b.entry = moving.entry; b.count = (uint16_t)left; b.slot = (uint8_t)freeSlot; b.lost = moving.lost;
                 touched.push_back(freeSlot);
             }
             const uint8_t before = pr.bagCount;
@@ -165,7 +165,11 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             BagItem& b = pr.bank[(size_t)i];
             const uint8_t before = pr.bagCount;
             int why = 0;
-            if (!world_.buyItem(b.entry, b.count ? b.count : 1, 0, nowMs, &why)) { errorLine("Inventory is full.", nowMs); return true; }
+            const bool asItIs = world_.maxDurability(b.entry) > 0;   // (an item with durability keeps it)
+            if (asItIs ? !world_.putBagItem(b) : !world_.buyItem(b.entry, b.count ? b.count : 1, 0, nowMs, &why)) {
+                errorLine("Inventory is full.", nowMs);
+                return true;
+            }
             b = BagItem();
             bankChanged({i}, 0, before);   // (it may have joined a stack: the whole backpack comes again)
             return true;

@@ -221,6 +221,30 @@ bool exportTaxi(const DataDir& data, const std::string& path, bool verbose) {
         }
     if (!writeText(path, out)) return false;
     std::printf("  taxi: %zu nodes, %zu paths written to %s\n", nn, np, path.c_str());
+    // WoWVita: durability.txt next to it - the repair costs of the offline world (vMaNGOS Item::GetRepairCost):
+    // "C itemLevel m0..m28" per DurabilityCosts.dbc row (weapon subclasses 0-20, armor subclasses 21-28),
+    // "Q id mod" per DurabilityQuality.dbc row ((quality + 1) * 2)
+    {
+        DbcTable dc, dq;
+        if (dc.load(data, "DurabilityCosts.dbc") && dc.fields >= 30 && dq.load(data, "DurabilityQuality.dbc") && dq.fields >= 2) {
+            std::string d = "# wowvita repair costs: C itemLevel multiplier[29] | Q id qualityMod\n";
+            for (uint32_t r = 0; r < dc.records; ++r) {
+                d += "C\t" + std::to_string(dc.u32(r, 0));
+                for (uint32_t c = 1; c < 30; ++c) d += "\t" + std::to_string(dc.u32(r, c));
+                d += "\n";
+            }
+            for (uint32_t r = 0; r < dq.records; ++r) {
+                std::snprintf(b, sizeof b, "Q\t%u\t%.4f\n", dq.u32(r, 0), dq.f32(r, 1));
+                d += b;
+            }
+            std::string dpath = path;
+            const size_t slash = dpath.find_last_of("/\\");
+            dpath = (slash == std::string::npos ? std::string() : dpath.substr(0, slash + 1)) + "durability.txt";
+            if (writeText(dpath, d)) std::printf("  durability: %u item levels written to %s\n", dc.records, dpath.c_str());
+        } else if (verbose) {
+            std::fprintf(stderr, "durability: DurabilityCosts.dbc / DurabilityQuality.dbc not found (no durability.txt)\n");
+        }
+    }
     (void)verbose;
     return true;
 }

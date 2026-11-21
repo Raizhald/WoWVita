@@ -171,6 +171,70 @@ int main(int argc, char** argv) {
         run(300);
         CHECK(p->levelXp - xp1 == data.explorationXp[1], "an area only once");
     }
+    // ---- durability: the death of the character (10 %), a broken weapon, the repair
+    {
+        off::CharacterProfile& pr = w.playerProfile();
+        uint32_t weapon = pr.equipment[15];
+        if (!weapon || !w.maxDurability(weapon)) {   // (a mage has no weapon here: a Worn Shortsword, put on)
+            w.buyItem(25, 1, 0, now, &why);
+            run(300);
+            int idx = -1;
+            for (int i = 0; i < pr.bagCount; ++i) if (pr.bag[i].entry == 25) idx = i;
+            w3n::Writer wr;
+            wr.u8(255); wr.u8((uint8_t)(23 + idx));
+            session.onClientPacket(0x10A, wr.b, now);   // CMSG_AUTOEQUIP_ITEM
+            run(500);
+        }
+        weapon = pr.equipment[15];
+        const uint16_t m = w.maxDurability(weapon);
+        CHECK(m > 0, "the weapon has durability (%u)", m);
+        const uint64_t wg = 0x40000000ull | 0x1000 + 15;
+        auto dur = [&]() { const w3n::WorldObject* o = gs.objects.find(wg); return o ? o->field(w3n::UF::ITEM_FIELD_DURABILITY) : 9999u; };
+        CHECK(dur() == m, "full at first (%u / %u)", dur(), m);
+        // killed by a creature
+        off::Entity* killer = nullptr;
+        for (int i = 0; i < off::kMaxEntities && !killer; ++i) {
+            off::Entity* e = w.byIndex(i);
+            if (e && e->used && e->objType == 3 && e->alive() && !e->npcFlags) killer = e;
+        }
+        if (killer) {
+            w.applyDamage(*killer, *p, 100000, 0, 0, now);
+            run(500);
+            CHECK(pr.equipLost[15] == std::max<uint16_t>(1, m / 10) && dur() == m - pr.equipLost[15], "death: -10 %% (%u / %u)", dur(), m);
+            CHECK(gs.life() == w3n::Life::Dead, "dead");
+            gs.releaseSpirit(now);
+            run(800);
+            gs.reclaimCorpse(now);   // (too early; the test only needs life back)
+            w.revive(*p, 100, now);
+            run(500);
+        }
+        const uint32_t dmgBefore = p->dmgMax;
+        w.wearSlot(15, m);
+        run(300);
+        CHECK(dur() == 0 && p->dmgMax == 6 && dmgBefore != 6, "broken: the weapon counts no more, bare hands (%u -> %u)", dmgBefore, p->dmgMax);
+        // a repairer near Northshire
+        const off::Spawn* rep = nullptr;
+        for (const off::Spawn& sp : data.spawns)
+            if (const off::CreatureTemplate* t = data.creature(sp.entry); t && (t->npcFlags & 0x4000) &&
+                (!rep || std::hypot(sp.x + 8913, sp.y + 136) < std::hypot(rep->x + 8913, rep->y + 136))) rep = &sp;
+        CHECK(rep != nullptr, "a repairer");
+        if (rep) {
+            gs.mover.reset(rep->x + 2, rep->y, rep->z, 0, now);
+            w.setPosition(*p, rep->x + 2, rep->y, rep->z, 0);
+            run(1500);
+            const off::Entity* re = nullptr;
+            for (int i = 0; i < off::kMaxEntities; ++i) { const off::Entity* e = w.byIndex(i); if (e && e->used && e->entry == rep->entry) re = e; }
+            w.addMoneyToPlayer(10000, now);
+            run(300);
+            const uint32_t money = p->money;
+            w3n::Writer wr;
+            wr.u64(re ? re->guid : 0); wr.u64(0);
+            session.onClientPacket(0x2A8, wr.b, now);   // CMSG_REPAIR_ITEM: everything
+            run(500);
+            CHECK(pr.equipLost[15] == 0 && dur() == m && p->dmgMax == dmgBefore, "repaired (%u / %u)", dur(), m);
+            CHECK(p->money < money, "for money (%u c)", money - p->money);
+        }
+    }
     session.leaveWorld();
     off::OfflineSaveData sd;
     std::string serr;

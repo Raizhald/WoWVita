@@ -611,6 +611,10 @@ void OfflineSession::sendInventory() {
         it.set(UF::OBJECT_ENTRY, entry);
         it.set(UF::OBJECT_SCALE_X, 0x3F800000u);
         it.set(UF::ITEM_FIELD_STACK_COUNT, 1);
+        if (const uint16_t m = world_.maxDurability(entry)) {   // WoWVita: durability
+            it.set(UF::ITEM_FIELD_MAXDURABILITY, m);
+            it.set(UF::ITEM_FIELD_DURABILITY, (uint32_t)(m - std::min<uint16_t>(m, pr.equipLost[(size_t)slot])));
+        }
         addCreateItem(u, g, it);
     }
     // Backpack slots 23..38.
@@ -629,6 +633,10 @@ void OfflineSession::sendInventory() {
         it.set(UF::OBJECT_ENTRY, pr.bag[i].entry);
         it.set(UF::OBJECT_SCALE_X, 0x3F800000u);
         it.set(UF::ITEM_FIELD_STACK_COUNT, pr.bag[i].count ? pr.bag[i].count : 1);
+        if (const uint16_t m = world_.maxDurability(pr.bag[i].entry)) {   // WoWVita: durability
+            it.set(UF::ITEM_FIELD_MAXDURABILITY, m);
+            it.set(UF::ITEM_FIELD_DURABILITY, (uint32_t)(m - std::min<uint16_t>(m, pr.bag[i].lost)));
+        }
         addCreateItem(u, g, it);
     }
     for (int i = pr.bagCount; i < 16; ++i) {   // WoWVita: a sold item's slot is empty again
@@ -649,6 +657,10 @@ void OfflineSession::sendInventory() {
             it.set(UF::OBJECT_ENTRY, b.entry);
             it.set(UF::OBJECT_SCALE_X, 0x3F800000u);
             it.set(UF::ITEM_FIELD_STACK_COUNT, b.count ? b.count : 1);
+            if (const uint16_t m = world_.maxDurability(b.entry)) {
+                it.set(UF::ITEM_FIELD_MAXDURABILITY, m);
+                it.set(UF::ITEM_FIELD_DURABILITY, (uint32_t)(m - std::min<uint16_t>(m, b.lost)));
+            }
             addCreateItem(u, g, it);
         }
     }
@@ -1405,6 +1417,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 sendUpdateObject(u.finish());
                 if (a->self) {
                     ++stats.deaths;
+                    if (b && b->objType == 3) send(0x2BD);   // WoWVita: SMSG_DURABILITY_DAMAGE_DEATH
                     sendChat(0x0A, 0, "You have died. Release your spirit, then reclaim your corpse.");
                 }
                 if (a->objType == 3) ++stats.kills;
@@ -1416,6 +1429,20 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                     w.u32(0);
                     send(SMSG_ATTACKSTOP, w.b);
                 }
+                break;
+            }
+            case SimEvent::Durability: {   // WoWVita: a worn item lost durability
+                const int slot = e.value;
+                if (slot < 0 || slot >= 19) break;
+                const CharacterProfile& pr = world_.playerProfile();
+                const uint16_t m = world_.maxDurability(pr.equipment[(size_t)slot]);
+                if (!m) break;
+                FieldSet f;
+                f.set(UF::ITEM_FIELD_DURABILITY, (uint32_t)(m - std::min<uint16_t>(m, pr.equipLost[(size_t)slot])));
+                UpdateBuilder u;
+                addValues(u, itemGuidFor(true, slot), f);
+                sendUpdateObject(u.finish());
+                saveSoon_ = true;
                 break;
             }
             case SimEvent::Appear: {   // WoWVita: the spawn grid brought a creature into range
@@ -1687,6 +1714,7 @@ void OfflineSession::update(uint32_t nowMs) {
             default:
                 if (handleTaxi(op, p.second, nowMs)) break;   // WoWVita: flight masters
                 if (handleBank(op, p.second, nowMs)) break;   // WoWVita: the bank
+                if (handleRepair(op, p.second, nowMs)) break;   // WoWVita: repairs
                 if (handleMail(op, p.second, nowMs)) break;   // WoWVita: mailboxes
                 if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone
                 if (handleGameObject(op, p.second, nowMs)) break;   // WoWVita

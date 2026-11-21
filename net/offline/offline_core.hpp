@@ -392,6 +392,7 @@ struct SimEvent {
         AuraApplied = 12, AuraRemoved = 13, AttackError = 14, Message = 15, Looted = 16,
         ThreatChanged = 17, PowerChanged = 18, ItemGained = 19, QuestProgress = 20, QuestComplete = 21,
         Appear = 22, Vanish = 23,      // WoWVita: a spawn came into / went out of the active area around the player
+        Durability = 24,               // WoWVita: an equipped item lost durability (value = the equipment slot)
     };
     uint8_t type = 0;
     uint64_t a = 0, b = 0;             // actor / target (or victim / attacker)
@@ -402,7 +403,7 @@ struct SimEvent {
 };
 
 // ---------------------------------------------------------------- character profile (persisted)
-struct BagItem { uint32_t entry = 0; uint16_t count = 1; uint8_t slot = 0; };
+struct BagItem { uint32_t entry = 0; uint16_t count = 1; uint8_t slot = 0; uint16_t lost = 0; };   // WoWVita: lost = durability points gone
 
 struct CharacterProfile {
     bool used = false;
@@ -438,6 +439,7 @@ struct CharacterProfile {
     std::array<uint32_t, 8> taxiMask{};   // WoWVita: the flight paths discovered (TaxiNodes ids as bits; the "TAX1" block)
     std::array<BagItem, 24> bank{};       // WoWVita: the bank's 24 slots (inventory slots 39..62; the "BNK1" block)
     std::array<uint32_t, 64> explored{};  // WoWVita: the AreaTable explore bits found (the "EXP1" block)
+    std::array<uint16_t, 19> equipLost{}; // WoWVita: durability points gone of the worn items (the "DUR1" block)
 };
 
 // WoWVita: a letter between the characters of this save (the "MAL1" block)
@@ -533,7 +535,15 @@ public:
     uint32_t sellBagItem(int index, uint32_t count, uint32_t nowMs);
     void removeBagItem(int index);   // WoWVita: the whole stack leaves the backpack (the bank, a letter)
     bool takeFromBag(int index, uint16_t n);   // WoWVita: n of a stack are used up (food)
+    bool putBagItem(const BagItem& b);         // WoWVita: one item as it is (with its durability) into the backpack
     void removeAuraSpell(Entity& e, uint32_t spell);   // WoWVita
+    // WoWVita: durability (vMaNGOS Player::DurabilityLoss*): the worn items lose a share of their maximum (death 10 %, the
+    // spirit healer 25 %) or a point (a hit); a broken item gives nothing
+    void durabilityLossAll(uint32_t percent);
+    void wearSlot(int slot, uint16_t points);
+    uint16_t maxDurability(uint32_t entry) const { const ItemExt* x = data_ ? data_->ext(entry) : nullptr; return x ? x->maxDurability : 0; }
+    bool broken(uint32_t entry, uint16_t lost) const { const uint16_t m = maxDurability(entry); return m && lost >= m; }
+    void recomputeGearPublic() { recomputeGear(); }
     // Puts backpack slot 'index' on (what was worn there goes to the backpack). 0 = done, else a reason for the
     // player: 1 cannot be worn, 2 too low level, 3 no room for the off-hand item. *slotsOut: the equipment slots
     // that changed (up to 2).

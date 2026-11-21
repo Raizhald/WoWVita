@@ -143,6 +143,18 @@ void addCreateItem(UpdateBuilder& u, uint64_t guid, const FieldSet& fields) {
     u.raw(b.b);
 }
 
+// WoWVita: a bag is a container (object type 2)
+void addCreateContainer(UpdateBuilder& u, uint64_t guid, const FieldSet& fields) {
+    Writer b;
+    b.u8(kUpdateCreate2);
+    b.packedGuid(guid);
+    b.u8(2);          // object type: container
+    b.u8(kUfAll);
+    b.u32(1);
+    writeFields(b, fields);
+    u.raw(b.b);
+}
+
 bool caseInsensitiveEqual(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) return false;
     for (size_t i = 0; i < a.size(); ++i) {
@@ -439,7 +451,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
         CharacterProfile& pr = save_.player;
         bool has = false;
         for (uint8_t i = 0; i < pr.bagCount; ++i) has = has || pr.bag[i].entry == kHearthstoneItem;
-        if (!has && pr.bagCount < 16) {
+        if (!has && pr.bagCount < 16) {   // (the bags are not counted yet here: the backpack always has room)
             BagItem& b = pr.bag[pr.bagCount];
             b.entry = kHearthstoneItem; b.count = 1; b.slot = pr.bagCount;
             ++pr.bagCount;
@@ -617,16 +629,51 @@ void OfflineSession::sendInventory() {
         }
         addCreateItem(u, g, it);
     }
-    // Backpack slots 23..38.
-    for (uint8_t i = 0; i < pr.bagCount && i < 20; ++i) {
+    // WoWVita: the bags (slots 19..22) are containers; their slots hold the items after the backpack's 16
+    FieldSet cont[4];
+    uint32_t contSlots[4] = {0, 0, 0, 0};
+    for (int k = 0; k < 4; ++k) {
+        const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + (19 + k) * 2);
+        const uint32_t bagEntry = pr.bags[(size_t)k];
+        const ItemExt* x = bagEntry && data_ ? data_->ext(bagEntry) : nullptr;
+        if (!x || !x->slots) { self.set(f, 0); self.set((uint16_t)(f + 1), 0); continue; }
+        const uint64_t cg = itemGuidFor(true, 19 + k);
+        self.set(f, (uint32_t)cg);
+        self.set((uint16_t)(f + 1), (uint32_t)(cg >> 32));
+        contSlots[k] = x->slots;
+        cont[k].set(UF::OBJECT_GUID, (uint32_t)cg);
+        cont[k].set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(cg >> 32));
+        cont[k].set(UF::OBJECT_TYPE, 0x7);
+        cont[k].set(UF::OBJECT_ENTRY, bagEntry);
+        cont[k].set(UF::OBJECT_SCALE_X, 0x3F800000u);
+        cont[k].set(UF::ITEM_FIELD_STACK_COUNT, 1);
+        cont[k].set(UF::CONTAINER_FIELD_NUM_SLOTS, x->slots);
+        for (uint32_t j = 0; j < x->slots; ++j) {
+            cont[k].set((uint16_t)(UF::CONTAINER_FIELD_SLOT_1 + 2 * j), 0);
+            cont[k].set((uint16_t)(UF::CONTAINER_FIELD_SLOT_1 + 2 * j + 1), 0);
+        }
+    }
+    // Backpack slots 23..38, then the bags.
+    for (uint8_t i = 0; i < pr.bagCount; ++i) {
         if (!pr.bag[i].entry) continue;
         const uint64_t g = itemGuidFor(false, i);
-        const int slot = 23 + i;
-        if (slot >= 39) break;
-        const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + slot * 2);
-        self.set(f, (uint32_t)g);
-        self.set((uint16_t)(f + 1), (uint32_t)(g >> 32));
+        uint8_t bag = 255, bslot = 0;
+        if (!bagPosition(i, &bag, &bslot)) break;
+        if (bag == 255) {
+            const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + bslot * 2);
+            self.set(f, (uint32_t)g);
+            self.set((uint16_t)(f + 1), (uint32_t)(g >> 32));
+        } else {
+            FieldSet& c = cont[bag - 19];
+            c.set((uint16_t)(UF::CONTAINER_FIELD_SLOT_1 + 2 * bslot), (uint32_t)g);
+            c.set((uint16_t)(UF::CONTAINER_FIELD_SLOT_1 + 2 * bslot + 1), (uint32_t)(g >> 32));
+        }
         FieldSet it;
+        if (bag != 255) {
+            const uint64_t cg = itemGuidFor(true, bag);
+            it.set(UF::ITEM_FIELD_CONTAINED, (uint32_t)cg);
+            it.set((uint16_t)(UF::ITEM_FIELD_CONTAINED + 1), (uint32_t)(cg >> 32));
+        }
         it.set(UF::OBJECT_GUID, (uint32_t)g);
         it.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(g >> 32));
         it.set(UF::OBJECT_TYPE, 0x3);
@@ -639,6 +686,8 @@ void OfflineSession::sendInventory() {
         }
         addCreateItem(u, g, it);
     }
+    for (int k = 0; k < 4; ++k)
+        if (contSlots[k]) addCreateContainer(u, itemGuidFor(true, 19 + k), cont[k]);
     for (int i = pr.bagCount; i < 16; ++i) {   // WoWVita: a sold item's slot is empty again
         const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + (23 + i) * 2);
         self.set(f, 0);
@@ -666,6 +715,38 @@ void OfflineSession::sendInventory() {
     }
     addValues(u, p->guid, self);
     sendUpdateObject(u.finish());
+}
+
+// ---------------------------------------------------------------- WoWVita: bags
+// The flat backpack list: 0..15 the backpack (bag 255, slots 23..38), then the slots of the bags in 19..22.
+bool OfflineSession::bagPosition(int index, uint8_t* bag, uint8_t* slot) const {
+    if (index < 0) return false;
+    if (index < 16) { *bag = 255; *slot = (uint8_t)(23 + index); return true; }
+    int i = index - 16;
+    const CharacterProfile& pr = world_.playerProfile();
+    for (int k = 0; k < 4; ++k) {
+        const ItemExt* x = pr.bags[(size_t)k] && data_ ? data_->ext(pr.bags[(size_t)k]) : nullptr;
+        const int n = x ? x->slots : 0;
+        if (i < n) { *bag = (uint8_t)(19 + k); *slot = (uint8_t)i; return true; }
+        i -= n;
+    }
+    return false;
+}
+
+int OfflineSession::bagIndex(uint8_t bag, uint8_t slot) const {
+    const CharacterProfile& pr = world_.playerProfile();
+    int index = -1;
+    if (bag == 255 && slot >= 23 && slot <= 38) index = slot - 23;
+    else if (bag >= 19 && bag <= 22) {
+        int base = 16;
+        for (int k = 0; k < bag - 19; ++k) {
+            const ItemExt* x = pr.bags[(size_t)k] && data_ ? data_->ext(pr.bags[(size_t)k]) : nullptr;
+            base += x ? x->slots : 0;
+        }
+        const ItemExt* x = pr.bags[(size_t)(bag - 19)] && data_ ? data_->ext(pr.bags[(size_t)(bag - 19)]) : nullptr;
+        if (x && slot < x->slots) index = base + slot;
+    }
+    return index >= 0 && index < pr.bagCount ? index : -1;
 }
 
 // ---------------------------------------------------------------- WoWVita: vendors
@@ -1685,8 +1766,8 @@ void OfflineSession::update(uint32_t nowMs) {
             case CMSG_AUTOEQUIP_ITEM: {   // WoWVita: u8 bag (255 = the character), u8 slot (23..38 = the backpack)
                 Reader r(p.second);
                 const uint8_t bag = r.u8(), slot = r.u8();
-                if (r.bad || bag != 255 || slot < 23 || slot > 38) break;
-                const int index = slot - 23;
+                const int index = r.bad ? -1 : bagIndex(bag, slot);   // WoWVita: the backpack or a bag
+                if (index < 0) break;
                 const uint8_t before = world_.playerProfile().bagCount;
                 int changed[2];
                 const int why = world_.equipFromBag(index, changed);
@@ -1699,6 +1780,8 @@ void OfflineSession::update(uint32_t nowMs) {
                 auto destroy = [&](uint64_t g) { Writer w; w.u64(g); send(0x0AA, w.b); };
                 for (int i = index; i < std::max<int>(before, world_.playerProfile().bagCount); ++i) destroy(itemGuidFor(false, i));
                 for (int c : changed) if (c >= 0) destroy(itemGuidFor(true, c));
+                if (changed[0] >= 19 && changed[0] <= 22)   // WoWVita: a new bag - the items behind the backpack move into it
+                    for (int i = 16; i < world_.playerProfile().bagCount; ++i) destroy(itemGuidFor(false, i));
                 sendInventory();
                 saveSoon_ = true;
                 break;

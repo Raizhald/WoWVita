@@ -229,9 +229,9 @@ bool OfflineSession::handleLife(uint16_t op, const Bytes& data, uint32_t nowMs) 
         case CMSG_USE_ITEM: {
             const uint8_t bag = r.u8(), slot = r.u8();
             r.u8();   // the item's spell slot
-            if (r.bad || bag != 255 || slot < 23 || slot > 38) return false;
+            const int index = r.bad ? -1 : bagIndex(bag, slot);   // the backpack or a bag
+            if (index < 0) return false;
             const CharacterProfile& pr = world_.playerProfile();
-            const int index = slot - 23;
             if (index < pr.bagCount && pr.bag[index].entry != kHearthstoneItem) return useConsumable(index, nowMs);   // food, potions
             if (index >= pr.bagCount || pr.bag[index].entry != kHearthstoneItem) return false;
             if (ghost_ || !p->alive()) { errorLine("You can't do that while dead.", nowMs); return true; }

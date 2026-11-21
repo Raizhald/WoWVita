@@ -62,7 +62,15 @@ flight masters only talk.
 Bank and mail (net/offline/offline_bank_mail.cpp): bankers open the bank's 24 slots (stacks join; no bank bags: there
 are no bags offline). Mailboxes (game object type 19, now in the pack): letters between the characters of the save
 (one account: they arrive at once), an item and / or money, postage 30 c; not to yourself, not to the other faction, no
-Hearthstone. After 30 days a letter's item or money goes back to its sender. "You have new mail." at login. Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
+Hearthstone. After 30 days a letter's item or money goes back to its sender. "You have new mail." at login.
+
+Items (net/offline/offline_items.cpp, the pack's `ITX1` from spell_template = Spell.dbc): food and drink over their
+duration while sitting (moving or a hit ends it, not in combat), potions at once, shared category cooldowns. The player
+regenerates every 2 s (about 3 % out of combat). Durability: -10 % at death by a creature, -25 % more at the spirit
+healer, a point at 0.5 % per hit; broken items give nothing; repairs at NPCs with the repair flag (costs from the
+client's DurabilityCosts / DurabilityQuality: durability.txt from the converter). Bags: four bag slots (19..22), the
+backpack grows by their slots (no moving items between bags yet, no bank bags). Exploration: quests completed at their
+area trigger (`QTRG`), exploration XP for a new area (`EXPL`; the area's level and bit are the converter's glue.txt). Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
 
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.

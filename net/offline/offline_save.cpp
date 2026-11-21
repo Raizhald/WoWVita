@@ -136,8 +136,16 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     payload.u32(0x31525544u);   // "DUR1"
     for (const CharacterProfile& c : d.roster) {
         for (uint16_t l : c.equipLost) payload.u16(l);
-        for (const BagItem& b : c.bag) payload.u16(b.lost);
+        for (int i = 0; i < 20; ++i) payload.u16(c.bag[i].lost);
         for (const BagItem& b : c.bank) payload.u16(b.lost);
+    }
+    // WoWVita: the bags and what is in them beyond the profile's 20 items
+    payload.u32(0x32474142u);   // "BAG2"
+    for (const CharacterProfile& c : d.roster) {
+        for (uint32_t b : c.bags) payload.u32(b);
+        const uint16_t extra = c.bagCount > 20 ? (uint16_t)(c.bagCount - 20) : 0;
+        payload.u16(extra);
+        for (int i = 20; i < 20 + extra; ++i) { payload.u32(c.bag[i].entry); payload.u16(c.bag[i].count); payload.u16(c.bag[i].lost); }
     }
     // WoWVita: the mail
     payload.u32(0x314C414Du);   // "MAL1"
@@ -296,8 +304,25 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
         if (p.u32() == 0x31525544u) {
             for (CharacterProfile& c : d.roster) {
                 for (uint16_t& l : c.equipLost) l = p.u16();
-                for (BagItem& b : c.bag) b.lost = p.u16();
+                for (int i = 0; i < 20; ++i) c.bag[i].lost = p.u16();
                 for (BagItem& b : c.bank) b.lost = p.u16();
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4 + 4 * 18) {   // WoWVita: the bags
+        const size_t mark = p.pos;
+        if (p.u32() == 0x32474142u) {
+            for (CharacterProfile& c : d.roster) {
+                for (uint32_t& b : c.bags) b = p.u32();
+                const uint16_t extra = p.u16();
+                if (extra > 140) { err = "malformed bags"; return false; }
+                for (int i = 20; i < 20 + extra && !p.bad; ++i) {
+                    c.bag[i].entry = p.u32(); c.bag[i].count = p.u16(); c.bag[i].lost = p.u16(); c.bag[i].slot = (uint8_t)i;
+                }
+                if (extra) c.bagCount = (uint8_t)(20 + extra);
             }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {

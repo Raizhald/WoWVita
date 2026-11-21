@@ -424,7 +424,7 @@ struct CharacterProfile {
     std::array<uint32_t, 19> equipment{};
     std::array<uint32_t, kMaxSpellsPerUnit> spells{};
     uint8_t spellCount = 0;
-    BagItem bag[20];
+    BagItem bag[160];                  // WoWVita: the backpack (16) and the bags' slots after it, in order (was 20)
     uint8_t bagCount = 0;
     uint8_t skinLook[3] = {0, 0, 0};    // spare look bytes (kept for forward compatibility)
     // WoWVita: the inn that is home (the save's optional "HOM1" block) and what is left of the Hearthstone's cooldown
@@ -440,6 +440,7 @@ struct CharacterProfile {
     std::array<BagItem, 24> bank{};       // WoWVita: the bank's 24 slots (inventory slots 39..62; the "BNK1" block)
     std::array<uint32_t, 64> explored{};  // WoWVita: the AreaTable explore bits found (the "EXP1" block)
     std::array<uint16_t, 19> equipLost{}; // WoWVita: durability points gone of the worn items (the "DUR1" block)
+    std::array<uint32_t, 4> bags{};       // WoWVita: the bags in the slots 19..22 (the "BAG2" block)
 };
 
 // WoWVita: a letter between the characters of this save (the "MAL1" block)
@@ -536,6 +537,7 @@ public:
     void removeBagItem(int index);   // WoWVita: the whole stack leaves the backpack (the bank, a letter)
     bool takeFromBag(int index, uint16_t n);   // WoWVita: n of a stack are used up (food)
     bool putBagItem(const BagItem& b);         // WoWVita: one item as it is (with its durability) into the backpack
+    uint32_t bagCapacity() const;              // WoWVita: 16 + the slots of the equipped bags
     void removeAuraSpell(Entity& e, uint32_t spell);   // WoWVita
     // WoWVita: durability (vMaNGOS Player::DurabilityLoss*): the worn items lose a share of their maximum (death 10 %, the
     // spirit healer 25 %) or a point (a hit); a broken item gives nothing

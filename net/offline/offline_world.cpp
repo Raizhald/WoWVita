@@ -919,7 +919,7 @@ void World::addItemToPlayer(uint32_t entry, uint16_t count, uint32_t nowMs) {
         left = (uint16_t)(left - add);
         emit(SimEvent::ItemGained, player_->guid, entry, 0, add);
     }
-    while (left && p.bagCount < 20) {
+    while (left && p.bagCount < bagCapacity()) {
         BagItem& b = p.bag[p.bagCount];
         b.entry = entry;
         b.slot = p.bagCount;
@@ -970,7 +970,7 @@ bool World::buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t now
     uint32_t room = 0;   // the 16 visible backpack slots
     for (uint8_t i = 0; i < p.bagCount; ++i)
         if (p.bag[i].entry == entry && p.bag[i].count < stackMax) room += stackMax - p.bag[i].count;
-    if (p.bagCount < 16) room += (16u - p.bagCount) * stackMax;
+    if (p.bagCount < bagCapacity()) room += (bagCapacity() - p.bagCount) * stackMax;
     if (room < count) { if (why) *why = 2; return false; }
     player_->money -= price;
     p.money = player_->money;
@@ -978,9 +978,17 @@ bool World::buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t now
     return true;
 }
 
+uint32_t World::bagCapacity() const {
+    const CharacterProfile& p = profiles_[0];
+    uint32_t n = 16;
+    for (uint32_t b : p.bags)
+        if (const ItemExt* x = b && data_ ? data_->ext(b) : nullptr) n += x->slots;
+    return std::min<uint32_t>(n, 160);
+}
+
 bool World::putBagItem(const BagItem& b) {
     CharacterProfile& p = profiles_[0];
-    if (!b.entry || p.bagCount >= 16) return false;
+    if (!b.entry || p.bagCount >= bagCapacity()) return false;
     p.bag[p.bagCount] = b;
     p.bag[p.bagCount].slot = p.bagCount;
     ++p.bagCount;
@@ -1092,6 +1100,19 @@ int World::equipFromBag(int index, int slotsOut[2]) {
     if (index < 0 || index >= p.bagCount || !p.bag[index].entry) return 1;
     const ItemTemplate* it = data_ ? data_->item(p.bag[index].entry) : nullptr;
     if (!it) return 1;
+    if (it->inventoryType == 18) {   // WoWVita: a bag goes into the first free bag slot (19..22)
+        const ItemExt* x = data_->ext(it->entry);
+        if (!x || !x->slots) return 1;
+        int k = 0;
+        while (k < 4 && p.bags[(size_t)k]) ++k;
+        if (k == 4) return 3;
+        p.bags[(size_t)k] = it->entry;
+        for (int i = index; i + 1 < p.bagCount; ++i) { p.bag[i] = p.bag[i + 1]; p.bag[i].slot = (uint8_t)i; }
+        --p.bagCount;
+        p.bag[p.bagCount] = BagItem();
+        slotsOut[0] = 19 + k;
+        return 0;
+    }
     int slot = equipSlotFor(it->inventoryType);
     if (slot < 0) return 1;
     if (it->requiredLevel > player_->level) return 2;
@@ -1103,7 +1124,7 @@ int World::equipFromBag(int index, int slotsOut[2]) {
     // a two-hander frees the off hand (into the backpack); an off-hand item sends a two-hander back
     int freeSlot = -1;
     if ((twoHand && p.equipment[16]) || (slot == 16 && mainIsTwoHand)) {
-        if (p.bagCount >= 16) return 3;
+        if (p.bagCount >= bagCapacity()) return 3;
         freeSlot = twoHand ? 16 : 15;
     }
     const uint32_t newEntry = p.bag[index].entry;

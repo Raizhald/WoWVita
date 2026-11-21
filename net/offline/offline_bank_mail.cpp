@@ -113,7 +113,7 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             Writer w;
             w.u32(0);   // ERR_BANKSLOT_FAILED_TOO_MANY
             send(SMSG_BUY_BANK_SLOT_RESULT, w.b);
-            errorLine("There are no bags offline: bank bag slots cannot be bought.", nowMs);
+            errorLine("Bank bags are not available offline yet.", nowMs);
             return true;
         }
         case CMSG_AUTOBANK_ITEM: {   // backpack -> bank
@@ -121,8 +121,8 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             if (r.bad) return true;
             if (!bankerNear()) { errorLine("You are too far away from a banker.", nowMs); return true; }
             CharacterProfile& pr = world_.playerProfile();
-            const int index = slot - 23;
-            if (bag != 255 || index < 0 || index >= pr.bagCount || !pr.bag[index].entry) return true;
+            const int index = bagIndex(bag, slot);   // the backpack or a bag
+            if (index < 0 || !pr.bag[index].entry) return true;
             BagItem moving = pr.bag[index];
             const ItemTemplate* t = data_ ? data_->item(moving.entry) : nullptr;
             const uint32_t stackMax = t ? std::max<uint32_t>(1, t->maxStack) : 1;

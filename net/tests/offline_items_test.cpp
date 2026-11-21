@@ -202,10 +202,7 @@ int main(int argc, char** argv) {
             run(500);
             CHECK(pr.equipLost[15] == std::max<uint16_t>(1, m / 10) && dur() == m - pr.equipLost[15], "death: -10 %% (%u / %u)", dur(), m);
             CHECK(gs.life() == w3n::Life::Dead, "dead");
-            gs.releaseSpirit(now);
-            run(800);
-            gs.reclaimCorpse(now);   // (too early; the test only needs life back)
-            w.revive(*p, 100, now);
+            w.revive(*p, 100, now);   // (back at once: the test needs a living character)
             run(500);
         }
         const uint32_t dmgBefore = p->dmgMax;
@@ -235,11 +232,46 @@ int main(int argc, char** argv) {
             CHECK(p->money < money, "for money (%u c)", money - p->money);
         }
     }
+    // ---- bags: Small Brown Pouch (4496, 6 slots) into slot 19, the backpack grows to 22, food from the bag
+    {
+        off::CharacterProfile& pr = w.playerProfile();
+        const off::ItemExt* pouch = data.ext(4496);
+        CHECK(pouch && pouch->slots == 6, "Small Brown Pouch: 6 slots");
+        w.buyItem(4496, 1, 0, now, &why);
+        run(300);
+        int idx = -1;
+        for (int i = 0; i < pr.bagCount; ++i) if (pr.bag[i].entry == 4496) idx = i;
+        w3n::Writer wr;
+        wr.u8(255); wr.u8((uint8_t)(23 + idx));
+        session.onClientPacket(0x10A, wr.b, now);   // CMSG_AUTOEQUIP_ITEM: the pouch goes into a bag slot
+        run(500);
+        CHECK(pr.bags[0] == 4496 && w.bagCapacity() == 22, "the pouch is worn: 22 slots (%u)", w.bagCapacity());
+        const w3n::WorldObject* bagObj = gs.objects.find(0x40000000ull | (0x1000 + 19));
+        CHECK(bagObj && bagObj->type == w3n::ObjType::Container && bagObj->field(w3n::UF::CONTAINER_FIELD_NUM_SLOTS) == 6,
+              "the client sees the bag (a container with 6 slots)");
+        while (pr.bagCount < 21) w.buyItem(25, 1, 0, now, &why);   // fill: past the backpack's 16
+        w.buyItem(4540, 1, 0, now, &why);   // the 22nd: Tough Hunk of Bread (433) in the bag
+        run(500);
+        CHECK(pr.bagCount == 22, "22 items carried (%u)", pr.bagCount);
+        CHECK(!w.buyItem(25, 1, 0, now, &why), "then full");
+        w3n::InvItem inBag;
+        int inBags = 0;
+        for (const w3n::InvItem& i : gs.inventory()) {
+            if (i.bag == 19) ++inBags;
+            if (i.bag == 19 && i.entry == 4540) inBag = i;
+        }
+        CHECK(inBags == 6 && inBag.entry == 4540, "6 items in the bag, the bread among them (%d)", inBags);
+        p->hp = 20;
+        gs.useItem(inBag, now);
+        run(500);
+        CHECK(w.hasAura(*p, 433) && pr.bagCount == 21, "eaten from the bag");
+    }
     session.leaveWorld();
     off::OfflineSaveData sd;
     std::string serr;
     CHECK(off::loadOffline(savePath, sd, serr), "load: %s", serr.c_str());
     CHECK(sd.roster[1].explored[100 / 32] & (1u << (100 % 32)), "the explored areas are saved");
+    CHECK(sd.roster[1].bags[0] == 4496 && sd.roster[1].bagCount == 21, "the bag and its items are saved (%u)", sd.roster[1].bagCount);
     std::printf("OFFLINE ITEMS: %d checks, %d failed -> %s\n", checks, failed, failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;
 }

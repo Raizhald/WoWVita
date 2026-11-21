@@ -190,6 +190,9 @@ private:
     uint32_t reclaimAtMs_ = 0;
     bool awaitTeleportAck_ = false;
     uint32_t teleportSentMs_ = 0, teleportCounter_ = 1;
+    // bags (offline_server.cpp): the flat backpack list <-> bag 255 / 19..22 and a slot
+    bool bagPosition(int index, uint8_t* bag, uint8_t* slot) const;
+    int bagIndex(uint8_t bag, uint8_t slot) const;
     // food, drink, potions (offline_items.cpp)
     bool useConsumable(int index, uint32_t nowMs);
     void stopEating(uint32_t nowMs);

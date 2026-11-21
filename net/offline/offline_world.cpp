@@ -971,6 +971,14 @@ bool World::buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t now
     return true;
 }
 
+void World::removeBagItem(int index) {
+    CharacterProfile& p = profiles_[0];
+    if (index < 0 || index >= p.bagCount) return;
+    for (int i = index; i + 1 < p.bagCount; ++i) { p.bag[i] = p.bag[i + 1]; p.bag[i].slot = (uint8_t)i; }
+    --p.bagCount;
+    p.bag[p.bagCount] = BagItem();
+}
+
 uint32_t World::sellBagItem(int index, uint32_t count, uint32_t nowMs) {
     (void)nowMs;
     if (!player_) return 0;

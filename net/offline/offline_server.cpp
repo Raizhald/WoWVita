@@ -461,6 +461,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
         if (orient) *orient = p->o;
     }
     loginPackets(nowMs);
+    mailAtLogin();   // WoWVita: "You have new mail."
     return true;
 }
 
@@ -632,6 +633,22 @@ void OfflineSession::sendInventory() {
         self.set(f, 0);
         self.set((uint16_t)(f + 1), 0);
     }
+    {   // WoWVita: the bank's 24 slots (39..62)
+        std::vector<std::pair<uint16_t, uint32_t>> bf;
+        std::vector<std::pair<uint64_t, BagItem>> bi;
+        bankFields(bf, bi);
+        for (const auto& [f, v] : bf) self.set(f, v);
+        for (const auto& [g, b] : bi) {
+            FieldSet it;
+            it.set(UF::OBJECT_GUID, (uint32_t)g);
+            it.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(g >> 32));
+            it.set(UF::OBJECT_TYPE, 0x3);
+            it.set(UF::OBJECT_ENTRY, b.entry);
+            it.set(UF::OBJECT_SCALE_X, 0x3F800000u);
+            it.set(UF::ITEM_FIELD_STACK_COUNT, b.count ? b.count : 1);
+            addCreateItem(u, g, it);
+        }
+    }
     addValues(u, p->guid, self);
     sendUpdateObject(u.finish());
 }
@@ -686,6 +703,7 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
             if (!v) return;
             if (op != CMSG_LIST_INVENTORY && lifeHello(npc, near, nowMs)) return;   // WoWVita: a spirit healer
             if (op != CMSG_LIST_INVENTORY && taxiHello(npc, near, false, nowMs)) return;   // WoWVita: a flight master
+            if (op != CMSG_LIST_INVENTORY && bankHello(npc, near, nowMs)) return;   // WoWVita: a banker
             // WoWVita: a quest giver shows its quests (and its goods as a gossip option)
             if (op != CMSG_LIST_INVENTORY && near && questHello(npc, op, isVendor)) return;
             if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
@@ -821,6 +839,10 @@ void OfflineSession::sendPlayerName(uint64_t guid) {
         gender = world_.playerProfile().gender;
         cls = world_.playerProfile().cls;
     } else {
+        for (uint8_t i = 0; i < save_.rosterCount; ++i)   // WoWVita: the other characters (the senders of letters)
+            if (save_.roster[i].used && save_.roster[i].guid == guid) {
+                name = save_.roster[i].name; race = save_.roster[i].race; gender = save_.roster[i].gender; cls = save_.roster[i].cls;
+            }
         for (int i = 0; i < kMaxParty; ++i)
             if (world_.botProfile(i).guid == guid) {
                 name = world_.botProfile(i).name;
@@ -1655,6 +1677,8 @@ void OfflineSession::update(uint32_t nowMs) {
                 break;
             default:
                 if (handleTaxi(op, p.second, nowMs)) break;   // WoWVita: flight masters
+                if (handleBank(op, p.second, nowMs)) break;   // WoWVita: the bank
+                if (handleMail(op, p.second, nowMs)) break;   // WoWVita: mailboxes
                 if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone
                 if (handleGameObject(op, p.second, nowMs)) break;   // WoWVita
                 if (handleQuest(op, p.second, nowMs)) break;   // WoWVita

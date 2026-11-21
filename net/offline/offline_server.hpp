@@ -184,6 +184,21 @@ private:
     uint32_t reclaimAtMs_ = 0;
     bool awaitTeleportAck_ = false;
     uint32_t teleportSentMs_ = 0, teleportCounter_ = 1;
+    // bank and mail (offline_bank_mail.cpp)
+    bool handleBank(uint16_t op, const Bytes& data, uint32_t nowMs);
+    bool handleMail(uint16_t op, const Bytes& data, uint32_t nowMs);
+    bool bankHello(uint64_t npc, bool near, uint32_t nowMs);
+    bool bankerNear() const;
+    void bankFields(std::vector<std::pair<uint16_t, uint32_t>>& self, std::vector<std::pair<uint64_t, BagItem>>& items) const;
+    void bankChanged(const std::vector<int>& bankSlots, int bagFrom, uint8_t bagBefore);
+    static uint64_t bankItemGuid(int slot);
+    bool mailboxNear(uint64_t box) const;
+    OfflineMail* mailById(uint32_t id);
+    void mailExpire();
+    void sendMailList();
+    void mailResult(uint32_t id, uint32_t action, uint32_t err);
+    void mailAtLogin();
+    uint64_t bankerGuid_ = 0;
     // flight masters (offline_taxi.cpp)
     bool handleTaxi(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool taxiHello(uint64_t npc, bool near, bool viaGossipOption, uint32_t nowMs);

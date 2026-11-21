@@ -37,6 +37,8 @@ struct OfflineSaveData {
     PartyCommandState commands{};
     std::vector<QuestLogEntry> quests;
     std::vector<uint32_t> rewarded;   // WoWVita: quests turned in (an optional block at the end of the payload)
+    std::vector<OfflineMail> mails;   // WoWVita: the mailboxes of all characters
+    uint32_t nextMailId = 1;
 };
 
 bool saveOffline(const char* path, const OfflineSaveData& data, std::string& err);

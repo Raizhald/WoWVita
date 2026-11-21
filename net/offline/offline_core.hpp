@@ -420,6 +420,17 @@ struct CharacterProfile {
     uint32_t logoutTime = 0;          // unix time of the last save
     bool logoutResting = false;       // in an inn or a capital then
     std::array<uint32_t, 8> taxiMask{};   // WoWVita: the flight paths discovered (TaxiNodes ids as bits; the "TAX1" block)
+    std::array<BagItem, 24> bank{};       // WoWVita: the bank's 24 slots (inventory slots 39..62; the "BNK1" block)
+};
+
+// WoWVita: a letter between the characters of this save (the "MAL1" block)
+struct OfflineMail {
+    uint32_t id = 0;
+    uint64_t receiver = 0, sender = 0;
+    std::string subject, body;
+    uint32_t item = 0, itemCount = 0, money = 0;
+    uint32_t flags = 0;               // 1 read, 2 returned
+    uint32_t sentTime = 0;            // unix time
 };
 
 struct QuestLogEntry {
@@ -503,6 +514,7 @@ public:
     bool buyItem(uint32_t entry, uint32_t count, uint32_t price, uint32_t nowMs, int* why);
     // Sells (count 0 = all) of backpack slot 'index'; the copper paid, 0 = nothing sold.
     uint32_t sellBagItem(int index, uint32_t count, uint32_t nowMs);
+    void removeBagItem(int index);   // WoWVita: the whole stack leaves the backpack (the bank, a letter)
     // Puts backpack slot 'index' on (what was worn there goes to the backpack). 0 = done, else a reason for the
     // player: 1 cannot be worn, 2 too low level, 3 no room for the off-hand item. *slotsOut: the equipment slots
     // that changed (up to 2).

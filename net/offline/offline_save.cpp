@@ -124,6 +124,19 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     payload.u32(0x31584154u);   // "TAX1"
     for (const CharacterProfile& c : d.roster)
         for (uint32_t m : c.taxiMask) payload.u32(m);
+    // WoWVita: the bank
+    payload.u32(0x314B4E42u);   // "BNK1"
+    for (const CharacterProfile& c : d.roster)
+        for (const BagItem& b : c.bank) { payload.u32(b.entry); payload.u16(b.count); }
+    // WoWVita: the mail
+    payload.u32(0x314C414Du);   // "MAL1"
+    payload.u32(d.nextMailId);
+    payload.u32((uint32_t)d.mails.size());
+    for (const OfflineMail& m : d.mails) {
+        payload.u32(m.id); payload.u64(m.receiver); payload.u64(m.sender);
+        payload.cstr(m.subject); payload.cstr(m.body);
+        payload.u32(m.item); payload.u32(m.itemCount); payload.u32(m.money); payload.u32(m.flags); payload.u32(m.sentTime);
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -248,6 +261,27 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
             for (CharacterProfile& c : d.roster)
                 for (uint32_t& m : c.taxiMask) m = p.u32();
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        }
+    }
+    if (!p.bad && p.left() >= 4 + 4 * 24 * 6) {   // WoWVita: the bank
+        if (p.u32() == 0x314B4E42u) {
+            for (CharacterProfile& c : d.roster)
+                for (BagItem& b : c.bank) { b.entry = p.u32(); b.count = p.u16(); if (!b.entry) b.count = 0; }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        }
+    }
+    if (!p.bad && p.left() >= 12) {   // WoWVita: the mail
+        if (p.u32() == 0x314C414Du) {
+            d.nextMailId = p.u32();
+            const uint32_t n = p.u32();
+            if (n > 4096) { err = "malformed mail"; return false; }
+            for (uint32_t i = 0; i < n && !p.bad; ++i) {
+                OfflineMail m;
+                m.id = p.u32(); m.receiver = p.u64(); m.sender = p.u64();
+                m.subject = p.cstr(); m.body = p.cstr();
+                m.item = p.u32(); m.itemCount = p.u32(); m.money = p.u32(); m.flags = p.u32(); m.sentTime = p.u32();
+                if (!p.bad) d.mails.push_back(std::move(m));
+            }
         }
     }
     if (p.bad) { err = "malformed save payload"; return false; }

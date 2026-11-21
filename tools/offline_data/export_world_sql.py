@@ -36,8 +36,8 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone", "areatrigger_tavern"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
-# 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects). Doors, traps, transports, mailboxes stay out.
-GO_TYPES = {1, 2, 3, 5, 8, 9, 10}
+# 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
+GO_TYPES = {1, 2, 3, 5, 8, 9, 10, 19}
 
 CREATE_RE = re.compile(r"^CREATE TABLE `(\w+)`")
 COL_RE = re.compile(r"^\s+`(\w+)`")

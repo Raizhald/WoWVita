@@ -57,7 +57,12 @@ Flight masters (net/offline/offline_taxi.cpp): the client's taxi.txt (TaxiNodes,
 TaxiPathNode point, matched to a path by its ends). Talking to one discovers its point and opens the map; a flight costs
 its legs (several legs: ACTIVATETAXIEXPRESS), mounts the character (gryphon / wind rider / bat), flies the real path at
 32 yd/s as a flying spline, creatures leave it alone. A new character knows its race's capital. Without the two files
-flight masters only talk. Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
+flight masters only talk.
+
+Bank and mail (net/offline/offline_bank_mail.cpp): bankers open the bank's 24 slots (stacks join; no bank bags: there
+are no bags offline). Mailboxes (game object type 19, now in the pack): letters between the characters of the save
+(one account: they arrive at once), an item and / or money, postage 30 c; not to yourself, not to the other faction, no
+Hearthstone. After 30 days a letter's item or money goes back to its sender. "You have new mail." at login. Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
 
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.

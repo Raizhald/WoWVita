@@ -765,7 +765,7 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
         rollLoot(e);
         if (const CreatureTemplate* t = data_ ? data_->creature(e.entry) : nullptr) {
             if (killer.self || killer.bot) {
-                addXp(*player_, t->xp, nowMs);
+                addXp(*player_, t->xp, nowMs, e.guid);
                 if (onKillCredit) onKillCredit(e.entry, e.guid);   // WoWVita: the quests of the server layer
                 // Quest progress for every accepted kill quest.
                 for (QuestLogEntry& q : questLog_) {
@@ -1079,11 +1079,20 @@ void World::addMoneyToPlayer(uint32_t copper, uint32_t nowMs) {
     (void)nowMs;
 }
 
-void World::addXp(Entity& e, uint32_t xp, uint32_t nowMs) {
+void World::addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim) {
     if (!e.self && !e.bot) return;
     if (!xp) return;
+    // WoWVita: rested - a kill gives as much again from the pool, which shrinks by that (vMaNGOS Player::GetXPRestBonus)
+    uint32_t rested = 0;
+    if (victim && e.self && e.level < 60) {
+        float& pool = profiles_[0].restBonus;
+        rested = std::min<uint32_t>(xp, (uint32_t)std::max(0.0f, pool));
+        pool -= (float)rested;
+        if (pool < 0) pool = 0;
+    }
+    xp += rested;
     e.levelXp += xp;
-    emit(SimEvent::XpGain, e.guid, 0, 0, (int32_t)xp);
+    emit(SimEvent::XpGain, e.guid, victim, rested, (int32_t)xp);
     while (e.nextLevelXp && e.levelXp >= e.nextLevelXp && e.level < 60) {
         e.levelXp -= e.nextLevelXp;
         ++e.level;

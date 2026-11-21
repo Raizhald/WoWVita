@@ -248,6 +248,7 @@ struct WorldData {
     std::unordered_map<uint32_t, GoLoot> goLoot;                      // "GLOT": loot id (data1 of a chest) -> loot
     std::vector<Graveyard> graveyards;                                // "GRAV"
     std::vector<GraveyardLink> graveyardLinks;
+    std::vector<uint32_t> taverns;                                    // "TAVN": the inns' area trigger ids
     const QuestFull* questFull(uint32_t id) const {
         auto it = questIndex.find(id);
         return it == questIndex.end() ? nullptr : &questsFull[it->second];
@@ -413,6 +414,10 @@ struct CharacterProfile {
     float homeX = 0, homeY = 0, homeZ = 0;
     uint32_t homeZone = 0;
     uint32_t hearthCdSec = 0;
+    // WoWVita: rested experience (the save's "RST1" block): the bonus pool and where / when the character left the world
+    float restBonus = 0;
+    uint32_t logoutTime = 0;          // unix time of the last save
+    bool logoutResting = false;       // in an inn or a capital then
 };
 
 struct QuestLogEntry {
@@ -509,7 +514,7 @@ public:
     void syncPlayerMoney() { if (player_) profiles_[0].money = player_->money; }
     void recomputeGear();   // weapon damage / speed and armour from what is worn
     void addMoneyToPlayer(uint32_t copper, uint32_t nowMs);
-    void addXp(Entity& e, uint32_t xp, uint32_t nowMs);
+    void addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim = 0);   // WoWVita: a kill (victim) uses the rested bonus
     // Player resurrection (corpse reclaim / spirit healer): clears combat and restores a share of HP.
     void revive(Entity& e, int32_t hpPercent, uint32_t nowMs);
     // Cancel an in-progress cast (player pressed cancel / an interrupt landed).

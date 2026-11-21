@@ -5,6 +5,9 @@
 //   - the spirit healer: only ghosts see it; it brings back to life at the graveyard, with resurrection sickness at level 25
 //   - Innkeeper Farley (295, Goldshire): "Make this inn your home." -> binder confirm -> home; the Hearthstone takes the
 //     character there after 10 s, moving breaks the cast, then a 1 hour cooldown; home and cooldown are saved
+//   - rested: resting in the inn (its area trigger 562; the test gives it a sphere: the real shape is the client's
+//     areatriggers.txt) and in Stormwind; a kill gives double XP from the pool; time away adds to the pool
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +46,13 @@ int main(int argc, char** argv) {
     w3n::WorldClient wc;
     w3n::GameSession gs;
     uint32_t now = 10000;
+    uint32_t wall = 1800000000u;   // unix time for the rested bonus
+    session.wallClock = [&] { return wall; };
+    w3n::AreaTriggerTable triggers;
+    for (const off::Spawn& s : data.spawns)
+        if (s.entry == 295) { w3n::AreaTrigger t; t.id = 562; t.map = 0; t.x = s.x; t.y = s.y; t.z = s.z; t.radius = 20; triggers.add(t); }
+    session.setAreaTriggers(&triggers);
+    CHECK(std::find(data.taverns.begin(), data.taverns.end(), 562u) != data.taverns.end(), "the Lion's Pride Inn is a tavern");
     session.setup(&data, savePath);
     session.setParty(false);
     if (getenv("QTRACE")) session.trace = [](const std::string& l) { std::printf("    [trace] %s\n", l.c_str()); };
@@ -167,9 +177,51 @@ int main(int argc, char** argv) {
                 const off::CharacterProfile& pr = w.playerProfile();
                 CHECK(pr.homeSet && std::hypot(pr.homeX - p->x, pr.homeY - p->y) < 1.0f, "Goldshire is home");
             }
+            run(1500);
+            const w3n::WorldObject* meo = gs.objects.find(gs.objects.self());
+            CHECK(session.resting() && meo && (meo->field(w3n::UF::PLAYER_FLAGS) & 0x20), "resting in the inn (the portrait's zZ)");
+            const float before = w.playerProfile().restBonus;
+            run(60000);
+            const float grown = w.playerProfile().restBonus - before;
+            const float want = 60.0f * p->nextLevelXp / 72000.0f * 0.125f;
+            CHECK(std::fabs(grown - want) < want * 0.1f + 0.01f, "a minute in the inn: +%.3f rested (want %.3f)", grown, want);
         }
     }
     const float homeX = w.playerProfile().homeX, homeY = w.playerProfile().homeY;
+    put(-8913.0f, -136.0f, 81.0f);
+    CHECK(!session.resting(), "not resting outside");
+    gs.reportZone(1519, now);   // Stormwind City: a capital
+    run(1500);
+    CHECK(session.resting(), "resting in a capital");
+    gs.reportZone(12, now);
+    run(1500);
+    CHECK(!session.resting(), "not resting in Elwynn Forest");
+
+    // ---- a kill with rested experience: double XP, the pool shrinks by the bonus
+    {
+        w.playerProfile().restBonus = 1000.0f;
+        run(1200);
+        const w3n::WorldObject* meo = gs.objects.find(gs.objects.self());
+        CHECK(meo && meo->field(w3n::UF::PLAYER_REST_STATE_EXPERIENCE) == 1000 && ((meo->field(w3n::UF::PLAYER_BYTES_2) >> 24) & 0xFF) == 1,
+              "the client sees the rested pool");
+        off::Entity* victim = nullptr;
+        for (int i = 0; i < off::kMaxEntities && !victim; ++i) {
+            off::Entity* e = w.byIndex(i);
+            if (e && e->used && e->objType == 3 && e->alive() && !e->npcFlags) if (const off::CreatureTemplate* t = data.creature(e->entry); t && t->xp) victim = e;
+        }
+        CHECK(victim != nullptr, "a creature to kill");
+        if (victim) {
+            const uint32_t base = data.creature(victim->entry)->xp;
+            const uint32_t xpBefore = p->levelXp, lvBefore = p->level;
+            w.applyDamage(*p, *victim, 1000000, 0, 0, now);
+            run(500);
+            CHECK(p->level > lvBefore || p->levelXp - xpBefore == 2 * base, "a rested kill: %u XP for %u", p->levelXp - xpBefore, base);
+            CHECK(std::fabs(w.playerProfile().restBonus - (1000.0f - base)) < 1.0f, "the pool shrank by the bonus (%.0f)", w.playerProfile().restBonus);
+            bool said = false;
+            for (const auto& m : gs.chat) said = said || m.text.find("exp Rested bonus") != std::string::npos;
+            CHECK(said, "the chat says \"(+%u exp Rested bonus)\"", base);
+        }
+    }
 
     // ---- the Hearthstone: moving breaks it, then 10 s take the character home, then the cooldown
     put(-8913.0f, -136.0f, 81.0f);
@@ -207,6 +259,23 @@ int main(int argc, char** argv) {
     CHECK(off::loadOffline(savePath, sd, serr), "load: %s", serr.c_str());
     CHECK(sd.player.homeSet && std::hypot(sd.player.homeX - homeX, sd.player.homeY - homeY) < 1.0f, "home in the save");
     CHECK(sd.player.hearthCdSec > 3400, "the cooldown in the save (%u s)", sd.player.hearthCdSec);
+    CHECK(sd.player.logoutTime == wall && !sd.player.logoutResting, "when and where the character left");
+
+    // ---- 8 hours away, outside an inn: a quarter of the inn's rate
+    {
+        off::OfflineSession s2;
+        uint32_t wall2 = wall + 8 * 3600;
+        s2.wallClock = [&] { return wall2; };
+        s2.setup(&data, savePath);
+        s2.setParty(false);
+        CHECK(s2.open(err), "reopen: %s", err.c_str());
+        float pos2[3];
+        float o2 = 0;
+        CHECK(s2.enterWorld(guid, now, pos2, &o2), "enter again");
+        const off::CharacterProfile& pr2 = s2.world().playerProfile();
+        const float want = sd.player.restBonus + 8 * 3600 * (sd.player.nextXp / 72000.0f) * 0.031f;
+        CHECK(std::fabs(pr2.restBonus - std::min(want, sd.player.nextXp * 0.75f)) < 1.0f, "8 hours away: %.1f rested (want %.1f)", pr2.restBonus, want);
+    }
 
     std::printf("%d / %d checks passed\n", checks - failed, checks);
     return failed ? 1 : 0;

@@ -27,13 +27,13 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
           "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text",
           "gameobject", "gameobject_template", "gameobject_loot_template", "gameobject_questrelation",
-          "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone"}
+          "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone", "areatrigger_tavern"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects). Doors, traps, transports, mailboxes stay out.
@@ -731,6 +731,13 @@ def build(tables, factions, map_id, report, player_faction=1):
         grb.u32(gid); grb.u32(zone); grb.u16(fac)
     sec["GRAV"] = grb.b
     report["counts_graveyards"] = dict(graveyards=len(locs), zone_links=len(links))
+    # "TAVN": the inn area triggers (areatrigger_tavern; their shapes are AreaTrigger.dbc, the client's areatriggers.txt)
+    tav = sorted({int(num(g(r, "id"))) for r in tables.get("areatrigger_tavern", [])})
+    tb = Bin()
+    tb.u32(len(tav))
+    for t in tav:
+        tb.u32(t)
+    sec["TAVN"] = tb.b
 
     hb = Bin()
     hb.u32(len(host))

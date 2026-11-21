@@ -16,6 +16,7 @@
 // movement packets are dropped.
 #include <algorithm>
 #include <cmath>
+#include <ctime>
 
 #include "offline_server.hpp"
 #include "../movement.hpp"
@@ -249,6 +250,67 @@ void OfflineSession::hearthHome(uint32_t nowMs) {
     if (pr.homeSet) teleportPlayer(pr.homeX, pr.homeY, pr.homeZ, world_.player() ? world_.player()->o : 0.0f, nowMs);
     else if (data_) teleportPlayer(data_->spawnX, data_->spawnY, data_->spawnZ, data_->spawnO, nowMs);
     saveSoon_ = true;
+}
+
+// ---------------------------------------------------------------- rested experience
+// vMaNGOS Player::Update / SetRestBonus / LoadFromDB: in an inn (its area trigger, areatrigger_tavern) or a capital the
+// pool grows by next-level-XP / 72000 * 0.125 a second (5 % of a level per 8 hours); between sessions the same when the
+// character left resting, a quarter of it (0.031) elsewhere. The pool holds at most 1.5 levels of kills (75 % of a level
+// as bonus); a kill gives as much again from it (World::addXp). PLAYER_FLAGS_RESTING 0x20 (the portrait's zZ),
+// PLAYER_BYTES_2 byte 3: 1 rested / 2 normal, PLAYER_REST_STATE_EXPERIENCE: the pool.
+uint32_t OfflineSession::wallNow() const { return wallClock ? wallClock() : (uint32_t)std::time(nullptr); }
+
+namespace {
+bool capitalZone(uint32_t z) { return z == 1519 || z == 1537 || z == 1497 || z == 1657 || z == 1637 || z == 1638; }
+void capRest(CharacterProfile& pr, uint32_t nextXp) {
+    const float maxPool = (float)nextXp * 1.5f / 2.0f;
+    if (pr.restBonus > maxPool) pr.restBonus = maxPool;
+    if (!(pr.restBonus >= 0.0f)) pr.restBonus = 0.0f;
+}
+}  // namespace
+
+void OfflineSession::restOnLogin() {
+    CharacterProfile& pr = save_.player;
+    const uint32_t now = wallNow();
+    if (pr.logoutTime && now > pr.logoutTime && pr.level < 60) {
+        const uint32_t away = std::min<uint32_t>(now - pr.logoutTime, 60u * 86400u);
+        const float bubble = pr.logoutResting ? 0.125f : 0.031f;
+        pr.restBonus += (float)away * ((float)pr.nextXp / 72000.0f) * bubble;
+        capRest(pr, pr.nextXp);
+    }
+    pr.logoutTime = now;
+    resting_ = pr.logoutResting;   // (the first check corrects it at once)
+    restTickMs_ = 0;
+}
+
+void OfflineSession::updateRest(uint32_t nowMs) {
+    Entity* p = world_.player();
+    if (!p) return;
+    if (restTickMs_ && nowMs - restTickMs_ < 1000) return;
+    const uint32_t dt = restTickMs_ ? nowMs - restTickMs_ : 0;
+    restTickMs_ = nowMs;
+    // the inns' shapes, once the client's table is there
+    if (triggers_ && data_ && (tavernShapesOf_ != triggers_ || tavernShapesCount_ != triggers_->all().size())) {
+        tavernShapesOf_ = triggers_;
+        tavernShapesCount_ = triggers_->all().size();
+        tavernShapes_.clear();
+        for (const AreaTrigger& t : triggers_->all())
+            if (std::find(data_->taverns.begin(), data_->taverns.end(), t.id) != data_->taverns.end()) tavernShapes_.push_back(&t);
+    }
+    bool r = capitalZone(zone_);
+    const float pos[3] = {p->x, p->y, p->z};
+    for (const AreaTrigger* t : tavernShapes_)
+        if (!r && t->map == mapId_ && AreaTriggerTable::inside(*t, pos)) r = true;
+    CharacterProfile& pr = world_.playerProfile();
+    if (resting_ && dt && p->level < 60) {
+        pr.restBonus += (float)dt / 1000.0f * ((float)p->nextLevelXp / 72000.0f) * 0.125f;
+        capRest(pr, p->nextLevelXp);
+    }
+    const uint32_t pool = (uint32_t)pr.restBonus;
+    if (r != resting_ || pool != restSent_) {
+        resting_ = r;
+        sendSelfFields();
+    }
 }
 
 }  // namespace offline

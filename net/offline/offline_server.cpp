@@ -427,6 +427,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     lootGuid_ = 0;
     ghost_ = false;
     corpseSet_ = false;           // WoWVita
+    restOnLogin();
     awaitTeleportAck_ = false;
     zone_ = 0;                    // (the client says it: CMSG_ZONEUPDATE)
     // WoWVita: every character carries a Hearthstone (an older save gets one)
@@ -467,6 +468,8 @@ void OfflineSession::syncProfiles() {
     save_.player = world_.playerProfile();
     if (const Entity* p = world_.player())   // WoWVita: the Hearthstone's cooldown goes with the character
         save_.player.hearthCdSec = (world_.cooldownLeft(*p, kHearthstoneSpell, world_.nowMs()) + 999) / 1000;
+    save_.player.logoutTime = wallNow();   // WoWVita: rested experience between sessions
+    save_.player.logoutResting = resting_;
     for (int i = 0; i < kMaxParty; ++i) save_.bots[(size_t)i] = world_.botProfile(i);
     // WoWVita: the quest log of a whole-world pack is kept by offline_quests.cpp in save_.quests; the core's own
     // (single-objective "QUES" quests of the sample) only when the pack has those
@@ -552,7 +555,13 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_XP, p->levelXp);
     f.set(UF::PLAYER_NEXT_LEVEL_XP, p->nextLevelXp);
     f.set(UF::PLAYER_FIELD_COINAGE, p->money);
-    f.set(UF::PLAYER_FLAGS, ghost_ ? 0x10u : 0u);
+    f.set(UF::PLAYER_FLAGS, (ghost_ ? 0x10u : 0u) | (resting_ ? 0x20u : 0u));   // WoWVita: resting (an inn, a capital)
+    {   // WoWVita: rested experience
+        const CharacterProfile& pr = world_.playerProfile();
+        restSent_ = (uint32_t)pr.restBonus;
+        f.set(UF::PLAYER_REST_STATE_EXPERIENCE, restSent_);
+        f.set(UF::PLAYER_BYTES_2, (uint32_t)pr.facialHair | ((restSent_ > 10 ? 1u : 2u) << 24));
+    }
     {   // WoWVita: the quest log
         std::vector<std::pair<uint16_t, uint32_t>> ql;
         questLogFields(ql);
@@ -1396,11 +1405,14 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
             case SimEvent::XpGain: {
                 if (!a) break;
                 Writer w;
-                w.u64(0);            // victim (unknown for quest XP)
-                w.u32((uint32_t)std::max<int32_t>(0, e.value));
-                w.u8(0);             // kill
-                w.u32(0);
-                w.f32(1.0f);
+                const uint32_t total = (uint32_t)std::max<int32_t>(0, e.value);
+                w.u64(e.b);          // the victim (0: quest XP)
+                w.u32(total);
+                w.u8(e.b ? 0 : 1);   // 0 kill, 1 other
+                if (e.b) {           // WoWVita: the XP without the rested bonus (the client says "+N exp Rested bonus")
+                    w.u32(total - std::min(total, e.spell));
+                    w.f32(1.0f);
+                }
                 send(SMSG_LOG_XPGAIN, w.b);
                 sendSelfFields();
                 break;
@@ -1650,6 +1662,7 @@ void OfflineSession::update(uint32_t nowMs) {
     world_.setData(data_);
     world_.step(nowMs);    ++stats.steps;
     dispatchEvents(nowMs);
+    updateRest(nowMs);   // WoWVita: rested experience
     sendMovementToClient(nowMs);
     if (nowMs - lastPartyStats_ >= 1000) {
         lastPartyStats_ = nowMs;

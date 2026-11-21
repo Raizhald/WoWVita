@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "../client.hpp"
+#include "../tables.hpp"
 #include "offline_core.hpp"
 #include "offline_save.hpp"
 
@@ -36,6 +37,10 @@ public:
     // WoWVita: the four companions (the game turns them off unless offline_party.txt exists - see login.cpp)
 
     void setParty(bool on) { partyEnabled_ = on; }
+    // WoWVita: the client's AreaTrigger.dbc shapes (areatriggers.txt): the inns are triggers ("TAVN")
+    void setAreaTriggers(const AreaTriggerTable* t) { triggers_ = t; }
+    std::function<uint32_t()> wallClock;   // WoWVita: unix time for the rested bonus between sessions (default time())
+    bool resting() const { return resting_; }
 
     bool party() const { return partyEnabled_; }
     // WoWVita: diagnostics (login.cpp writes them to offline_trace.txt): NPC interaction and each opcode the
@@ -176,6 +181,16 @@ private:
     uint32_t reclaimAtMs_ = 0;
     bool awaitTeleportAck_ = false;
     uint32_t teleportSentMs_ = 0, teleportCounter_ = 1;
+    // rested experience (offline_life.cpp)
+    void updateRest(uint32_t nowMs);
+    void restOnLogin();
+    uint32_t wallNow() const;
+    const AreaTriggerTable* triggers_ = nullptr;
+    std::vector<const AreaTrigger*> tavernShapes_;
+    const AreaTriggerTable* tavernShapesOf_ = nullptr;
+    size_t tavernShapesCount_ = 0;
+    bool resting_ = false;
+    uint32_t restTickMs_ = 0, restSent_ = 0;
 
     // ---- events / state
     void dispatchEvents(uint32_t nowMs);

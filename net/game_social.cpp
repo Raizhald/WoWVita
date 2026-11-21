@@ -1199,7 +1199,11 @@ bool GameSession::handleSocial(uint16_t op, const Bytes& data, uint32_t nowMs) {
             if (kind == 0) {
                 ++kills;
                 std::string v = objects.nameOf(victim);
-                addLocal((v.empty() ? std::string("Your victim") : v) + " dies, you gain " + std::to_string(xp) + " experience.", nowMs);
+                // WoWVita: then the XP without the rested bonus (COMBATLOG_XPGAIN_EXHAUSTION1: "(+%d exp Rested bonus)")
+                const uint32_t base = r.u32();
+                std::string bonus;
+                if (!r.bad && base < xp) bonus = " (+" + std::to_string(xp - base) + " exp Rested bonus)";
+                addLocal((v.empty() ? std::string("Your victim") : v) + " dies, you gain " + std::to_string(xp) + " experience." + bonus, nowMs);
             } else {
                 addLocal("You gain " + std::to_string(xp) + " experience.", nowMs);
             }

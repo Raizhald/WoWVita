@@ -113,6 +113,13 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         payload.u32(c.homeZone);
         payload.u32(c.hearthCdSec);
     }
+    // WoWVita: rested experience
+    payload.u32(0x31545352u);   // "RST1"
+    for (const CharacterProfile& c : d.roster) {
+        payload.f32(c.restBonus);
+        payload.u32(c.logoutTime);
+        payload.u8(c.logoutResting ? 1 : 0);
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -217,6 +224,17 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                 c.homeX = p.f32(); c.homeY = p.f32(); c.homeZ = p.f32();
                 c.homeZone = p.u32();
                 c.hearthCdSec = p.u32();
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        }
+    }
+    if (!p.bad && p.left() >= 4 + 4 * 9) {   // WoWVita: rested experience
+        if (p.u32() == 0x31545352u) {
+            for (CharacterProfile& c : d.roster) {
+                c.restBonus = p.f32();
+                if (!(c.restBonus >= 0.0f && c.restBonus < 1e7f)) c.restBonus = 0;
+                c.logoutTime = p.u32();
+                c.logoutResting = p.u8() != 0;
             }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         }

@@ -402,6 +402,14 @@ bool readGraveyards(Bin& b, WorldData& w) {   // WoWVita
     return !b.bad;
 }
 
+bool readTaverns(Bin& b, WorldData& w) {   // WoWVita
+    const uint32_t n = b.u32();
+    if (b.bad || n > 4096) return false;
+    w.taverns.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) w.taverns.push_back(b.u32());
+    return !b.bad;
+}
+
 bool readGoLoot(Bin& b, WorldData& w) {   // WoWVita
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -626,6 +634,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("GOBJ"): ok = readGoTemplates(b, out); break;
             case fourcc("GOSP"): ok = readGoSpawns(b, out); break;
             case fourcc("GRAV"): ok = readGraveyards(b, out); break;
+            case fourcc("TAVN"): ok = readTaverns(b, out); break;
             case fourcc("GLOT"): ok = readGoLoot(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

@@ -298,9 +298,11 @@ bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
     const Giver gv = giverOf(npc);
     if (!gv.ok || !data_) return false;
     const auto menu = questMenu(gv.entry, gv.go);
-    if (menu.empty()) return false;   // nothing to do with quests: the caller opens the vendor (or says so)
+    const Entity* npcE = gv.go ? nullptr : world_.entity(npc);
+    const bool inn = npcE && (npcE->npcFlags & 0x80u);   // WoWVita: an innkeeper ("Make this inn your home.")
+    if (menu.empty() && !inn) return false;   // nothing to do with quests: the caller opens the vendor (or says so)
     const auto gr = gv.go ? data_->greetings.end() : data_->greetings.find(gv.entry);
-    if (!vendor && op == CMSG_QUESTGIVER_HELLO) {
+    if (!vendor && !inn && op == CMSG_QUESTGIVER_HELLO) {
         // one quest and nothing else: straight to it, as the original does
         if (menu.size() == 1) {
             const QuestFull* q = questDef(menu[0].first);
@@ -322,7 +324,8 @@ bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
     Writer w;
     w.u64(npc);
     w.u32(kGreetingTextId | (gv.entry & 0xFFFF));
-    w.u32(vendor ? 1u : 0u);
+    w.u32((vendor ? 1u : 0u) + (inn ? 1u : 0u));
+    if (inn) { w.u32(kGossipBind); w.u8(5); w.u8(0); w.cstr("Make this inn your home."); }   // WoWVita: the binder option
     if (vendor) { w.u32(1); w.u8(1); w.u8(0); w.cstr("I want to browse your goods."); }   // option 1: the vendor
     w.u32((uint32_t)menu.size());
     for (const auto& [id, icon] : menu) {

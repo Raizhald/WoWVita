@@ -500,6 +500,15 @@ void World::addAura(Entity& e, const Aura& a) {
     emit(SimEvent::AuraApplied, e.guid, a.caster, a.spell, (int32_t)(a.endMs - now_), a.school, slot);
 }
 
+void World::addTimedAura(Entity& e, uint32_t spell, uint32_t durationMs) {
+    Aura a;
+    a.spell = spell;
+    a.caster = e.guid;
+    a.kind = (uint8_t)SpellKind::Buff;
+    a.endMs = now_ + durationMs;
+    addAura(e, a);
+}
+
 void World::removeAura(Entity& e, int index) {
     if (index < 0 || index >= e.auraCount) return;
     emit(SimEvent::AuraRemoved, e.guid, 0, e.auras[index].spell, index);
@@ -559,7 +568,8 @@ bool World::tryCast(Entity& actor, uint32_t spellId, uint64_t targetGuid, uint32
         emit(SimEvent::PowerChanged, actor.guid, 0, 0, actor.power);
     }
     const uint32_t cd = s->cooldownMs ? s->cooldownMs : s->categoryCooldownMs;
-    if (cd) {
+    // WoWVita: a scripted cast (the Hearthstone) starts its cooldown when it finishes, as the original: moving breaks it for free
+    if (cd && !(s->kind == SpellKind::Script && s->castMs)) {
         bool stored = false;
         for (uint8_t i = 0; i < actor.cooldownCount; ++i)
             if (actor.cooldowns[i].spell == spellId) {
@@ -653,6 +663,14 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
         case SpellKind::Taunt:
             taunt(*t, e.guid);
             break;
+        case SpellKind::Script: {   // WoWVita: the session reacts on CastFinished; the cooldown starts now
+            const uint32_t cd = s->cooldownMs ? s->cooldownMs : s->categoryCooldownMs;
+            bool stored = false;
+            for (uint8_t i = 0; i < e.cooldownCount; ++i)
+                if (e.cooldowns[i].spell == spellId) { e.cooldowns[i] = Cooldown{spellId, now_ + cd, cd}; stored = true; }
+            if (cd && !stored && e.cooldownCount < kMaxCooldowns) e.cooldowns[e.cooldownCount++] = Cooldown{spellId, now_ + cd, cd};
+            break;
+        }
         case SpellKind::Interrupt:
             if (t->castSpell) {
                 cancelCast(*t, 35, now_);   // SPELL_FAILED_INTERRUPTED
@@ -665,6 +683,8 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
 void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell, uint8_t school, uint32_t nowMs) {
     if (!dst.alive() || amount <= 0) return;
     int32_t dmg = amount;
+    // WoWVita: resurrection sickness - the original takes 75% of the stats; offline it takes 75% of the damage done
+    if (src.self && hasAura(src, kResurrectionSickness)) dmg = std::max<int32_t>(1, dmg / 4);
     if (dst.armor > 0 && school == 0) dmg = dmg - dmg * (int32_t)dst.armor / (int32_t)(dst.armor + 400);
     if (dmg < 1) dmg = 1;
     dst.hp -= dmg;

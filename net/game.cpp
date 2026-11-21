@@ -79,6 +79,7 @@ void GameSession::attach(WorldClient& wc, uint32_t nowMs) {
     xpGains.clear();
     channels_.clear();    // the server dropped us from every channel at logout
     autoZone_ = 0;
+    reportedZone_ = 0;
     autoJoined_.clear();
     autoLfg_ = false;
     itemAsked_.clear();   // the item cache (items_) survives: static data

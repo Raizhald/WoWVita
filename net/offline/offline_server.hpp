@@ -159,6 +159,24 @@ private:
         struct Slot { uint32_t item = 0; uint16_t count = 0; bool taken = false; } slots[16];
     } goLootState_;
 
+    // ---- WoWVita: death and home (offline_life.cpp)
+    bool handleLife(uint16_t op, const Bytes& data, uint32_t nowMs);
+    bool lifeHello(uint64_t npc, bool near, uint32_t nowMs);
+    const Graveyard* nearestGraveyard(float x, float y, uint32_t zone) const;
+    void teleportPlayer(float x, float y, float z, float o, uint32_t nowMs);
+    void showSpiritHealers(bool show);
+    void backToLife(int32_t hpPercent, bool sickness, uint32_t nowMs);
+    void sendBindPoint();
+    void hearthHome(uint32_t nowMs);
+    static bool isSpiritHealer(const Entity& e);
+    static constexpr uint32_t kGossipBind = 2;   // the innkeeper's "Make this inn your home." (1 = the goods)
+    uint32_t zone_ = 0;                          // CMSG_ZONEUPDATE
+    bool corpseSet_ = false;
+    float corpseX_ = 0, corpseY_ = 0, corpseZ_ = 0;
+    uint32_t reclaimAtMs_ = 0;
+    bool awaitTeleportAck_ = false;
+    uint32_t teleportSentMs_ = 0, teleportCounter_ = 1;
+
     // ---- events / state
     void dispatchEvents(uint32_t nowMs);
     void sendMovementToClient(uint32_t nowMs);

@@ -208,6 +208,16 @@ void GameSession::updateDefaultChannels(uint32_t zoneId, const std::string& zone
     autoZone_ = zoneId;
 }
 
+// WoWVita: the original client tells the server the zone it entered (CMSG_ZONEUPDATE u32 zone; vMaNGOS only logs it and
+// uses its own data). The offline world has no zone data of its own: it uses this one for the graveyards.
+void GameSession::reportZone(uint32_t zoneId, uint32_t nowMs) {
+    if (!zoneId || zoneId == reportedZone_ || !wc_) return;
+    Writer w;
+    w.u32(zoneId);
+    send(0x1F4, w.b, nowMs);   // CMSG_ZONEUPDATE
+    reportedZone_ = zoneId;
+}
+
 void GameSession::leaveChannel(const std::string& name, uint32_t nowMs) {
     Writer w;
     w.cstr(name);

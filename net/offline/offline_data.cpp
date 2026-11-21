@@ -382,6 +382,26 @@ bool readGoSpawns(Bin& b, WorldData& w) {   // WoWVita
     return !b.bad;
 }
 
+bool readGraveyards(Bin& b, WorldData& w) {   // WoWVita
+    uint32_t n = b.u32();
+    if (b.bad || n > 4096) return false;
+    w.graveyards.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        Graveyard g;
+        g.id = b.u32(); g.x = b.f32(); g.y = b.f32(); g.z = b.f32(); g.o = b.f32();
+        if (!b.bad) w.graveyards.push_back(g);
+    }
+    n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.graveyardLinks.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        GraveyardLink l;
+        l.id = b.u32(); l.zone = b.u32(); l.faction = b.u16();
+        if (!b.bad) w.graveyardLinks.push_back(l);
+    }
+    return !b.bad;
+}
+
 bool readGoLoot(Bin& b, WorldData& w) {   // WoWVita
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -455,6 +475,15 @@ const ItemTemplate* WorldData::item(uint32_t entry) const {
 const SpellDef* WorldData::spell(uint32_t id) const {
     for (const SpellDef& s : spells)
         if (s.id == id) return &s;
+    if (id == kHearthstoneSpell) {   // WoWVita: every pack has the Hearthstone (the session teleports when it finishes)
+        static const SpellDef hearth = [] {
+            SpellDef d;
+            d.id = kHearthstoneSpell; d.name = "Hearthstone"; d.kind = SpellKind::Script; d.school = 6;
+            d.castMs = 10000; d.cooldownMs = 3600000; d.maxRange = 0.0f; d.friendly = true;
+            return d;
+        }();
+        return &hearth;
+    }
     return nullptr;
 }
 bool WorldData::hostile(uint32_t a, uint32_t b) const {
@@ -596,6 +625,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("GOSS"): ok = readGreetings(b, out); break;
             case fourcc("GOBJ"): ok = readGoTemplates(b, out); break;
             case fourcc("GOSP"): ok = readGoSpawns(b, out); break;
+            case fourcc("GRAV"): ok = readGraveyards(b, out); break;
             case fourcc("GLOT"): ok = readGoLoot(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

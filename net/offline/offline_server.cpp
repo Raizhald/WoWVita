@@ -426,10 +426,28 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     target_ = 0;
     lootGuid_ = 0;
     ghost_ = false;
+    corpseSet_ = false;           // WoWVita
+    awaitTeleportAck_ = false;
+    zone_ = 0;                    // (the client says it: CMSG_ZONEUPDATE)
+    // WoWVita: every character carries a Hearthstone (an older save gets one)
+    if (data_->item(kHearthstoneItem)) {
+        CharacterProfile& pr = save_.player;
+        bool has = false;
+        for (uint8_t i = 0; i < pr.bagCount; ++i) has = has || pr.bag[i].entry == kHearthstoneItem;
+        if (!has && pr.bagCount < 16) {
+            BagItem& b = pr.bag[pr.bagCount];
+            b.entry = kHearthstoneItem; b.count = 1; b.slot = pr.bagCount;
+            ++pr.bagCount;
+        }
+    }
     inWorld_ = true;
     incoming_.clear();
     outgoing_.clear();
     world_.reset(nowMs, save_.seed, save_.player, save_.bots, partyEnabled_);
+    if (Entity* p = world_.player(); p && save_.player.hearthCdSec && p->cooldownCount < kMaxCooldowns) {   // WoWVita
+        const uint32_t left = std::min<uint32_t>(save_.player.hearthCdSec, 3600u) * 1000u;
+        p->cooldowns[p->cooldownCount++] = Cooldown{kHearthstoneSpell, nowMs + left, 3600000u};
+    }
     lastPartyStats_ = 0;
     lastMoveSend_ = 0;
     lastSave_ = nowMs;
@@ -447,6 +465,8 @@ void OfflineSession::syncProfiles() {
     if (!inWorld_) return;
     for (int i = 0; i < kMaxParty + 1; ++i) world_.syncProfileFromEntity(i);
     save_.player = world_.playerProfile();
+    if (const Entity* p = world_.player())   // WoWVita: the Hearthstone's cooldown goes with the character
+        save_.player.hearthCdSec = (world_.cooldownLeft(*p, kHearthstoneSpell, world_.nowMs()) + 999) / 1000;
     for (int i = 0; i < kMaxParty; ++i) save_.bots[(size_t)i] = world_.botProfile(i);
     // WoWVita: the quest log of a whole-world pack is kept by offline_quests.cpp in save_.quests; the core's own
     // (single-objective "QUES" quests of the sample) only when the pack has those
@@ -648,6 +668,7 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
         case CMSG_QUESTGIVER_HELLO:
         case CMSG_LIST_INVENTORY:
             if (!v) return;
+            if (op != CMSG_LIST_INVENTORY && lifeHello(npc, near, nowMs)) return;   // WoWVita: a spirit healer
             // WoWVita: a quest giver shows its quests (and its goods as a gossip option)
             if (op != CMSG_LIST_INVENTORY && near && questHello(npc, op, isVendor)) return;
             if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
@@ -836,7 +857,11 @@ void OfflineSession::sendItemQuery(uint32_t entry) {
     w.u32(t->delayMs);
     w.u32(0);                 // ammo type
     w.f32(0.0f);              // ranged range modifier
-    for (int i = 0; i < 5; ++i) { for (int k = 0; k < 6; ++k) w.u32(0); }   // spell, trigger, charges, cd, category, cat cd
+    for (int i = 0; i < 5; ++i) {   // spell, trigger, charges, cd, category, cat cd (WoWVita: the Hearthstone's)
+        const bool hearth = i == 0 && entry == kHearthstoneItem;
+        w.u32(hearth ? kHearthstoneSpell : 0); w.u32(0); w.u32(0);
+        w.u32(hearth ? 0xFFFFFFFFu : 0); w.u32(0); w.u32(hearth ? 0xFFFFFFFFu : 0);
+    }
     w.u32(0);                 // bonding
     w.cstr(t->description);
     w.u32(0); w.u32(0); w.u32(0);   // page text, language, page material
@@ -996,6 +1021,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         if (!e || !e->used || e->objType != 3) continue;
         const float dx = e->x - px, dy = e->y - py;
         if (dx * dx + dy * dy > 150.0f * 150.0f) continue;
+        if (isSpiritHealer(*e) && !ghost_) continue;   // WoWVita: only ghosts see them
         addCreatureCreate(u, *e);
     }
     sendUpdateObject(u.finish());
@@ -1022,6 +1048,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
     }
 
     sendInventory();
+    sendBindPoint();   // WoWVita: as the original server at login
     if (partyEnabled_) {
         sendPartyList();
         sendPartyStats();
@@ -1047,11 +1074,15 @@ void OfflineSession::handleMovement(const Bytes& data, uint32_t nowMs) {
     MovementInfo m;
     if (!readMovementInfo(r, m)) return;
     if (!(m.x > -1e6f && m.x < 1e6f && m.y > -1e6f && m.y < 1e6f && m.z > -1e6f && m.z < 1e6f)) return;
+    // WoWVita: after a teleport the client's older packets still name the old place: wait for its MSG_MOVE_TELEPORT_ACK
+    if (awaitTeleportAck_ && nowMs - teleportSentMs_ < 5000) return;
+    awaitTeleportAck_ = false;
+    // WoWVita: moving breaks a cast (the Hearthstone), as in the original
+    if (p->castSpell && std::hypot(m.x - p->x, m.y - p->y) > 0.3f) world_.stopCast(*p, 35, nowMs);
     // The client is the authority for its own position in offline mode; the simulation consumes it.
     float o = m.o;
     if (!(o >= 0.0f)) o = 0.0f;
     world_.setPosition(*p, m.x, m.y, m.z, normalizeAngle(o));
-    (void)nowMs;
 }
 
 void OfflineSession::handleAttack(const Bytes& data, uint32_t nowMs) {
@@ -1181,29 +1212,25 @@ void OfflineSession::handleChat(const Bytes& data, uint32_t nowMs) {
     }
 }
 
-void OfflineSession::handleDeath(uint16_t op, const Bytes& data, uint32_t nowMs) {
-    (void)data;
-    Entity* p = world_.player();
-    if (!p) return;
-    if (op == CMSG_REPOP_REQUEST) {
-        if (!p->dead) { errorLine("You are not dead.", nowMs); return; }
-        ghost_ = true;
-        p->hp = 1;
-        p->victim = 0;
-        sendSelfFields();
-        Writer w;
-        w.u32(5000);
-        send(SMSG_CORPSE_RECLAIM_DELAY, w.b);
-        sendChat(0x0A, 0, "You are a ghost. Reclaim your corpse to return to life.");
-        return;
+// (handleDeath: offline_life.cpp)
+
+// WoWVita: the spirit healers are there for ghosts only.
+void OfflineSession::showSpiritHealers(bool show) {
+    UpdateBuilder u;
+    bool any = false;
+    for (int i = 0; i < kMaxEntities; ++i) {
+        const Entity* e = world_.byIndex(i);
+        if (!e || !e->used || e->objType != 3 || !isSpiritHealer(*e)) continue;
+        if (show) {
+            addCreatureCreate(u, *e);
+            any = true;
+        } else {
+            Writer w;
+            w.u64(e->guid);
+            send(0x0AA, w.b);   // SMSG_DESTROY_OBJECT
+        }
     }
-    if (op == CMSG_RECLAIM_CORPSE) {
-        if (!ghost_) return;
-        ghost_ = false;
-        world_.revive(*p, 50, nowMs);
-        sendSelfFields();
-        sendChat(0x0A, 0, "You are alive again.");
-    }
+    if (any) sendUpdateObject(u.finish());
 }
 
 void OfflineSession::handleQuery(uint16_t op, const Bytes& data, uint32_t nowMs) {
@@ -1344,7 +1371,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 break;
             }
             case SimEvent::Appear: {   // WoWVita: the spawn grid brought a creature into range
-                if (!a) break;
+                if (!a || (isSpiritHealer(*a) && !ghost_)) break;
                 UpdateBuilder u;
                 addCreatureCreate(u, *a);
                 sendUpdateObject(u.finish());
@@ -1409,6 +1436,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
             case SimEvent::CastFinished: {
                 if (!a) break;
                 sendSpellGo(*a, e.spell, e.b, e.school);
+                if (a->self && e.spell == kHearthstoneSpell) hearthHome(nowMs);   // WoWVita
                 break;
             }
             case SimEvent::CastFailed: {
@@ -1601,20 +1629,11 @@ void OfflineSession::update(uint32_t nowMs) {
             case CMSG_ITEM_QUERY_SINGLE: case CMSG_REQUEST_PARTY_MEMBER_STATS: case CMSG_SET_SELECTION:
                 handleQuery(op, p.second, nowMs);
                 break;
-            case MSG_CORPSE_QUERY: {
-                Entity* pl = world_.player();
-                Writer w;
-                w.u8(1);
-                w.u32(mapId_);
-                w.f32(pl ? pl->homeX : 0); w.f32(pl ? pl->homeY : 0); w.f32(pl ? pl->homeZ : 0);
-                w.u32(mapId_);
-                send(MSG_CORPSE_QUERY, w.b);
-                break;
-            }
             case CMSG_LOGOUT_REQUEST:
                 send(0x04D);   // SMSG_LOGOUT_COMPLETE
                 break;
             default:
+                if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone
                 if (handleGameObject(op, p.second, nowMs)) break;   // WoWVita
                 if (handleQuest(op, p.second, nowMs)) break;   // WoWVita
                 if (trace && std::find(unhandledSeen_.begin(), unhandledSeen_.end(), op) == unhandledSeen_.end() &&

@@ -43,10 +43,17 @@ used give the credit and sparkle (GO_DYNFLAG_LO_ACTIVATE); quests given and take
 Herbs and ore ask for the profession (the client's lock check), as in the original. Eastern Kingdoms: 22 487 objects,
 1285 quests with them.
 
+Death and home (`GRAV`, net/offline/offline_life.cpp): "Release Spirit" takes the ghost to the graveyard of the zone
+it died in (`game_graveyard_zone` + `world_safe_locs`, the nearest its team may use; the client reports its zone with
+CMSG_ZONEUPDATE as the original does); the body stays where it fell. Reclaim it within 39 yd after 30 s, or talk to the
+spirit healer (only ghosts see it): resurrection sickness from level 11. Innkeepers: "Make this inn your home."; every
+character carries the Hearthstone (10 s cast, broken by moving, 1 hour cooldown); home and cooldown are saved.
+No durability loss (the offline core has no durability). Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
+
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.
 
 Still missing (the offline core's own limits): trainers, talents, creature spells beyond the
 documented subset, pathfinding, other maps. The start is Northshire Abbey.
 
-Test: `net/tests/run_offline_grid.sh offline.w3do`.
+Tests: `net/tests/run_offline_grid.sh offline.w3do`, `net/tests/run_offline_life.sh offline.w3do`.

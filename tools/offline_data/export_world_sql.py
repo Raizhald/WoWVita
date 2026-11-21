@@ -27,13 +27,13 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
           "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text",
           "gameobject", "gameobject_template", "gameobject_loot_template", "gameobject_questrelation",
-          "gameobject_involvedrelation", "gameobject_spawn_entry"}
+          "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects). Doors, traps, transports, mailboxes stay out.
@@ -553,7 +553,7 @@ def build(tables, factions, map_id, report, player_faction=1):
                 greetings[t["entry"]] = txt[:600]
 
     # ---- items: what the loot and the companions need (the sample's item ids are in the DB too)
-    for e in (25, 38, 2589, 750):
+    for e in (25, 38, 2589, 750, 6948):   # (6948: the Hearthstone every character carries)
         item_needed.add(e)
     items = []
     for entry in sorted(item_needed):
@@ -708,6 +708,29 @@ def build(tables, factions, map_id, report, player_faction=1):
     for e in sorted(greetings):
         gb.u32(e); long_s(gb, greetings[e])
     sec["GOSS"] = gb.b
+
+    # "GRAV": the graveyards of this map (world_safe_locs) and the zones they serve (game_graveyard_zone):
+    # a ghost goes to the nearest graveyard linked to the zone it died in that its team may use (0 any, 469 Alliance, 67 Horde)
+    locs = {}
+    for r in tables.get("world_safe_locs", []):
+        if int(num(g(r, "map"))) == map_id:
+            locs[int(num(g(r, "id")))] = (num(g(r, "x")), num(g(r, "y")), num(g(r, "z")), num(g(r, "o")))
+    links = []
+    for r in tables.get("game_graveyard_zone", []):
+        gid = int(num(g(r, "id")))
+        if gid in locs and int(num(g(r, "link_kind", default=0))) == 0:
+            links.append((gid, int(num(g(r, "ghost_loc", "ghost_zone"))), int(num(g(r, "faction")))))
+    grb = Bin()
+    grb.u32(len(locs))
+    for gid in sorted(locs):
+        grb.u32(gid)
+        for v in locs[gid]:
+            grb.f32(v)
+    grb.u32(len(links))
+    for gid, zone, fac in sorted(links):
+        grb.u32(gid); grb.u32(zone); grb.u16(fac)
+    sec["GRAV"] = grb.b
+    report["counts_graveyards"] = dict(graveyards=len(locs), zone_links=len(links))
 
     hb = Bin()
     hb.u32(len(host))

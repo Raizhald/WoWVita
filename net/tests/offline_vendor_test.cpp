@@ -202,6 +202,11 @@ int main(int argc, char** argv) {
         float pos[3] = {p->x, p->y, p->z};
         const std::string msg = gs.interact(v->guid, pos, now);
         run(300);
+        if ((flags & 0x80) && gs.gossip.open && !gs.vendor.open) {   // WoWVita: an innkeeper asks first (home / goods), as the original
+            for (size_t i = 0; i < gs.gossip.options.size(); ++i)
+                if (gs.gossip.options[i].text.find("goods") != std::string::npos) { gs.selectGossip(i, now); break; }
+            run(300);
+        }
         const CreatureTemplate* t = data.creature(v->entry);
         CHECK(gs.vendor.open && !gs.vendor.items.empty(), "flags %x (%s): Use opens the goods (msg '%s')", flags,
               t ? t->name.c_str() : "?", msg.c_str());

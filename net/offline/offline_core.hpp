@@ -64,7 +64,10 @@ enum class SpellKind : uint8_t {
     Buff = 4,        // a stat/armour buff: tracked as an aura, no numeric effect beyond its spell entry
     Taunt = 5,       // pulls the target's attention to the caster
     Interrupt = 6,   // stops the target's cast
+    Script = 7,      // WoWVita: no effect in the world; the session acts when the cast finishes (the Hearthstone)
 };
+constexpr uint32_t kHearthstoneSpell = 8690, kHearthstoneItem = 6948;   // WoWVita
+constexpr uint32_t kResurrectionSickness = 15007;                       // WoWVita: after the spirit healer (level 11+)
 
 // Schools: 1 holy, 2 fire, 3 nature, 4 frost, 5 shadow, 6 arcane, 0 physical.
 struct SpellDef {
@@ -216,6 +219,10 @@ struct QuestDrop { uint32_t item = 0; uint16_t chance = 0; };   // chance in 1/1
 // WoWVita: what a vendor sells ("VEND" section): the item and how many come in one purchase (arrows: 200)
 struct VendorGoods { uint32_t item = 0; uint16_t buyCount = 1; };
 
+// WoWVita: a graveyard ("GRAV": world_safe_locs) and a zone it serves (game_graveyard_zone; faction 0 any, 469 Alliance, 67 Horde)
+struct Graveyard { uint32_t id = 0; float x = 0, y = 0, z = 0, o = 0; };
+struct GraveyardLink { uint32_t id = 0, zone = 0; uint16_t faction = 0; };
+
 struct WorldData {
     uint16_t formatVersion = 1;
     std::string name;
@@ -239,6 +246,8 @@ struct WorldData {
     std::unordered_map<uint32_t, GoTemplate> goTemplates;             // "GOBJ"
     std::vector<GoSpawn> goSpawns;                                    // "GOSP"
     std::unordered_map<uint32_t, GoLoot> goLoot;                      // "GLOT": loot id (data1 of a chest) -> loot
+    std::vector<Graveyard> graveyards;                                // "GRAV"
+    std::vector<GraveyardLink> graveyardLinks;
     const QuestFull* questFull(uint32_t id) const {
         auto it = questIndex.find(id);
         return it == questIndex.end() ? nullptr : &questsFull[it->second];
@@ -399,6 +408,11 @@ struct CharacterProfile {
     BagItem bag[20];
     uint8_t bagCount = 0;
     uint8_t skinLook[3] = {0, 0, 0};    // spare look bytes (kept for forward compatibility)
+    // WoWVita: the inn that is home (the save's optional "HOM1" block) and what is left of the Hearthstone's cooldown
+    bool homeSet = false;
+    float homeX = 0, homeY = 0, homeZ = 0;
+    uint32_t homeZone = 0;
+    uint32_t hearthCdSec = 0;
 };
 
 struct QuestLogEntry {
@@ -500,6 +514,7 @@ public:
     void revive(Entity& e, int32_t hpPercent, uint32_t nowMs);
     // Cancel an in-progress cast (player pressed cancel / an interrupt landed).
     void stopCast(Entity& e, uint8_t reason, uint32_t nowMs) { cancelCast(e, reason, nowMs); }
+    void addTimedAura(Entity& e, uint32_t spell, uint32_t durationMs);   // WoWVita: an aura without a SpellDef (resurrection sickness)
 
     // ---- party commands / quests
     void setPartyCommand(int botIndex, uint8_t mode, uint32_t nowMs);

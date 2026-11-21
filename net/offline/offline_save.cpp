@@ -105,6 +105,14 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     payload.u32(0x31445151u);   // "QQD1"
     payload.u32((uint32_t)d.rewarded.size());
     for (uint32_t id : d.rewarded) payload.u32(id);
+    // WoWVita: each character's home (the inn) and the Hearthstone's cooldown
+    payload.u32(0x314D4F48u);   // "HOM1"
+    for (const CharacterProfile& c : d.roster) {
+        payload.u8(c.homeSet ? 1 : 0);
+        payload.f32(c.homeX); payload.f32(c.homeY); payload.f32(c.homeZ);
+        payload.u32(c.homeZone);
+        payload.u32(c.hearthCdSec);
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -200,6 +208,17 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
             const uint32_t n = p.u32();
             if (n > 16384 || (size_t)n * 4 > p.left()) { err = "malformed quest history"; return false; }
             for (uint32_t i = 0; i < n; ++i) d.rewarded.push_back(p.u32());
+        }
+    }
+    if (!p.bad && p.left() >= 4 + 4 * 21) {   // WoWVita: the homes
+        if (p.u32() == 0x314D4F48u) {
+            for (CharacterProfile& c : d.roster) {
+                c.homeSet = p.u8() != 0;
+                c.homeX = p.f32(); c.homeY = p.f32(); c.homeZ = p.f32();
+                c.homeZone = p.u32();
+                c.hearthCdSec = p.u32();
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         }
     }
     if (p.bad) { err = "malformed save payload"; return false; }

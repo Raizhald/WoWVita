@@ -629,6 +629,7 @@ public:
     // "Trade - <city>" in the six capitals, "LocalDefense - <zone>" (all three follow the zone: left and joined again when it
     // changes) and the global "LookingForGroup". Called with the zone the player is in (0 = not known yet: nothing happens).
     void updateDefaultChannels(uint32_t zoneId, const std::string& zoneName, uint32_t nowMs);
+    void reportZone(uint32_t zoneId, uint32_t nowMs);   // WoWVita: CMSG_ZONEUPDATE when the zone changes (as the original client)
     bool autoChannels = true;
     void listChannel(const std::string& name, uint32_t nowMs);                                // CMSG_CHANNEL_LIST
     // CMSG_CHANNEL_* with (channel, player) or (channel) payload: moderator, kick, ban, invite, announcements ...
@@ -1211,6 +1212,7 @@ private:
     uint64_t lootGuid_ = 0;
     std::vector<std::string> channels_;   // joined channels (SMSG_CHANNEL_NOTIFY "you joined")
     uint32_t autoZone_ = 0;               // the zone the default channels were joined for
+    uint32_t reportedZone_ = 0;           // WoWVita: the last CMSG_ZONEUPDATE
     std::vector<std::string> autoJoined_; // the zone channels we asked for (left when the zone changes)
     bool autoLfg_ = false;
 

@@ -267,8 +267,10 @@ void OfflineSession::defaultPlayer() {
     p.maxPower = 100;
     p.power = 0;
     p.money = 0;
-    p.equipment[15] = 25;     // Worn Shortsword
-    p.equipment[3] = 38;      // Recruit's Shirt
+    if (!data_ || data_->outfits.empty()) {   // (WoWVita: with start outfits in the pack it gets those at login)
+        p.equipment[15] = 25;     // Worn Shortsword
+        p.equipment[3] = 38;      // Recruit's Shirt
+    }
     p.spellCount = fillClassSpells(data_, p.cls, p.spells);
     p.mapId = data_ ? data_->mapId : 0;
     p.zoneId = data_ ? data_->zoneId : 0;
@@ -373,17 +375,21 @@ void OfflineSession::refreshCharacters() {
 }
 
 // WoWVita: the start outfit of the race / class / sex (the pack's OUTF, from the converter's glue.txt): worn items in
-// their slots, the rest (food, drink, ammunition) in the backpack - CMaNGOS Player::Create: food 4, drink 2. Given once:
-// to a character that wears nothing and carries none of them (a new one, or one of an older save that started naked).
+// their slots, the rest (food, drink, ammunition) in the backpack - CMaNGOS Player::Create: food 4, drink 2. Given to a
+// character that wears nothing but outfit items (a new one, or one of an older save that started naked or with the
+// sample's shirt and sword): the pieces it neither wears nor carries nor keeps in the bank.
 void OfflineSession::giveStartOutfit(CharacterProfile& p) {
     if (!data_) return;
     auto it = data_->outfits.find((uint32_t)p.race | ((uint32_t)p.cls << 8) | ((uint32_t)p.gender << 16));
     if (it == data_->outfits.end() || it->second.empty()) return;
-    for (uint32_t e : p.equipment) if (e) return;
-    for (uint32_t e : it->second) {
-        for (uint8_t i = 0; i < p.bagCount; ++i) if (p.bag[i].entry == e) return;
-        for (const BagItem& b : p.bank) if (b.entry == e) return;
-    }
+    for (uint32_t e : p.equipment)
+        if (e && std::find(it->second.begin(), it->second.end(), e) == it->second.end()) return;   // dressed otherwise
+    auto has = [&](uint32_t e) {
+        for (uint32_t w : p.equipment) if (w == e) return true;
+        for (uint8_t i = 0; i < p.bagCount; ++i) if (p.bag[i].entry == e) return true;
+        for (const BagItem& b : p.bank) if (b.entry == e) return true;
+        return false;
+    };
     auto slotOf = [&](uint32_t inv) -> int {
         switch (inv) {
             case 1: return 0; case 2: return 1; case 3: return 2; case 4: return 3; case 5: case 20: return 4;
@@ -396,7 +402,7 @@ void OfflineSession::giveStartOutfit(CharacterProfile& p) {
     };
     for (uint32_t e : it->second) {
         const ItemTemplate* t = data_->item(e);
-        if (!t || e == kHearthstoneItem) continue;
+        if (!t || e == kHearthstoneItem || has(e)) continue;
         const int slot = slotOf(t->inventoryType);
         if (slot >= 0 && !p.equipment[(size_t)slot]) { p.equipment[(size_t)slot] = e; continue; }
         if (p.bagCount >= 16) continue;

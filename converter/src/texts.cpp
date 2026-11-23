@@ -456,8 +456,10 @@ bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose)
     }
     // ---- CharStartOutfit.dbc: ID, race/class/sex/outfit bytes, ItemID[N], DisplayItemID[N], InventoryType[N]
     DbcTable so;
-    if (so.load(data, "CharStartOutfit.dbc") && so.fields >= 8 && (so.fields - 2) % 3 == 0) {
-        const uint32_t n = (so.fields - 2) / 3;
+    // WoWVita: 1.12's has 41 fields - ItemID[12], DisplayItemID[12], InventoryType[12] and three more after them
+    // (n = (41 - 2) / 3 = 13 put every display and slot one column off: the shown outfit and the S items were wrong)
+    if (so.load(data, "CharStartOutfit.dbc") && so.fields >= 8) {
+        const uint32_t n = std::min<uint32_t>(12, (so.fields - 2) / 3);
         for (uint32_t r = 0; r < so.records; ++r) {
             const uint32_t rcs = so.u32(r, 1);
             const uint32_t race = rcs & 0xFF, cls = (rcs >> 8) & 0xFF, sex = (rcs >> 16) & 0xFF;

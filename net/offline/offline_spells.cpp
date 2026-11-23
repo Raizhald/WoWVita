@@ -79,9 +79,11 @@ int32_t World::effValue(const Entity& c, const SpellX& s, int k, int combo) {
     return v;
 }
 
-uint32_t World::durationX(const Entity& c, const SpellX& s) const {
+uint32_t World::durationX(const Entity& c, const SpellX& s, int combo) const {
     if (s.durBase < 0) return 0;   // until cancelled
     int32_t d = s.durBase;
+    // CMaNGOS CalculateSpellDuration: a player's combo points stretch it toward the maximum (Slice and Dice, Rupture)
+    if (combo > 0 && c.self && s.durMax > 0 && s.durMax != s.durBase) return (uint32_t)(d + (s.durMax - d) * std::min(combo, 5) / 5);
     if (s.durPerLevel) {
         const int over = std::max(0, (int)c.level - (int)s.spellLevel);
         d += s.durPerLevel * over;
@@ -221,6 +223,8 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (e.pacified(now) && s.dmgClass == 2) return fail(90);           // SPELL_FAILED_PACIFIED
         if (s.gcdMs && e.gcdEndMs > now) return fail(60);                    // SPELL_FAILED_NOT_READY
         if (cooldownLeft(e, id, now) || (s.category && cooldownLeft(e, kSlotCategoryBit | s.category, now))) return fail(60);
+        if ((s.attr & 0x20000) && !hasAuraType(e, 16)) return fail(0x57);   // SPELL_ATTR_ONLY_STEALTHED
+        if ((s.attr & 0x10000000) && inCombatNow(e)) return fail(0);          // NOT_IN_COMBAT: SPELL_FAILED_AFFECTING_COMBAT
         if (s.stances && !(e.form && (s.stances & (1u << (e.form - 1))))) return fail(86);   // SPELL_FAILED_ONLY_SHAPESHIFT
         if (s.stancesNot && e.form && (s.stancesNot & (1u << (e.form - 1)))) return fail(61);  // SPELL_FAILED_NOT_SHAPESHIFT
         const uint32_t cost = powerCostX(e, s);
@@ -238,8 +242,9 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
             if (!ok) return fail(25);                                       // SPELL_FAILED_EQUIPPED_ITEM_CLASS
         }
         bool usesCombo = false;
-        for (const SpellEffectX& x : s.eff) usesCombo = usesCombo || x.perCombo != 0;
-        if (usesCombo && (!e.comboPoints || e.comboTarget != targetGuid)) return fail(70);   // SPELL_FAILED_CANT_DO_THAT_YET...
+        usesCombo = (s.attrEx & 0x00500000) != 0;   // CMaNGOS NeedsComboPoints: SPELL_ATTR_EX_REQ_(TARGET_)COMBO_POINTS
+        // (a finisher on oneself - Slice and Dice - needs only the points)
+        if (usesCombo && (!e.comboPoints || (unitTarget(s) == 1 && e.comboTarget != targetGuid))) return fail(70);   // SPELL_FAILED_CANT_DO_THAT_YET...
     }
     Entity* t = entity(targetGuid);
     const int need = unitTarget(s);
@@ -257,6 +262,12 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (d > maxR) return fail(89, t->guid);                            // SPELL_FAILED_OUT_OF_RANGE
         if (s.rangeMin > 0 && d < s.rangeMin) return fail(118, t->guid);    // SPELL_FAILED_TOO_CLOSE
         if (s.targetAuraState == 1 && t->hp * 5 > (int32_t)t->maxHp) return fail(103, t->guid);   // (Execute: under 20 %)
+        // (CMaNGOS Spell::CheckCast) behind the target: Backstab, Ambush, Garrote; Pounce is exempt
+        if ((s.attrEx2 & 0x100000) && (s.attrEx & 0x200) && !(s.family == 7 && (s.familyFlags & 0x20000ull)) &&
+            (hasInArc(*t, e, 3.14159265f) || !hasInArc(e, *t, 3.14159265f)))
+            return fail(0x33, t->guid);                                       // SPELL_FAILED_NOT_BEHIND
+        if (s.attr == 0x150010 && !hasInArc(e, *t, 3.14159265f)) return fail(0x36, t->guid);   // NOT_INFRONT (Gouge)
+        if ((s.attrEx & 0x100) && inCombatNow(*t)) return fail(0x66, t->guid);   // ONLY_PEACEFUL_TARGETS: Sap
     }
     // "on the next swing": queued, paid when it lands (Heroic Strike, Cleave, Raptor Strike, Maul)
     if ((s.attr & 0x4) && !triggered) {
@@ -265,7 +276,8 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         return true;
     }
     if (s.gcdMs && !triggered) e.gcdEndMs = now + s.gcdMs;
-    if (!triggered) interruptAuras(e, 0x4 | (need == 1 ? 0x1000u : 0u));   // AURA_INTERRUPT_FLAG_ACTION (and ATTACKING)
+    if (!triggered && !(s.attrEx & 0x20))   // (SPELL_ATTR_EX_ALLOW_WHILE_STEALTHED: Sprint, Vanish keep stealth)
+        interruptAuras(e, 0x4 | (need == 1 ? 0x1000u : 0u));   // AURA_INTERRUPT_FLAG_ACTION (and ATTACKING)
     e.castTarget = t ? t->guid : e.guid;
     e.castTriggered = triggered;
     if (s.castMs > 0 && !triggered) {
@@ -331,7 +343,7 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
     emit(SimEvent::CastFinished, e.guid, t->guid, s.id, 0, s.school);
     int combo = 0;
     bool usesCombo = false;
-    for (const SpellEffectX& x : s.eff) usesCombo = usesCombo || x.perCombo != 0;
+    usesCombo = (s.attrEx & 0x00500000) != 0;   // CMaNGOS NeedsComboPoints: SPELL_ATTR_EX_REQ_(TARGET_)COMBO_POINTS
     if (usesCombo) combo = e.comboPoints;
     if (scriptX(e, s, t, now)) { if (usesCombo) { e.comboPoints = 0; e.comboTarget = 0; } return true; }
     int32_t weaponBonus = 0, weaponPct = 100;
@@ -425,6 +437,9 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
             for (Entity* x : ts) {
                 if (!x->alive() || x == &c) continue;
                 int32_t dmg = effValue(c, s, k, combo);
+                // Eviscerate (CMaNGOS SpellEffects SchoolDMG): + attack power x combo points x 3 %
+                if (s.family == 8 && (s.familyFlags & 0x20000ull) && c.self && combo > 0)
+                    dmg += (int32_t)((float)c.attackPower * (float)combo * 0.03f);
                 if ((int32_t)rng_.below(100) < 5) dmg = dmg * 3 / 2;   // a spell crit
                 applyDamage(c, *x, std::max(1, dmg), s.id, s.school, now);
             }
@@ -500,6 +515,16 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
                     if (x->auras[i].positive != friendT && x->auras[i].school != 0) { removeAura(*x, i); break; }
             }
             break;
+        case 79:   // SPELL_EFFECT_SANCTUARY (Vanish): out of every creature's threat
+            for (Entity& o : pool_) {
+                if (!o.used || o.objType != 3) continue;
+                uint8_t n = 0;
+                for (uint8_t i = 0; i < o.threatCount; ++i) if (o.threat[i].who != c.guid) o.threat[n++] = o.threat[i];
+                o.threatCount = n;
+                if (o.victim == c.guid) { o.victim = o.target = 0; }
+            }
+            if (c.victim) stopAttack(c, now);
+            break;
         case E_THREAT:
             for (Entity* x : ts) if (x->objType == 3) addThreat(*x, c.guid, effValue(c, s, k, combo));
             break;
@@ -544,7 +569,14 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
     a.positive = positive;
     a.kind = (uint8_t)(positive ? SpellKind::Buff : SpellKind::Debuff);
     a.amount = effValue(c, s, k, combo);
-    const uint32_t d = durationX(c, s);
+    const uint32_t d = durationX(c, s, combo);
+    // WoWVita: SPELL_AURA_MECHANIC_IMMUNITY (Vanish, Blink, Blessing of Freedom) keeps such auras off
+    {
+        const uint32_t mech = e.mechanic ? e.mechanic : s.mechanic;
+        if (mech && &c != &t)
+            for (uint8_t i = 0; i < t.auraCount; ++i)
+                if (t.auras[i].type == 77 && (uint32_t)t.auras[i].misc == mech) return;
+    }
     a.endMs = d ? now + d : 0;
     a.amplitudeMs = e.amplitude > 0 ? (uint32_t)e.amplitude : 0;
     a.nextTickMs = a.amplitudeMs ? now + a.amplitudeMs : 0;
@@ -554,6 +586,22 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
             for (int i = t.auraCount - 1; i >= 0; --i)
                 if (t.auras[i].type == A_SHAPESHIFT && t.auras[i].spell != s.id) removeAura(t, i);
             t.form = (uint8_t)e.misc;
+            break;
+        case 77:   // SPELL_AURA_MECHANIC_IMMUNITY: what has that mechanic goes
+            for (int i = t.auraCount - 1; i >= 0; --i) {
+                const SpellX* o = t.auras[i].spell != s.id ? data_->sx(t.auras[i].spell) : nullptr;
+                if (!o || t.auras[i].positive) continue;
+                const uint32_t m = o->eff[t.auras[i].effIndex].mechanic ? o->eff[t.auras[i].effIndex].mechanic : o->mechanic;
+                if (m == (uint32_t)e.misc) removeAura(t, i);
+            }
+            if (e.misc == 7) t.rootUntilMs = 0;
+            if (e.misc == 12) t.stunnedUntilMs = 0;
+            break;
+        case 16:   // SPELL_AURA_MOD_STEALTH: whoever fights it and cannot see it lets go
+            for (Entity& o : pool_)
+                if (o.used && o.objType == 3 && o.alive() && o.victim == t.guid && !detectsStealth(o, t)) {
+                    o.victim = o.target = 0;
+                }
             break;
         case 11:   // SPELL_AURA_MOD_TAUNT (Mocking Blow)
             if (t.objType == 3) taunt(t, c.guid);
@@ -602,6 +650,16 @@ bool World::scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t now) {
         emit(SimEvent::Damage, c.guid, c.guid, s.id, v, s.school, 0);
         emit(SimEvent::PowerChanged, c.guid, 0, 0, c.power);
         return true;
+    }
+    // Vanish (CMaNGOS VanishRogue::OnCast): the best Stealth known, its cooldown no matter; the effects still run
+    if (s.family == 8 && (s.familyFlags & 0x800ull) && c.self) {
+        uint32_t best = 0;
+        for (uint32_t id : profiles_[0].book) {
+            const SpellX* o = data_->sx(id);
+            if (o && o->family == 8 && (o->familyFlags & 0x400000ull) && (!best || o->spellLevel > data_->sx(best)->spellLevel)) best = id;
+        }
+        if (best) castX(c, best, c.guid, now, true);
+        return false;
     }
     // Blink (SPELL_EFFECT_LEAP): 20 yards ahead
     for (const SpellEffectX& e : s.eff)
@@ -671,6 +729,31 @@ void World::tickAreas(uint32_t now) {
             if (!c->used) return;
         }
     }
+}
+
+// ---------------------------------------------------------------- facing, combat, stealth
+bool World::hasInArc(const Entity& from, const Entity& to, float arc) {
+    float a = std::atan2(to.y - from.y, to.x - from.x) - from.o;
+    while (a > 3.14159265f) a -= 6.2831853f;
+    while (a < -3.14159265f) a += 6.2831853f;
+    return std::fabs(a) <= arc / 2;
+}
+
+bool World::inCombatNow(const Entity& e) const {
+    if (e.victim) return true;
+    for (const Entity& o : pool_)
+        if (o.used && o.objType == 3 && o.alive() && o.victim == e.guid) return true;
+    return false;
+}
+
+// CMaNGOS Unit::IsVisibleForOrDetect + VisibilityData::GetStealthVisibilityDistance: 30 points + 5 a viewer level over 1,
+// less the stealth's strength, x 0.3 yards; only in front of the viewer; at least the combat reach
+bool World::detectsStealth(const Entity& v, const Entity& h) const {
+    const int32_t strength = auraSum(h, 16);
+    if (strength <= 0 && !hasAuraType(h, 16)) return true;
+    if (!hasInArc(v, h, 3.14159265f)) return false;
+    const float range = std::max(1.5f, (float)(30 + ((int32_t)v.level - 1) * 5 - strength) * 0.3f);
+    return std::hypot(h.x - v.x, h.y - v.y) <= range;
 }
 
 }  // namespace offline

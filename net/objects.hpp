@@ -43,6 +43,9 @@ enum : uint16_t {
     PLAYER_XP = 716, PLAYER_NEXT_LEVEL_XP = 717, PLAYER_REST_STATE_EXPERIENCE = 1175, PLAYER_FIELD_COINAGE = 1176,
     PLAYER_SKILL_INFO_1_1 = 718,   // 128 slots x 3 fields: [id | step << 16] [value | max << 16] [temporary bonus | permanent bonus << 16] (int16 each)
     PLAYER_CHARACTER_POINTS1 = 1102,
+    // combo points (CMaNGOS classic UpdateFields.h: COMBO_TARGET 0x20e + UNIT_END, u64; FIELD_BYTES 0x40A + UNIT_END,
+    // its byte 1 = the points; Player::SendComboPoints)
+    PLAYER_FIELD_COMBO_TARGET = 714, PLAYER_FIELD_BYTES = 1222,
     PLAYER_END = 1282,
     // items and bags
     ITEM_FIELD_OWNER = 6, ITEM_FIELD_CONTAINED = 8, ITEM_FIELD_STACK_COUNT = 14, ITEM_FIELD_DURABILITY = 46,

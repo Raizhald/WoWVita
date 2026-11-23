@@ -1940,6 +1940,18 @@ void OfflineSession::syncControl(uint32_t nowMs) {   // WoWVita
         send(0x0E2, w.b);                   // SMSG_FORCE_RUN_SPEED_CHANGE
     }
     if (stun != ccStun_) { ccStun_ = stun; sendSelfFields(); }
+    // WoWVita: combo points (rogue, druid in cat form) on the target frame
+    if (p->comboPoints != netCombo_ || p->comboTarget != netComboTarget_) {
+        netCombo_ = p->comboPoints;
+        netComboTarget_ = p->comboTarget;
+        FieldSet f;
+        f.set(UF::PLAYER_FIELD_COMBO_TARGET, (uint32_t)p->comboTarget);
+        f.set((uint16_t)(UF::PLAYER_FIELD_COMBO_TARGET + 1), (uint32_t)(p->comboTarget >> 32));
+        f.set(UF::PLAYER_FIELD_BYTES, (uint32_t)p->comboPoints << 8);
+        UpdateBuilder u;
+        addValues(u, p->guid, f);
+        sendUpdateObject(u.finish());
+    }
     // creatures: the stun animation (UNIT_FLAG_STUNNED)
     for (int i = 0; i < kMaxEntities; ++i) {
         Entity* e = world_.byIndex(i);

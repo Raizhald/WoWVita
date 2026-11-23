@@ -136,6 +136,14 @@ void GameSession::attach(WorldClient& wc, uint32_t nowMs) {
     sendActiveMover(nowMs);
 }
 
+int GameSession::comboPointsOn(uint64_t target) const {
+    const WorldObject* me = selfObject();
+    if (!me || !target) return 0;
+    const uint64_t ct = (uint64_t)me->field(UF::PLAYER_FIELD_COMBO_TARGET) |
+                        ((uint64_t)me->field((uint16_t)(UF::PLAYER_FIELD_COMBO_TARGET + 1)) << 32);
+    return ct == target ? (int)((me->field(UF::PLAYER_FIELD_BYTES) >> 8) & 0xFF) : 0;
+}
+
 const WorldObject* GameSession::selfObject() const {
     if (self_) return objects.find(self_);
     for (auto& [g, o] : objects.all())

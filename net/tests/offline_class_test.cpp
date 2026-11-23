@@ -5,6 +5,9 @@
 //   - the Northshire warrior trainer: the list (green / red / grey), Rend learned for its cost at level 4, cast: it ticks
 //   - a Gnome Mage: Fireball (1.5 s cast, mana, damage), Frost Nova (roots the enemies around), Arcane Intellect
 //     (a buff in a buff slot), Conjure Water (an item); a stance / range / power refusal; the book saved
+//   - Execute, Polymorph broken by damage, Mana Shield, Blink, Frost Armor's proc
+//   - a Human Rogue: Stealth (CMaNGOS detection range), Backstab only from behind, combo points (on the client too),
+//     Slice and Dice longer with more points, Eviscerate, no Stealth in combat, Vanish
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -39,7 +42,10 @@ int main(int argc, char** argv) {
     CHECK(session.open(err), "open: %s", err.c_str());
     w3n::CharCreateInfo mage; mage.name = "Fizz"; mage.race = 7; mage.cls = 8;
     CHECK(session.createCharacter(mage) == w3n::CHAR_CREATE_SUCCESS, "a gnome mage");
+    w3n::CharCreateInfo rogue; rogue.name = "Shade"; rogue.race = 1; rogue.cls = 4;
+    CHECK(session.createCharacter(rogue) == w3n::CHAR_CREATE_SUCCESS, "a human rogue");
     const uint64_t warriorGuid = session.characters()[0].guid, mageGuid = session.characters()[1].guid;
+    const uint64_t rogueGuid = session.characters()[2].guid;
     w3n::WorldClient wc;
     w3n::GameSession gs;
     auto play = [&](uint64_t guid) {
@@ -294,6 +300,91 @@ int main(int argc, char** argv) {
         uint32_t t1 = now;
         while (now - t1 < 8000 && !w.hasAura(*t, 6136)) run(100);
         CHECK(w.hasAura(*t, 6136), "the attacker was chilled by Frost Armor");
+    }
+    session.leaveWorld();
+
+    // ---- the rogue: combo points (also on the client), Eviscerate, Slice and Dice, Stealth, Backstab, Vanish
+    play(rogueGuid);
+    run(800);
+    p = w.player();
+    p->maxHp = p->hp = 5000;
+    p->level = 10;
+    off::CharacterProfile& rp = w.playerProfile();
+    for (uint32_t s : {1752u, 2098u, 5171u, 1784u, 53u, 1856u})
+        if (std::find(rp.book.begin(), rp.book.end(), s) == rp.book.end()) rp.book.push_back(s);
+    std::printf("rogue: energy %d / %u, main hand %u\n", p->power, p->maxPower, rp.equipment[15]);
+    off::Entity* r = nearestHostile(p->x, p->y, 300);
+    CHECK(r != nullptr, "something to stab");
+    if (r) {
+        r->maxHp = r->hp = 3000;
+        r->level = 5;
+        stand(r, 2.0f);
+        r->o = 0;   // it faces the rogue
+        run(200);
+        // Stealth, out of combat; a creature behind it does not see the rogue, one face to face does
+        p->power = 100;
+        w.tryCast(*p, 1784, p->guid, now);
+        run(200);
+        CHECK(w.hasAura(*p, 1784) && p->form == 30, "Stealth (form %d)", p->form);
+        r->o = 3.14159f;   // it turns away
+        CHECK(!w.detectsStealth(*r, *p), "unseen from behind");
+        r->o = 0;
+        CHECK(!w.detectsStealth(*r, *p), "a level 5 creature does not see a level 10 rogue at 2 yards");
+        stand(r, 1.0f);
+        CHECK(w.detectsStealth(*r, *p), "but bumps into it at 1 yard (its combat reach)");
+        stand(r, 2.0f);
+        r->o = 3.14159f;
+        r->victim = 0; r->threatCount = 0;
+        run(600);
+        CHECK(r->victim != p->guid, "it does not attack the rogue it cannot see");
+        // Backstab: from the front no, from behind yes (and it ends Stealth)
+        r->o = 0;
+        p->gcdEndMs = 0;
+        p->power = 100;
+        gs.setTarget(r->guid, now);
+        int32_t h0 = r->hp;
+        w.tryCast(*p, 53, r->guid, now);
+        run(100);
+        CHECK(r->hp == h0, "no Backstab face to face");
+        r->o = 3.14159f;
+        p->gcdEndMs = 0;
+        w.tryCast(*p, 53, r->guid, now);
+        run(100);
+        CHECK(r->hp < h0, "Backstab from behind (%d)", h0 - r->hp);
+        CHECK(!w.hasAura(*p, 1784), "out of Stealth");
+        CHECK(p->comboTarget == r->guid && p->comboPoints == 1, "a combo point (%d)", p->comboPoints);
+        run(300);
+        CHECK(gs.comboPointsOn(r->guid) == 1, "the client shows it (%d)", gs.comboPointsOn(r->guid));
+        // Sinister Strike x2: three points; Slice and Dice for three; then Eviscerate with the next
+        for (int k = 0; k < 2; ++k) { p->gcdEndMs = 0; p->power = 100; w.tryCast(*p, 1752, r->guid, now); run(100); }
+        CHECK(p->comboPoints == 3, "three combo points (%d)", p->comboPoints);
+        p->gcdEndMs = 0; p->power = 100;
+        w.tryCast(*p, 5171, r->guid, now);   // (its dummy effect wants the combo target)
+        run(100);
+        uint32_t sndLeft = 0;
+        for (uint8_t i = 0; i < p->auraCount; ++i) if (p->auras[i].spell == 5171) sndLeft = p->auras[i].endMs - now;
+        const off::SpellX* snd = data.sx(5171);
+        std::printf("slice and dice: %u ms (base %d, max %d)\n", sndLeft, snd ? snd->durBase : 0, snd ? snd->durMax : 0);
+        CHECK(snd && sndLeft > (uint32_t)snd->durBase && p->comboPoints == 0, "Slice and Dice longer for 3 points, the points used");
+        for (int k = 0; k < 2; ++k) { p->gcdEndMs = 0; p->power = 100; w.tryCast(*p, 1752, r->guid, now); run(100); }
+        const int32_t h1 = r->hp;
+        p->gcdEndMs = 0; p->power = 100;
+        w.tryCast(*p, 2098, r->guid, now);
+        run(100);
+        CHECK(r->hp < h1 && p->comboPoints == 0, "Eviscerate for two (%d)", h1 - r->hp);
+        // Vanish: the creature lets go, the rogue is in Stealth again
+        r->victim = r->target = p->guid;
+        w.addThreat(*r, p->guid, 500);
+        p->gcdEndMs = 0;
+        w.tryCast(*p, 1784, p->guid, now);
+        run(100);
+        CHECK(!w.hasAura(*p, 1784), "no Stealth in combat");
+        p->gcdEndMs = 0;
+        w.addItemToPlayer(5140, 1, now);   // Flash Powder
+        const bool vanished = w.tryCast(*p, 1856, p->guid, now);
+        run(100);
+        std::printf("vanish %d, stealth %d, victim %llx\n", vanished, w.hasAura(*p, 1784), (unsigned long long)r->victim);
+        CHECK(w.hasAura(*p, 1784) && r->victim != p->guid, "Vanish: in Stealth, the creature lets go");
     }
     session.leaveWorld();
     off::OfflineSaveData sd;

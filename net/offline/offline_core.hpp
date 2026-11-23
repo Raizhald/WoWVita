@@ -807,7 +807,10 @@ private:
 public:
     bool castX(Entity& e, uint32_t spell, uint64_t target, uint32_t nowMs, bool triggered = false);
     int32_t effValue(const Entity& caster, const SpellX& s, int k, int combo = 0);
-    uint32_t durationX(const Entity& caster, const SpellX& s) const;
+    uint32_t durationX(const Entity& caster, const SpellX& s, int combo = 0) const;
+    bool detectsStealth(const Entity& viewer, const Entity& hidden) const;   // WoWVita: CMaNGOS stealth detection
+    bool inCombatNow(const Entity& e) const;
+    static bool hasInArc(const Entity& from, const Entity& to, float arc);
     bool positiveX(const SpellX& s) const;
     uint32_t powerCostX(const Entity& e, const SpellX& s) const;
     void gainRage(Entity& e, int32_t damage, bool dealt);

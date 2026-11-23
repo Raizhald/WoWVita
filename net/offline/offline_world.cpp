@@ -1454,6 +1454,7 @@ void World::selectCreatureTarget(Entity& e, uint32_t nowMs) {
     float bestD = aggro;
     auto consider = [&](Entity* p) {
         if (!p || !p->alive() || !hostileTowards(e, *p)) return;
+        if (!detectsStealth(e, *p)) return;   // WoWVita: a rogue in stealth passes unseen
         const float d = dist2d(e.x, e.y, p->x, p->y);
         if (d < bestD) { bestD = d; best = p; }
     };

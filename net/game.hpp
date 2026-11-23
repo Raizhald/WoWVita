@@ -590,6 +590,8 @@ public:
     std::string selfName;               // from the character list (NPC texts say $N)
     // Our own player object: by GUID once attached, else the object the server flagged as SELF (replays).
     const WorldObject* selfObject() const;
+    // WoWVita: our combo points on that unit (0 when they are on another one): PLAYER_FIELD_COMBO_TARGET / BYTES byte 1
+    int comboPointsOn(uint64_t target) const;
 
     ObjectTable objects;
     Mover mover;

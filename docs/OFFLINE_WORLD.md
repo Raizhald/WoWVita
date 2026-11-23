@@ -118,7 +118,14 @@ target and range; effects: damage, weapon strikes, heals, auras (periodic, contr
 shields, stances), energize, conjured items, triggers, charge, combo points, area spells, channels, Heroic Strike on the
 next swing. Rage as 1.12 gives it. Health and mana by level and stats (player_classlevelstats, player_levelstats, the
 gear's stats), melee attack power by class, mana regeneration from spirit with the five-second rule.
-Not yet: pets, totems, talents, the dummy / script effects of single spells, spell power.
+Procs (PROC_FLAG: Frost Armor, Lightning Shield's charges, Seal of Righteousness), aura interrupt flags (stealth and
+Polymorph break on damage / action), stat, haste, dodge, block, immunity, mechanic immunity, Mana Shield, taunt and
+threat auras; CMaNGOS class scripts for Execute, Life Tap, Blink, Vanish, Eviscerate. Rogues: stealth seen as CMaNGOS
+sees it (30 + 5 a viewer level - the stealth's strength, x 0.3 yd, only in front), behind / in front / peaceful target
+checks, combo points by SPELL_ATTR_EX_REQ_COMBO_POINTS, stretching durations, shown on the target frame
+(PLAYER_FIELD_COMBO_TARGET / PLAYER_FIELD_BYTES).
+Not yet: pets, totems, talents, poisons (weapon enchantments), pick pocketing, Distract, more single-spell scripts,
+spell power.
 
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.

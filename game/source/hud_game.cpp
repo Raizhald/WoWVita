@@ -804,6 +804,16 @@ void hudBuildGame(HudList& l, const HudInput& in) {
             l.textRight(bx0 + bw0 - 2, ay - 1, sec, kWhite);
             ay += 14;
         }
+        // the combo points (the original's ComboFrame: up to five gems at the target frame's right edge)
+        if (const int cp = g.comboPointsOn(tgt->guid); cp > 0 && !tgt->dead()) {
+            const int gx = kTargetFrameX + (int)(150 * kFrameScale) + 4, gy = kFrameY + (int)(12 * kFrameScale);
+            for (int i = 0; i < 5; ++i) {
+                const int y = gy + i * 9;
+                l.rect(gx, y, 7, 7, hudRgba(0, 0, 0, 170));
+                if (i < cp) l.rect(gx + 1, y + 1, 5, 5, i == 4 ? hudRgba(255, 60, 30) : hudRgba(255, 200, 40));
+                l.outline(gx - 1, y - 1, 9, 9, kBorder);
+            }
+        }
         if (tgt->dead() && (tgt->field(w3n::UF::UNIT_DYNAMIC_FLAGS) & 1)) l.textCentered(tx + tw / 2, ay, ui::tr("Lootable", "Можно обыскать"), kGold);
         else if (!tgt->dead() && !tgt->self) {
             std::vector<w3n::AuraView> av = g.auras(*tgt, now);

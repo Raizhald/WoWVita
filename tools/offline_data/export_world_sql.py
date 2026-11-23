@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -38,7 +38,8 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "creature_movement", "creature_movement_template", "creature_ai_scripts", "broadcast_text", "creature_ai_texts",
           "spawn_group", "spawn_group_spawn", "spawn_group_entry", "pool_creature", "pool_creature_template", "pool_template",
           "creature_linking", "creature_linking_template",
-          "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain"}
+          "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain",
+          "player_classlevelstats", "player_levelstats"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -1155,6 +1156,24 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
     sec_extra["OUTF"] = ob.b
 
     class_spell_sections(tables, templates, used, item_needed, sec_extra, report, spell_info or load_spell_info(None))
+    # ---- WoWVita "PLST": base health / mana (player_classlevelstats) and stats (player_levelstats) by race, class, level
+    cls_stats = {(int(num(g(r, "class"))), int(num(g(r, "level")))): (int(num(g(r, "basehp"))), int(num(g(r, "basemana"))))
+                 for r in tables.get("player_classlevelstats", [])}
+    pl = []
+    for r in tables.get("player_levelstats", []):
+        race, cls, lvl = int(num(g(r, "race"))), int(num(g(r, "class"))), int(num(g(r, "level")))
+        if lvl < 1 or lvl > 60 or (cls, lvl) not in cls_stats:
+            continue
+        hp, mana = cls_stats[(cls, lvl)]
+        pl.append((race, cls, lvl, hp, mana) + tuple(int(num(g(r, c))) for c in ("str", "agi", "sta", "inte", "spi")))
+    psb = Bin()
+    psb.u32(len(pl))
+    for row in sorted(pl):
+        psb.u8(row[0]); psb.u8(row[1]); psb.u8(row[2])
+        for v in row[3:]:
+            psb.u16(min(v, 65535))
+    sec_extra["PLST"] = psb.b
+    report["counts_player_stats"] = len(pl)
 
     # ---- items: what the loot and the companions need (the sample's item ids are in the DB too)
     for e in (25, 38, 2589, 750, 6948):   # (6948: the Hearthstone every character carries)
@@ -1175,6 +1194,21 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
             cls=int(num(g(r, "class"))), sub=int(num(g(r, "subclass"))),
             buycount=max(1, int(num(g(r, "BuyCount", "buy_count", default=1))))))
     known_items = {i["entry"] for i in items}
+    # ---- WoWVita "ISTA": the stats of the items that can be worn (item_template stat_type / stat_value 1..10)
+    ista = []
+    for entry in sorted(known_items):
+        r = items_db.get(entry)
+        st = [(int(num(g(r, f"stat_type{k}"))), int(num(g(r, f"stat_value{k}")))) for k in range(1, 11)]
+        st = [x for x in st if x[1]]
+        if st:
+            ista.append((entry, st))
+    isb = Bin()
+    isb.u32(len(ista))
+    for entry, st in ista:
+        isb.u32(entry); isb.u8(len(st))
+        for t, v in st:
+            isb.u8(t); isb.i32(v)
+    sec_extra["ISTA"] = isb.b
 
     # ---- "ITX1": what an item is besides its basics: a bag's slots, its durability, and what using it does
     # (food 84 / drink 85 auras, healing potions effect 10, mana potions effect 30 - from spell_template = Spell.dbc).

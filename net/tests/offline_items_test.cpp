@@ -74,6 +74,7 @@ int main(int argc, char** argv) {
     CHECK(gs.itemInfo(117) && gs.itemInfo(117)->spellId[0] == 433, "the client knows Jerky's spell (it can use it)");
 
     // ---- Tough Jerky (the natural regeneration goes on: measured first, the meal must add its 61 to it)
+    p->maxHp = 200;   // (room for the meal on top of the regeneration: a level 1 character has 60)
     p->hp = 20;
     run(18300);
     const int32_t regen = p->hp - 20;
@@ -208,7 +209,8 @@ int main(int argc, char** argv) {
         const uint32_t dmgBefore = p->dmgMax;
         w.wearSlot(15, m);
         run(300);
-        CHECK(dur() == 0 && p->dmgMax == 6 && dmgBefore != 6, "broken: the weapon counts no more, bare hands (%u -> %u)", dmgBefore, p->dmgMax);
+        const uint32_t bare = 6 + (uint32_t)(p->attackPower * 2000 / 14000);   // (+ attack power, WoWVita)
+        CHECK(dur() == 0 && p->dmgMax == bare && p->attackMs == 2000, "broken: the weapon counts no more, bare hands (%u -> %u)", dmgBefore, p->dmgMax);
         // a repairer near Northshire
         const off::Spawn* rep = nullptr;
         for (const off::Spawn& sp : data.spawns)

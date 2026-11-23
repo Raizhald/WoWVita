@@ -1193,6 +1193,43 @@ void World::recomputeGear() {
         if (const ItemTemplate* it = data_ && !broken(p.equipment[(size_t)s], p.equipLost[(size_t)s]) ? data_->item(p.equipment[(size_t)s]) : nullptr)
             armor += it->armor;
     e.armor = armor;
+    // WoWVita: the race and class's stats at its level (player_levelstats / player_classlevelstats) and the gear's;
+    // health = base + stamina (the first 20 one each, then 10), mana = base + intellect (20 one each, then 15),
+    // melee attack power by class (1.12), its bonus to a swing AP / 14 per second of the weapon's speed
+    const uint32_t statKey = (uint32_t)p.race | ((uint32_t)p.cls << 8) | ((uint32_t)std::min<uint16_t>(e.level, 60) << 16);
+    if (data_ && data_->playerStats.count(statKey)) {
+        const PlayerLevelStats& b = data_->playerStats.at(statKey);
+        int32_t st[8] = {0, 0, 0, 0, 0, 0, 0, 0};   // 0 mana 1 health 3 agi 4 str 5 int 6 spi 7 sta
+        for (int s = 0; s < 19; ++s) {
+            if (!p.equipment[(size_t)s] || broken(p.equipment[(size_t)s], p.equipLost[(size_t)s])) continue;
+            auto is = data_->itemStats.find(p.equipment[(size_t)s]);
+            if (is == data_->itemStats.end()) continue;
+            for (const auto& [type, v] : is->second) if (type < 8) st[type] += v;
+        }
+        e.statStr = b.str + st[4]; e.statAgi = b.agi + st[3]; e.statSta = b.sta + st[7];
+        e.statInt = b.inte + st[5]; e.statSpi = b.spi + st[6];
+        const int32_t hpSta = std::min(e.statSta, 20) + std::max(0, e.statSta - 20) * 10;
+        const uint32_t oldMax = e.maxHp;
+        e.maxHp = (uint32_t)std::max(1, b.hp + hpSta + st[1]);
+        if (oldMax && e.hp > 0) e.hp = std::min<int32_t>((int32_t)e.maxHp, e.hp + (int32_t)e.maxHp - (int32_t)oldMax);
+        if (e.powerType == 0 && b.mana) {
+            const int32_t mInt = std::min(e.statInt, 20) + std::max(0, e.statInt - 20) * 15;
+            const uint32_t oldP = e.maxPower;
+            e.maxPower = (uint32_t)std::max(1, b.mana + mInt + st[0]);
+            if (oldP) e.power = std::min<int32_t>((int32_t)e.maxPower, e.power + (int32_t)e.maxPower - (int32_t)oldP);
+        }
+        const int L = e.level;
+        switch (p.cls) {
+            case 1: case 2: case 7: e.attackPower = L * 3 + e.statStr * 2 - 20; break;   // warrior, paladin, shaman
+            case 3: case 4: e.attackPower = L * 2 + e.statStr + e.statAgi - 20; break;   // hunter, rogue
+            case 11: e.attackPower = e.statStr * 2 - 20; break;                          // druid
+            default: e.attackPower = e.statStr - 10; break;                              // mage, priest, warlock
+        }
+        e.attackPower = std::max(0, e.attackPower);
+        const uint32_t bonus = (uint32_t)(e.attackPower * (int32_t)e.attackMs / 14000);
+        e.dmgMin += bonus; e.dmgMax += bonus;
+        profiles_[0].maxHp = e.maxHp; profiles_[0].maxPower = e.maxPower;
+    }
 }
 
 int World::equipFromBag(int index, int slotsOut[2]) {
@@ -1286,10 +1323,11 @@ void World::addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim, bool 
         e.levelXp -= e.nextLevelXp;
         ++e.level;
         e.nextLevelXp = xpForNextLevel(e.level);
-        e.maxHp += 20;
+        const bool tables = e.self && data_ && !data_->playerStats.empty();
+        if (tables) { profiles_[0].level = e.level; recomputeGear(); }   // WoWVita: the level's stats
+        else { e.maxHp += 20; e.maxPower += 15; }
         e.hp = (int32_t)e.maxHp;
-        e.maxPower += 15;
-        e.power = (int32_t)e.maxPower;
+        if (e.powerType != 1) e.power = (int32_t)e.maxPower;
         emit(SimEvent::LevelUp, e.guid, 0, 0, e.level);
     }
     CharacterProfile& p = profiles_[0];
@@ -1339,7 +1377,14 @@ void World::tickRegen(Entity& e, uint32_t nowMs) {
         // WoWVita: the player regenerates as in the original - a tick every 2 s (Player::RegenerateAll), health only
         // out of combat (about 3 % of it; food and drink are what refills faster), mana a little in combat too
         if ((nowMs / 2000) == ((nowMs - kSimStepMs) / 2000)) return;
-        if (e.powerType == 0 && e.power < (int32_t)e.maxPower)
+        if (e.powerType == 0 && e.power < (int32_t)e.maxPower && e.statSpi > 0) {
+            // WoWVita: 1.12's spirit regeneration per 2 s tick (Player::OCTRegenMPPerSpirit), none for 5 s after spending mana
+            if (nowMs - e.lastManaSpendMs >= 5000) {
+                const uint8_t c = profiles_[0].cls;
+                const float r = (c == 8 || c == 5) ? 12.5f + e.statSpi / 4.0f : c == 7 ? 17.0f + e.statSpi / 5.0f : 15.0f + e.statSpi / 5.0f;
+                e.power = std::min<int32_t>(e.power + std::max<int32_t>(1, (int32_t)r), (int32_t)e.maxPower);
+            }
+        } else if (e.powerType == 0 && e.power < (int32_t)e.maxPower)
             e.power = std::min<int32_t>(e.power + std::max<int32_t>(1, (int32_t)e.maxPower * (combat ? 1 : 3) / 100), (int32_t)e.maxPower);
         else if (e.powerType == 3 && e.power < (int32_t)e.maxPower)
             e.power = std::min<int32_t>(e.power + 20, (int32_t)e.maxPower);   // energy: 20 per 2 s

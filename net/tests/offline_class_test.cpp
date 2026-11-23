@@ -63,6 +63,9 @@ int main(int argc, char** argv) {
     run(800);
     off::World& w = session.world();
     off::Entity* p = w.player();
+    std::printf("warrior level %d: %u health, str %d agi %d sta %d, attack power %d, swing %u-%u\n", p->level, p->maxHp,
+                p->statStr, p->statAgi, p->statSta, p->attackPower, p->dmgMin, p->dmgMax);
+    CHECK(data.playerStats.empty() || (p->maxHp > 40 && p->attackPower > 0), "health and attack power from the level's stats");
     p->maxHp = p->hp = 5000;
     const off::CharacterProfile& pr = w.playerProfile();
     auto inBook = [&](uint32_t s) { return std::find(pr.book.begin(), pr.book.end(), s) != pr.book.end(); };
@@ -185,6 +188,8 @@ int main(int argc, char** argv) {
     play(mageGuid);
     run(800);
     p = w.player();
+    std::printf("mage level %d: %u health, %u mana, int %d spi %d\n", p->level, p->maxHp, p->maxPower, p->statInt, p->statSpi);
+    CHECK(data.playerStats.empty() || p->maxPower > 100, "mana from intellect");
     p->maxHp = p->hp = 5000;
     p->level = 10;
     CHECK(p->powerType == 0 && p->maxPower > 0, "a mage with mana (%u)", p->maxPower);

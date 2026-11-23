@@ -258,6 +258,7 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
         if (cost && (s.powerType == e.powerType)) {
             if (e.power < (int32_t)cost) { emit(SimEvent::CastFailed, e.guid, targetGuid, s.id, 77, 0, 0); return false; }
             e.power -= (int32_t)cost;
+            if (e.powerType == 0) e.lastManaSpendMs = now;
             emit(SimEvent::PowerChanged, e.guid, 0, 0, e.power);
         }
         for (const auto& [item, n] : s.reagents) removePlayerItem(item, n);

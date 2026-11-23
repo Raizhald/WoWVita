@@ -147,7 +147,8 @@ int main(int argc, char** argv) {
                 gs.equipItem(*inBag, now);
                 run(300);
                 CHECK(w.playerProfile().equipment[15] == wentry, "worn in the main hand (%u)", w.playerProfile().equipment[15]);
-                CHECK(p->dmgMax == (uint32_t)std::max(1.0f, wt->dmgMax), "its damage (%u)", p->dmgMax);
+                const uint32_t ap = (uint32_t)(p->attackPower * (int32_t)p->attackMs / 14000);   // (+ attack power, WoWVita)
+                CHECK(p->dmgMax == (uint32_t)std::max(1.0f, wt->dmgMax) + ap, "its damage (%u)", p->dmgMax);
                 bool clientSees = false, oldBack = !oldMain;
                 for (const InvItem& x : gs.inventory()) {
                     if (x.entry == wentry && x.equipped()) clientSees = true;

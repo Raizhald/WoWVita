@@ -285,6 +285,7 @@ struct SpellX {
     bool passive() const { return (attr & 0x40) != 0; }
     bool channeled() const { return (attrEx & 0x44) != 0; }
 };
+struct PlayerLevelStats { uint16_t hp = 0, mana = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; };   // WoWVita "PLST"
 struct TrainerSpell { uint32_t teach = 0, learn = 0, cost = 0; uint8_t level = 0; uint16_t skill = 0, skillValue = 0; uint32_t reqSpell = 0; };
 struct Trainer { uint8_t cls = 0; std::vector<TrainerSpell> spells; };
 
@@ -343,6 +344,8 @@ struct WorldData {
     std::unordered_map<uint32_t, SpellControl> spellControl;          // "SPFX"
     std::vector<SpawnPool> pools;                                     // "POOL"
     std::unordered_map<uint32_t, SpellX> spellx;                      // "SPX2"
+    std::unordered_map<uint32_t, PlayerLevelStats> playerStats;       // "PLST": race | class << 8 | level << 16
+    std::unordered_map<uint32_t, std::vector<std::pair<uint8_t, int32_t>>> itemStats;   // "ISTA": item -> (stat type, value)
     std::unordered_map<uint32_t, Trainer> trainers;                   // "TRNR": creature entry -> its class spells
     std::unordered_map<uint32_t, std::vector<uint32_t>> createSpells; // "CRSP": race | class << 8 -> spells
     const SpellX* sx(uint32_t id) const { auto it = spellx.find(id); return it == spellx.end() ? nullptr : &it->second; }
@@ -509,6 +512,8 @@ struct Entity {
     }
     // WoWVita: the class spell engine (offline_spells.cpp)
     uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
+    int32_t statStr = 0, statAgi = 0, statSta = 0, statInt = 0, statSpi = 0, attackPower = 0;   // the player's (PLST + gear)
+    uint32_t lastManaSpendMs = 0;              // the five-second rule
     uint8_t comboPoints = 0;
     uint64_t comboTarget = 0;
     uint32_t nextSwingSpell = 0;               // Heroic Strike and the like: replaces the next swing

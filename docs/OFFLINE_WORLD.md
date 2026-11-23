@@ -109,6 +109,17 @@ Start outfit (`OUTF`, `--glue glue.txt`): a new character - or one of an older s
 clothes and with the weapon, food and drink of CharStartOutfit.dbc (the converter's `S` lines; an older glue.txt only has
 what is shown on the character, matched by its look).
 
+Class spells (`SPX2`, `TRNR`, `CRSP`, `PLST`, `ISTA`; net/offline/offline_spells.cpp, offline_class.cpp): every spell the
+classes can have, from spell_template with the converter's @idx tables (cast times, durations with their per-level
+growth, ranges, radii). A character starts with its race and class's spells (playercreateinfo_spell), class trainers
+(npc_trainer / npc_trainer_template) teach the rest for money at their level; the book and the action bar are saved.
+Casting checks the global and own cooldowns, stance, power (rage in tenths), reagents, the weapon / shield, combo points,
+target and range; effects: damage, weapon strikes, heals, auras (periodic, control, armour, speed, absorb, damage
+shields, stances), energize, conjured items, triggers, charge, combo points, area spells, channels, Heroic Strike on the
+next swing. Rage as 1.12 gives it. Health and mana by level and stats (player_classlevelstats, player_levelstats, the
+gear's stats), melee attack power by class, mana regeneration from spirit with the five-second rule.
+Not yet: pets, totems, talents, the dummy / script effects of single spells, spell power.
+
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.
 

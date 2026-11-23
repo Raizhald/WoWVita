@@ -518,6 +518,33 @@ bool readSpellControl(Bin& b, WorldData& w) {   // WoWVita "SPFX"
     return !b.bad;
 }
 
+bool readPlayerStats(Bin& b, WorldData& w) {   // WoWVita "PLST"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    w.playerStats.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t race = b.u8(), cls = b.u8(), lvl = b.u8();
+        PlayerLevelStats s;
+        s.hp = b.u16(); s.mana = b.u16(); s.str = b.u16(); s.agi = b.u16(); s.sta = b.u16(); s.inte = b.u16(); s.spi = b.u16();
+        w.playerStats[race | (cls << 8) | (lvl << 16)] = s;
+    }
+    return !b.bad;
+}
+
+bool readItemStats(Bin& b, WorldData& w) {   // WoWVita "ISTA"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    w.itemStats.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t entry = b.u32();
+        const uint8_t k = b.u8();
+        std::vector<std::pair<uint8_t, int32_t>> v;
+        for (uint8_t j = 0; j < k && !b.bad; ++j) { const uint8_t t = b.u8(); const int32_t x = b.i32(); v.emplace_back(t, x); }
+        w.itemStats[entry] = std::move(v);
+    }
+    return !b.bad;
+}
+
 bool readSpellX(Bin& b, WorldData& w) {   // WoWVita "SPX2"
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -885,6 +912,8 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("SPX2"): ok = readSpellX(b, out); break;
             case fourcc("TRNR"): ok = readTrainers(b, out); break;
             case fourcc("CRSP"): ok = readCreateSpells(b, out); break;
+            case fourcc("PLST"): ok = readPlayerStats(b, out); break;
+            case fourcc("ISTA"): ok = readItemStats(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

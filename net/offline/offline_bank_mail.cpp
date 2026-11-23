@@ -48,6 +48,19 @@ std::string lower(std::string s) {
 }  // namespace
 
 uint64_t OfflineSession::bankItemGuid(int slot) { return 0x40000000ull | (uint64_t)(0x3000 + slot); }
+// WoWVita: the bank's bags (slots 63..68) and what is in them
+uint64_t OfflineSession::bankBagGuid(int k) { return 0x40000000ull | (uint64_t)(0x1000 + 63 + k); }
+uint64_t OfflineSession::bankBagItemGuid(int k, int slot) { return 0x40000000ull | (uint64_t)(0x4000 + k * 36 + slot); }
+uint8_t OfflineSession::bankBagSize(int k) const {
+    const CharacterProfile& pr = world_.playerProfile();
+    if (k < 0 || k >= 6 || k >= pr.bankBagSlots || !pr.bankBags[(size_t)k] || !data_) return 0;
+    const ItemExt* x = data_->ext(pr.bankBags[(size_t)k]);
+    return x ? (uint8_t)std::min<uint32_t>(x->slots, 36) : 0;
+}
+namespace {
+// BankBagSlotPrices.dbc (1.12): 10 s, 1 g, 10 g, 25 g, 25 g, 25 g
+constexpr uint32_t kBankBagPrice[6] = {1000, 10000, 100000, 250000, 250000, 250000};
+}
 
 // ---------------------------------------------------------------- bank
 bool OfflineSession::bankerNear() const {
@@ -109,11 +122,23 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             bankHello(g, std::hypot(v->x - p->x, v->y - p->y) < kBankRange, nowMs);
             return true;
         }
-        case CMSG_BUY_BANK_SLOT: {
+        case CMSG_BUY_BANK_SLOT: {   // WoWVita: the next of the six bank bag slots
+            CharacterProfile& pr = world_.playerProfile();
+            uint32_t result = 3;   // ERR_BANKSLOT_OK
+            if (!bankerNear()) result = 2;                                         // ERR_BANKSLOT_NOTBANKER
+            else if (pr.bankBagSlots >= 6) result = 0;                             // ERR_BANKSLOT_FAILED_TOO_MANY
+            else if (p->money < kBankBagPrice[pr.bankBagSlots]) result = 1;        // ERR_BANKSLOT_INSUFFICIENT_FUNDS
+            if (result == 3) {
+                p->money -= kBankBagPrice[pr.bankBagSlots];
+                pr.money = p->money;
+                ++pr.bankBagSlots;
+                sendSelfFields();
+                saveSoon_ = true;
+            }
             Writer w;
-            w.u32(0);   // ERR_BANKSLOT_FAILED_TOO_MANY
+            w.u32(result);
             send(SMSG_BUY_BANK_SLOT_RESULT, w.b);
-            errorLine("Bank bags are not available offline yet.", nowMs);
+            if (result == 1) errorLine("You don't have enough money.", nowMs);
             return true;
         }
         case CMSG_AUTOBANK_ITEM: {   // backpack -> bank
@@ -126,6 +151,17 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             BagItem moving = pr.bag[index];
             const ItemTemplate* t = data_ ? data_->item(moving.entry) : nullptr;
             const uint32_t stackMax = t ? std::max<uint32_t>(1, t->maxStack) : 1;
+            // WoWVita: a bag goes into a free bank bag slot that was bought
+            if (t && t->inventoryType == 18 && data_->ext(moving.entry) && data_->ext(moving.entry)->slots) {
+                for (int k = 0; k < pr.bankBagSlots; ++k)
+                    if (!pr.bankBags[(size_t)k]) {
+                        pr.bankBags[(size_t)k] = moving.entry;
+                        const uint8_t before = pr.bagCount;
+                        world_.removeBagItem(index);
+                        bankChanged({}, index, before);
+                        return true;
+                    }
+            }
             // where it goes: the stacks of the same item, then the first free slot
             std::vector<int> touched;
             uint32_t left = moving.count ? moving.count : 1;
@@ -136,7 +172,32 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
                 if (b.entry == moving.entry && b.count < stackMax) room += stackMax - b.count;
                 if (!b.entry && freeSlot < 0) freeSlot = i;
             }
-            if (room < left && freeSlot < 0) { errorLine("Your bank is full.", nowMs); return true; }
+            // WoWVita: the bank's bags take what the 24 slots cannot
+            int bagFree = -1;
+            for (int k = 0; k < 6 && (room < left || freeSlot < 0); ++k)
+                for (int j = 0; j < bankBagSize(k); ++j) {
+                    const BagItem& b = pr.bankBagItems[(size_t)(k * 36 + j)];
+                    if (b.entry == moving.entry && b.count < stackMax) room += stackMax - b.count;
+                    if (!b.entry && bagFree < 0) bagFree = k * 36 + j;
+                }
+            if (room < left && freeSlot < 0 && bagFree < 0) { errorLine("Your bank is full.", nowMs); return true; }
+            std::vector<int> touchedBags;
+            for (int k = 0; k < 6 && left; ++k)
+                for (int j = 0; j < bankBagSize(k) && left; ++j) {
+                    BagItem& b = pr.bankBagItems[(size_t)(k * 36 + j)];
+                    if (b.entry != moving.entry || b.count >= stackMax) continue;
+                    const uint32_t q = std::min<uint32_t>(left, stackMax - b.count);
+                    b.count = (uint16_t)(b.count + q);
+                    left -= q;
+                    touchedBags.push_back(k * 36 + j);
+                }
+            if (left && freeSlot < 0 && bagFree >= 0) {
+                BagItem& b = pr.bankBagItems[(size_t)bagFree];
+                b.entry = moving.entry; b.count = (uint16_t)left; b.slot = (uint8_t)(bagFree % 36); b.lost = moving.lost;
+                touchedBags.push_back(bagFree);
+                left = 0;
+            }
+            for (int i2 : touchedBags) { Writer w; w.u64(bankBagItemGuid(i2 / 36, i2 % 36)); send(SMSG_DESTROY_OBJECT, w.b); }
             for (int i = 0; i < kBankSlots && left; ++i) {
                 BagItem& b = pr.bank[(size_t)i];
                 if (b.entry != moving.entry || b.count >= stackMax) continue;
@@ -160,6 +221,37 @@ bool OfflineSession::handleBank(uint16_t op, const Bytes& data, uint32_t nowMs) 
             if (r.bad) return true;
             if (!bankerNear()) { errorLine("You are too far away from a banker.", nowMs); return true; }
             CharacterProfile& pr = world_.playerProfile();
+            if (bag == 255 && slot >= 63 && slot < 69) {   // WoWVita: a bank bag, back to the backpack - when empty
+                const int k = slot - 63;
+                if (!pr.bankBags[(size_t)k]) return true;
+                for (int j = 0; j < 36; ++j)
+                    if (pr.bankBagItems[(size_t)(k * 36 + j)].entry) { errorLine("You can only do that with empty bags.", nowMs); return true; }
+                BagItem b;
+                b.entry = pr.bankBags[(size_t)k]; b.count = 1;
+                const uint8_t before = pr.bagCount;
+                if (!world_.putBagItem(b)) { errorLine("Inventory is full.", nowMs); return true; }
+                pr.bankBags[(size_t)k] = 0;
+                { Writer w; w.u64(bankBagGuid(k)); send(SMSG_DESTROY_OBJECT, w.b); }
+                bankChanged({}, before, before);
+                return true;
+            }
+            if (bag >= 63 && bag < 69) {   // WoWVita: out of a bank bag
+                const int k = bag - 63;
+                if (slot >= bankBagSize(k)) return true;
+                BagItem& b = pr.bankBagItems[(size_t)(k * 36 + slot)];
+                if (!b.entry) return true;
+                const uint8_t before = pr.bagCount;
+                int why = 0;
+                const bool asItIs = world_.maxDurability(b.entry) > 0;
+                if (asItIs ? !world_.putBagItem(b) : !world_.buyItem(b.entry, b.count ? b.count : 1, 0, nowMs, &why)) {
+                    errorLine("Inventory is full.", nowMs);
+                    return true;
+                }
+                b = BagItem();
+                { Writer w; w.u64(bankBagItemGuid(k, slot)); send(SMSG_DESTROY_OBJECT, w.b); }
+                bankChanged({}, 0, before);
+                return true;
+            }
             const int i = slot - kBankFirst;
             if (bag != 255 || i < 0 || i >= kBankSlots || !pr.bank[(size_t)i].entry) return true;
             BagItem& b = pr.bank[(size_t)i];

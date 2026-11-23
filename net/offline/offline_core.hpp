@@ -517,6 +517,9 @@ struct CharacterProfile {
     std::array<uint32_t, 64> explored{};  // WoWVita: the AreaTable explore bits found (the "EXP1" block)
     std::array<uint16_t, 19> equipLost{}; // WoWVita: durability points gone of the worn items (the "DUR1" block)
     std::array<uint32_t, 4> bags{};       // WoWVita: the bags in the slots 19..22 (the "BAG2" block)
+    uint8_t bankBagSlots = 0;             // WoWVita: bank bag slots bought (0..6; the "BKB1" block)
+    std::array<uint32_t, 6> bankBags{};   // the bags in the bank's bag slots 63..68
+    std::array<BagItem, 6 * 36> bankBagItems{};   // what is in them: [bag * 36 + slot]
 };
 
 // WoWVita: a letter between the characters of this save (the "MAL1" block)

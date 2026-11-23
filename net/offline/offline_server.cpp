@@ -62,32 +62,32 @@ constexpr uint8_t kUfSelf = 0x01, kUfTransport = 0x02, kUfMelee = 0x04, kUfHighG
                   kUfLiving = 0x20, kUfPosition = 0x40;
 
 // ---------------------------------------------------------------- update-field builder
-struct FieldSet {
-    uint16_t idx[128];
-    uint32_t val[128];
-    uint8_t n = 0;
+struct FieldSet {   // WoWVita: 256 (the whole inventory with the bank and its bags is ~170 fields)
+    uint16_t idx[256];
+    uint32_t val[256];
+    uint16_t n = 0;
     void set(uint16_t i, uint32_t v) {
-        for (uint8_t k = 0; k < n; ++k)
+        for (uint16_t k = 0; k < n; ++k)
             if (idx[k] == i) { val[k] = v; return; }
-        if (n < 128) { idx[n] = i; val[n] = v; ++n; }
+        if (n < 256) { idx[n] = i; val[n] = v; ++n; }
     }
 };
 
 void writeFields(Writer& w, const FieldSet& f) {
     if (!f.n) { w.u8(0); return; }
     uint16_t top = 0;
-    for (uint8_t k = 0; k < f.n; ++k) top = std::max<uint16_t>(top, f.idx[k]);
+    for (uint16_t k = 0; k < f.n; ++k) top = std::max<uint16_t>(top, f.idx[k]);
     const uint8_t blocks = (uint8_t)(top / 32 + 1);
     w.u8(blocks);
     for (uint8_t b = 0; b < blocks; ++b) {
         uint32_t mask = 0;
-        for (uint8_t k = 0; k < f.n; ++k)
+        for (uint16_t k = 0; k < f.n; ++k)
             if (f.idx[k] / 32 == b) mask |= 1u << (f.idx[k] % 32);
         w.u32(mask);
     }
     for (uint8_t b = 0; b < blocks; ++b)
         for (int bit = 0; bit < 32; ++bit)
-            for (uint8_t k = 0; k < f.n; ++k)
+            for (uint16_t k = 0; k < f.n; ++k)
                 if (f.idx[k] == b * 32 + bit) w.u32(f.val[k]);
 }
 
@@ -635,7 +635,7 @@ void OfflineSession::sendSelfFields() {
         const CharacterProfile& pr = world_.playerProfile();
         restSent_ = (uint32_t)pr.restBonus;
         f.set(UF::PLAYER_REST_STATE_EXPERIENCE, restSent_);
-        f.set(UF::PLAYER_BYTES_2, (uint32_t)pr.facialHair | ((restSent_ > 10 ? 1u : 2u) << 24));
+        f.set(UF::PLAYER_BYTES_2, (uint32_t)pr.facialHair | ((uint32_t)pr.bankBagSlots << 16) | ((restSent_ > 10 ? 1u : 2u) << 24));
     }
     {   // WoWVita: the quest log
         std::vector<std::pair<uint16_t, uint32_t>> ql;
@@ -765,8 +765,143 @@ void OfflineSession::sendInventory() {
             addCreateItem(u, g, it);
         }
     }
+    // WoWVita: the bank's bags (63..68) and their contents
+    for (int k = 0; k < 6; ++k) {
+        const uint16_t f = (uint16_t)(UF::PLAYER_FIELD_INV_SLOT_HEAD + (63 + k) * 2);
+        const uint8_t n = bankBagSize(k);
+        if (!n) { self.set(f, 0); self.set((uint16_t)(f + 1), 0); continue; }
+        const uint64_t cg = bankBagGuid(k);
+        self.set(f, (uint32_t)cg);
+        self.set((uint16_t)(f + 1), (uint32_t)(cg >> 32));
+        FieldSet c;
+        c.set(UF::OBJECT_GUID, (uint32_t)cg);
+        c.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(cg >> 32));
+        c.set(UF::OBJECT_TYPE, 0x7);
+        c.set(UF::OBJECT_ENTRY, pr.bankBags[(size_t)k]);
+        c.set(UF::OBJECT_SCALE_X, 0x3F800000u);
+        c.set(UF::ITEM_FIELD_STACK_COUNT, 1);
+        c.set(UF::CONTAINER_FIELD_NUM_SLOTS, n);
+        for (int j = 0; j < n; ++j) {
+            const BagItem& b = pr.bankBagItems[(size_t)(k * 36 + j)];
+            const uint64_t g = b.entry ? bankBagItemGuid(k, j) : 0;
+            c.set((uint16_t)(UF::CONTAINER_FIELD_SLOT_1 + 2 * j), (uint32_t)g);
+            c.set((uint16_t)(UF::CONTAINER_FIELD_SLOT_1 + 2 * j + 1), (uint32_t)(g >> 32));
+            if (!b.entry) continue;
+            FieldSet it;
+            it.set(UF::ITEM_FIELD_CONTAINED, (uint32_t)cg);
+            it.set((uint16_t)(UF::ITEM_FIELD_CONTAINED + 1), (uint32_t)(cg >> 32));
+            it.set(UF::OBJECT_GUID, (uint32_t)g);
+            it.set((uint16_t)(UF::OBJECT_GUID + 1), (uint32_t)(g >> 32));
+            it.set(UF::OBJECT_TYPE, 0x3);
+            it.set(UF::OBJECT_ENTRY, b.entry);
+            it.set(UF::OBJECT_SCALE_X, 0x3F800000u);
+            it.set(UF::ITEM_FIELD_STACK_COUNT, b.count ? b.count : 1);
+            if (const uint16_t m = world_.maxDurability(b.entry)) {
+                it.set(UF::ITEM_FIELD_MAXDURABILITY, m);
+                it.set(UF::ITEM_FIELD_DURABILITY, (uint32_t)(m - std::min<uint16_t>(m, b.lost)));
+            }
+            addCreateItem(u, g, it);
+        }
+        addCreateContainer(u, cg, c);
+    }
     addValues(u, p->guid, self);
     sendUpdateObject(u.finish());
+}
+
+void OfflineSession::bagChanged(int from, uint8_t before) {   // WoWVita
+    for (int i = std::max(0, from); i < std::max<int>(before, world_.playerProfile().bagCount); ++i) {
+        Writer w;
+        w.u64(itemGuidFor(false, i));
+        send(0x0AA, w.b);
+    }
+    sendInventory();
+    saveSoon_ = true;
+}
+
+// WoWVita: CMSG_AUTOSTORE_BAG_ITEM (u8 bag, u8 slot, u8 destination bag): a worn item or a bag goes into the
+// backpack / the bags; CMSG_DESTROYITEM (u8 bag, u8 slot, u8 count): an item (or a stack) is destroyed.
+bool OfflineSession::handleInventory(uint16_t op, const Bytes& data, uint32_t nowMs) {
+    if (op != 0x10B && op != 0x111) return false;
+    Reader r(data);
+    const uint8_t bag = r.u8(), slot = r.u8(), third = r.u8();
+    if (r.bad) return true;
+    CharacterProfile& pr = world_.playerProfile();
+    auto destroyObj = [&](uint64_t g) { Writer w; w.u64(g); send(0x0AA, w.b); };
+    auto fail = [&](uint8_t code, const char* text) {   // the reason as a line (code: EQUIP_ERR_*, for the record)
+        (void)code;
+        errorLine(text, nowMs);
+    };
+    if (bag == 255 && slot < 19) {   // a worn item
+        const uint32_t entry = pr.equipment[(size_t)slot];
+        if (!entry) return true;
+        if (op == 0x10B) {
+            BagItem b;
+            b.entry = entry; b.count = 1; b.lost = pr.equipLost[(size_t)slot];
+            const uint8_t before = pr.bagCount;
+            if (!world_.putBagItem(b)) { fail(50, "Inventory is full."); return true; }
+            pr.equipment[(size_t)slot] = 0;
+            pr.equipLost[(size_t)slot] = 0;
+            world_.recomputeGearPublic();
+            destroyObj(itemGuidFor(true, slot));
+            bagChanged(before, before);
+        } else {
+            pr.equipment[(size_t)slot] = 0;
+            pr.equipLost[(size_t)slot] = 0;
+            world_.recomputeGearPublic();
+            destroyObj(itemGuidFor(true, slot));
+            sendInventory();
+            saveSoon_ = true;
+        }
+        return true;
+    }
+    if (bag == 255 && slot >= 19 && slot <= 22) {   // a bag: what is in it moves up into the others, if there is room
+        const int k = slot - 19;
+        const uint32_t entry = pr.bags[(size_t)k];
+        if (!entry) return true;
+        const ItemExt* x = data_ ? data_->ext(entry) : nullptr;
+        const uint32_t capAfter = world_.bagCapacity() - (x ? x->slots : 0);
+        const uint32_t need = pr.bagCount + (op == 0x10B ? 1u : 0u);
+        if (need > capAfter) { fail(op == 0x10B ? 50 : 51, op == 0x10B ? "Inventory is full." : "You can only do that with empty bags."); return true; }
+        const uint8_t before = pr.bagCount;
+        pr.bags[(size_t)k] = 0;
+        if (op == 0x10B) {
+            BagItem b;
+            b.entry = entry; b.count = 1;
+            world_.putBagItem(b);
+        }
+        destroyObj(itemGuidFor(true, slot));
+        bagChanged(16, before);
+        return true;
+    }
+    const int index = bagIndex(bag, slot);   // in the backpack / a bag
+    if (index >= 0 && pr.bag[index].entry) {
+        if (op == 0x10B) return true;   // (already in the bags)
+        const uint16_t have = pr.bag[index].count ? pr.bag[index].count : 1;
+        const uint16_t n = third && third < have ? third : have;
+        const uint8_t before = pr.bagCount;
+        world_.takeFromBag(index, n);
+        bagChanged(index, before);
+        return true;
+    }
+    if (op == 0x111 && bag == 255 && slot >= 39 && slot < 63) {   // a bank slot
+        BagItem& b = pr.bank[(size_t)(slot - 39)];
+        if (!b.entry) return true;
+        b = BagItem();
+        destroyObj(bankItemGuid(slot - 39));
+        sendInventory();
+        saveSoon_ = true;
+        return true;
+    }
+    if (op == 0x111 && bag >= 63 && bag < 69 && slot < 36) {   // in a bank bag
+        BagItem& b = pr.bankBagItems[(size_t)((bag - 63) * 36 + slot)];
+        if (!b.entry) return true;
+        b = BagItem();
+        destroyObj(bankBagItemGuid(bag - 63, slot));
+        sendInventory();
+        saveSoon_ = true;
+        return true;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------- WoWVita: bags
@@ -1941,6 +2076,7 @@ void OfflineSession::update(uint32_t nowMs) {
             default:
                 if (handleTaxi(op, p.second, nowMs)) break;   // WoWVita: flight masters
                 if (handleBank(op, p.second, nowMs)) break;   // WoWVita: the bank
+                if (handleInventory(op, p.second, nowMs)) break;   // WoWVita: unequip, bags, destroy
                 if (handleRepair(op, p.second, nowMs)) break;   // WoWVita: repairs
                 if (handleMail(op, p.second, nowMs)) break;   // WoWVita: mailboxes
                 if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone

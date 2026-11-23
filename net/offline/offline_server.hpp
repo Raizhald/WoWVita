@@ -222,6 +222,11 @@ private:
     void bankFields(std::vector<std::pair<uint16_t, uint32_t>>& self, std::vector<std::pair<uint64_t, BagItem>>& items) const;
     void bankChanged(const std::vector<int>& bankSlots, int bagFrom, uint8_t bagBefore);
     static uint64_t bankItemGuid(int slot);
+    static uint64_t bankBagGuid(int k);                 // WoWVita: the bank's bags
+    static uint64_t bankBagItemGuid(int k, int slot);
+    uint8_t bankBagSize(int k) const;
+    void bagChanged(int from, uint8_t before);          // WoWVita: backpack / bag objects from 'from' come again
+    bool handleInventory(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool mailboxNear(uint64_t box) const;
     OfflineMail* mailById(uint32_t id);
     void mailExpire();

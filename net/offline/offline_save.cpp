@@ -156,6 +156,20 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         payload.cstr(m.subject); payload.cstr(m.body);
         payload.u32(m.item); payload.u32(m.itemCount); payload.u32(m.money); payload.u32(m.flags); payload.u32(m.sentTime);
     }
+    // WoWVita: the bank's bags
+    payload.u32(0x31424B42u);   // "BKB1"
+    for (const CharacterProfile& c : d.roster) {
+        payload.u8(c.bankBagSlots);
+        for (uint32_t b : c.bankBags) payload.u32(b);
+        uint16_t n = 0;
+        for (const BagItem& b : c.bankBagItems) n += b.entry != 0;
+        payload.u16(n);
+        for (size_t i = 0; i < c.bankBagItems.size(); ++i) {
+            const BagItem& b = c.bankBagItems[i];
+            if (!b.entry) continue;
+            payload.u16((uint16_t)i); payload.u32(b.entry); payload.u16(b.count); payload.u16(b.lost);
+        }
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -341,6 +355,26 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                 m.item = p.u32(); m.itemCount = p.u32(); m.money = p.u32(); m.flags = p.u32(); m.sentTime = p.u32();
                 if (!p.bad) d.mails.push_back(std::move(m));
             }
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the bank's bags
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31424B42u) {
+            for (CharacterProfile& c : d.roster) {
+                c.bankBagSlots = std::min<uint8_t>(6, p.u8());
+                for (uint32_t& b : c.bankBags) b = p.u32();
+                const uint16_t n = p.u16();
+                if (n > c.bankBagItems.size()) { err = "malformed bank bags"; return false; }
+                for (uint16_t k = 0; k < n && !p.bad; ++k) {
+                    const uint16_t i = p.u16();
+                    BagItem b;
+                    b.entry = p.u32(); b.count = p.u16(); b.lost = p.u16();
+                    if (i < c.bankBagItems.size()) { b.slot = (uint8_t)(i % 36); c.bankBagItems[i] = b; }
+                }
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
         }
     }
     if (p.bad) { err = "malformed save payload"; return false; }

@@ -482,6 +482,8 @@ uint32_t World::cooldownLeft(const Entity& e, uint32_t spell, uint32_t nowMs) co
 bool World::knowsSpell(const Entity& e, uint32_t spell) const {
     for (uint8_t i = 0; i < e.spellCount; ++i)
         if (e.spells[i] == spell) return true;
+    if (e.self)   // WoWVita: the spell book
+        for (uint32_t s : profiles_[0].book) if (s == spell) return true;
     return false;
 }
 
@@ -491,17 +493,36 @@ bool World::hasAura(const Entity& e, uint32_t spell) const {
     return false;
 }
 
-void World::addAura(Entity& e, const Aura& a) {
+void World::addAura(Entity& e, const Aura& a0) {
+    Aura a = a0;
+    if (a.kind == (uint8_t)SpellKind::Buff && !a.type) a.positive = true;
     for (uint8_t i = 0; i < e.auraCount; ++i)
-        if (e.auras[i].spell == a.spell) {
+        if (e.auras[i].spell == a.spell && (e.auras[i].caster == a.caster || a.positive) && e.auras[i].effIndex == a.effIndex) {
+            a.slot = e.auras[i].slot;   // WoWVita: renewed in its slot
             e.auras[i] = a;
-            emit(SimEvent::AuraApplied, e.guid, a.caster, a.spell, (int32_t)(a.endMs - now_), a.school, i);
+            emit(SimEvent::AuraApplied, e.guid, a.caster, a.spell, (int32_t)(a.endMs - now_), a.school, (uint8_t)std::max<int8_t>(0, a.slot));
             return;
         }
-    if (e.auraCount >= kMaxAuras) e.auraCount = kMaxAuras - 1;   // replace the last one
-    const uint8_t slot = e.auraCount;
+    if (e.auraCount >= kMaxAuras) removeAura(e, 0);   // the oldest goes
+    // WoWVita: a client slot of its own while it lasts (buffs 0..31, debuffs 32..47); the other effects of the same
+    // spell share it (one icon)
+    a.slot = -1;
+    for (uint8_t i = 0; i < e.auraCount; ++i)
+        if (e.auras[i].spell == a.spell && e.auras[i].caster == a.caster) a.slot = e.auras[i].slot;
+    const bool shared = a.slot >= 0;
+    if (!shared) a.slot = freeAuraSlot(e, a.positive);
     e.auras[e.auraCount++] = a;
-    emit(SimEvent::AuraApplied, e.guid, a.caster, a.spell, (int32_t)(a.endMs - now_), a.school, slot);
+    if (!shared && a.slot >= 0)
+        emit(SimEvent::AuraApplied, e.guid, a.caster, a.spell, a.endMs ? (int32_t)(a.endMs - now_) : -1, a.school, (uint8_t)a.slot);
+}
+
+int8_t World::freeAuraSlot(const Entity& e, bool positive) const {
+    for (int s = positive ? 0 : 32; s < (positive ? 32 : 48); ++s) {
+        bool taken = false;
+        for (uint8_t i = 0; i < e.auraCount && !taken; ++i) taken = e.auras[i].slot == s;
+        if (!taken) return (int8_t)s;
+    }
+    return -1;
 }
 
 void World::addTimedAura(Entity& e, uint32_t spell, uint32_t durationMs) {
@@ -515,13 +536,18 @@ void World::addTimedAura(Entity& e, uint32_t spell, uint32_t durationMs) {
 
 void World::removeAura(Entity& e, int index) {
     if (index < 0 || index >= e.auraCount) return;
-    emit(SimEvent::AuraRemoved, e.guid, 0, e.auras[index].spell, index);
+    const Aura gone = e.auras[index];
     for (int i = index; i + 1 < e.auraCount; ++i) e.auras[i] = e.auras[i + 1];
     --e.auraCount;
+    if (gone.type == 36 && e.form == (uint8_t)gone.misc) e.form = 0;   // WoWVita: out of the stance / form
+    bool still = false;   // WoWVita: the slot empties when the spell's last effect goes
+    for (uint8_t i = 0; i < e.auraCount; ++i) still = still || (e.auras[i].slot == gone.slot && gone.slot >= 0);
+    if (!still && gone.slot >= 0) emit(SimEvent::AuraRemoved, e.guid, 0, gone.spell, gone.slot);
 }
 
 bool World::tryCast(Entity& actor, uint32_t spellId, uint64_t targetGuid, uint32_t nowMs) {
     if (!data_ || !actor.alive()) return false;
+    if (spellEngine(actor, spellId)) return castX(actor, spellId, targetGuid, nowMs);   // WoWVita: class spells
     const SpellDef* s = data_->spell(spellId);
     if (!s) return false;
     if (actor.castSpell) { emit(SimEvent::CastFailed, actor.guid, 0, spellId, 0, 0, 1); return false; }
@@ -616,6 +642,7 @@ bool World::tryCast(Entity& actor, uint32_t spellId, uint64_t targetGuid, uint32
 
 void World::cancelCast(Entity& e, uint8_t reason, uint32_t nowMs) {
     if (!e.castSpell) return;
+    if (e.channeling) endChannel(e, nowMs);   // WoWVita: a channel broken
     emit(SimEvent::CastFailed, e.guid, e.castTarget, e.castSpell, reason, 0, 0);
     e.castSpell = 0;
     e.castEndMs = e.castStartMs = 0;
@@ -725,12 +752,22 @@ void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell
     int32_t dmg = amount;
     // WoWVita: resurrection sickness - the original takes 75% of the stats; offline it takes 75% of the damage done
     if (src.self && hasAura(src, kResurrectionSickness)) dmg = std::max<int32_t>(1, dmg / 4);
-    if (dst.armor > 0 && school == 0) dmg = dmg - dmg * (int32_t)dst.armor / (int32_t)(dst.armor + 400);
+    {   // WoWVita: aura armour, damage done / taken %, absorb shields
+        const int32_t armor = std::max<int32_t>(0, (int32_t)dst.armor + auraSum(dst, 22, 1));
+        if (armor > 0 && school == 0) dmg = dmg - dmg * armor / (armor + 400);
+        const int32_t pct = 100 + auraSum(src, 79, 1 << school) + auraSum(dst, 87, 1 << school);
+        if (pct != 100) dmg = dmg * std::max(0, pct) / 100;
+        if (dmg < 1) dmg = 1;
+        const int32_t left = absorb(dst, dmg, school);
+        if (left <= 0) { emit(SimEvent::Damage, src.guid, dst.guid, spell, 0, school, 4); return; }   // (absorbed)
+        dmg = left;
+    }
     if (dmg < 1) dmg = 1;
     dst.hp -= dmg;
     dst.lastDamageMs = nowMs;
     dst.incomingDamage = std::min<int32_t>(dst.incomingDamage + dmg, 100000);
-    if (dst.powerType == 1 && dst.alive())   // rage from being hit
+    if (dst.self) gainRage(dst, dmg, false);   // WoWVita
+    else if (dst.powerType == 1 && dst.alive())   // rage from being hit
         dst.power = std::min<int32_t>(dst.power + 5, (int32_t)dst.maxPower);
     emit(SimEvent::Damage, src.guid, dst.guid, spell, dmg, school);
     if (dst.hp <= 0) { dst.hp = 0; onDeath(dst, src, nowMs); return; }
@@ -774,7 +811,20 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
         emit(SimEvent::Damage, a.guid, b.guid, 0, 0, 0, 1);   // miss
         return;
     }
+    // WoWVita: a queued "on next swing" spell (Heroic Strike) is this swing, if there is the rage for it
+    if (a.nextSwingSpell && spellEngine(a, a.nextSwingSpell)) {
+        const uint32_t id = a.nextSwingSpell;
+        a.nextSwingSpell = 0;
+        const SpellX& sx = *data_->sx(id);
+        const uint32_t cost = powerCostX(a, sx);
+        if (a.power >= (int32_t)cost) {
+            a.castTriggered = false;
+            finishX(a, sx, b.guid, nowMs);
+            return;
+        }
+    }
     int32_t dmg = rng_.range((int32_t)a.dmgMin, (int32_t)a.dmgMax);
+    if (const int32_t ap = auraSum(a, 99)) dmg += ap * (int32_t)a.attackMs / 14000;   // WoWVita: attack power auras
     // WoWVita: wear (vMaNGOS DurabilityLossChance.Damage 0.5 %): the weapon that hits, a piece of armour that is hit
     if (a.self && rng_.below(1000) < 5) wearSlot(15, 1);
     if (b.self && rng_.below(1000) < 5) {
@@ -784,8 +834,16 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
     const bool crit = (int32_t)rng_.below(100) < kCritChancePct;
     if (crit) dmg *= 2;
     applyDamage(a, b, dmg, 0, 0, nowMs);
-    if (a.powerType == 1 && a.alive())   // rage from landing a swing
+    if (a.self) gainRage(a, dmg, true);   // WoWVita: as the original (Player::RewardRage)
+    else if (a.powerType == 1 && a.alive())   // rage from landing a swing
         a.power = std::min<int32_t>(a.power + 12, (int32_t)a.maxPower);
+    // WoWVita: damage shields (Thorns) strike back
+    if (b.alive() && a.alive())
+        for (uint8_t i = 0; i < b.auraCount; ++i)
+            if (b.auras[i].type == 15 && b.auras[i].amount > 0) {
+                applyDamage(b, a, b.auras[i].amount, b.auras[i].spell, b.auras[i].school, nowMs);
+                if (!a.alive()) break;
+            }
     if (crit) {
         // Mark the last damage event as a critical for the HUD.
         for (int i = eventCount_ - 1; i >= 0; --i)
@@ -1250,6 +1308,12 @@ void World::tickAuras(Entity& e, uint32_t nowMs) {
     for (int i = 0; i < e.auraCount;) {
         Aura& a = e.auras[i];
         if (a.endMs && nowMs >= a.endMs) { removeAura(e, i); continue; }
+        if (a.type) {   // WoWVita: a spell_template aura
+            tickAuraX(e, a, nowMs);
+            if (!e.used || !e.alive()) return;
+            ++i;
+            continue;
+        }
         if (a.kind == (uint8_t)SpellKind::Dot && a.nextTickMs && nowMs >= a.nextTickMs) {
             a.nextTickMs = nowMs + 2000;
             const SpellDef* s = data_ ? data_->spell(a.spell) : nullptr;
@@ -1407,7 +1471,16 @@ void World::tickEntity(Entity& e, uint32_t nowMs, bool isPlayer) {
         return;
     }
     tickRegen(e, nowMs);
-    if (e.castSpell && nowMs >= e.castEndMs) finishCast(e, nowMs);
+    if (e.castSpell && nowMs >= e.castEndMs) {
+        if (e.channeling) { endChannel(e, nowMs); e.castSpell = 0; e.castEndMs = e.castStartMs = 0; }   // WoWVita
+        else if (spellEngine(e, e.castSpell)) {
+            const uint32_t id = e.castSpell;
+            const uint64_t tg = e.castTarget;
+            e.castSpell = 0;
+            e.castEndMs = e.castStartMs = 0;
+            finishX(e, *data_->sx(id), tg, nowMs);
+        } else finishCast(e, nowMs);
+    }
     if (e.objType == 3) {
         tickCreature(e, nowMs);
     } else if (e.bot) {
@@ -1434,6 +1507,7 @@ void World::step(uint32_t nowMs) {
         ++tick_;
         // Deterministic pool order: index order.
         for (Entity& e : pool_) tickEntity(e, now_, e.self);
+        tickAreas(now_);   // WoWVita: Blizzard, Consecration
         updateThreatDecay(now_);
         ++steps;
     }

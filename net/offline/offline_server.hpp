@@ -108,6 +108,18 @@ private:
     void sendChat(uint8_t type, uint64_t sender, const std::string& text, const std::string& name = std::string());
     void sendEmote(uint64_t guid, uint32_t emote);   // WoWVita
     void giveStartOutfit(CharacterProfile& p);        // WoWVita
+    // WoWVita: the spell book and the class trainers (offline_class.cpp)
+    bool knows(uint32_t spell) const;
+    void setupBook();
+    void startStance(uint32_t nowMs);
+    void sendSpellBook();
+    bool trainerOf(uint64_t npc, const Trainer** t, bool* near) const;
+    void sendTrainerList(uint64_t npc, uint32_t nowMs);
+    bool trainerHello(uint64_t npc, uint32_t nowMs);
+    void learn(uint32_t spell, uint32_t nowMs);
+    bool handleClassSpells(uint16_t op, const Bytes& data, uint32_t nowMs);
+    void sendCharge(const Entity& p, uint32_t nowMs);
+    static constexpr uint32_t kGossipTrain = 4;   // "I would like to train."
     void sendCreatureQuery(uint32_t entry);
     void sendPlayerName(uint64_t guid);
     void sendItemQuery(uint32_t entry);

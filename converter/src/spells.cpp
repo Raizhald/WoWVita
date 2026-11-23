@@ -480,9 +480,18 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
         if (ct.load(data, "SpellCastTimes.dbc"))
             for (uint32_t r = 0; r < ct.records; ++r, ++rows)
                 out += "@idx\tcast\t" + std::to_string(ct.u32(r, 0)) + "\t" + std::to_string((int32_t)ct.u32(r, 1)) + "\n";
-        if (du.load(data, "SpellDuration.dbc") && du.fields > 1)
+        if (du.load(data, "SpellDuration.dbc") && du.fields > 1)   // ID, Duration, DurationPerLevel, MaxDuration
             for (uint32_t r = 0; r < du.records; ++r, ++rows)
-                out += "@idx\tdur\t" + std::to_string(du.u32(r, 0)) + "\t" + std::to_string((int32_t)du.u32(r, 1)) + "\n";
+                out += "@idx\tdur\t" + std::to_string(du.u32(r, 0)) + "\t" + std::to_string((int32_t)du.u32(r, 1)) + "\t" +
+                       std::to_string(du.fields > 2 ? (int32_t)du.u32(r, 2) : 0) + "\t" +
+                       std::to_string(du.fields > 3 ? (int32_t)du.u32(r, 3) : (int32_t)du.u32(r, 1)) + "\n";
+        Table rd;   // SpellRadius.dbc: ID, Radius, RadiusPerLevel, RadiusMax
+        if (rd.load(data, "SpellRadius.dbc") && rd.fields > 1)
+            for (uint32_t r = 0; r < rd.records; ++r, ++rows) {
+                char line[96];
+                std::snprintf(line, sizeof line, "@idx\tradius\t%u\t%.2f\n", rd.u32(r, 0), rd.f32(r, 1));
+                out += line;
+            }
         if (rg.load(data, "SpellRange.dbc") && rg.fields > 2)
             for (uint32_t r = 0; r < rg.records; ++r, ++rows) {
                 char line[96];

@@ -518,6 +518,77 @@ bool readSpellControl(Bin& b, WorldData& w) {   // WoWVita "SPFX"
     return !b.bad;
 }
 
+bool readSpellX(Bin& b, WorldData& w) {   // WoWVita "SPX2"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.spellx.clear();
+    w.spellx.reserve(n);
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        SpellX s;
+        s.id = b.u32(); s.name = b.str(); s.rank = b.str();
+        s.school = b.u8(); s.castMs = b.u32();
+        s.cooldownMs = b.u32(); s.catCooldownMs = b.u32(); s.category = b.u32();
+        s.gcdMs = b.u32(); s.gcdCategory = b.u32();
+        s.durBase = b.i32(); s.durPerLevel = b.i32(); s.durMax = b.i32();
+        s.rangeMin = b.f32(); s.rangeMax = b.f32();
+        s.powerType = b.u8(); s.manaCost = b.u32(); s.manaPerLevel = b.u32(); s.manaPerSecond = b.u32(); s.manaPct = b.u8();
+        s.spellLevel = b.u16(); s.baseLevel = b.u16(); s.maxLevel = b.u16();
+        uint32_t* u[] = {&s.attr, &s.attrEx, &s.attrEx2, &s.attrEx3, &s.stances, &s.stancesNot, &s.targets,
+                         &s.interruptFlags, &s.auraInterruptFlags, &s.channelInterruptFlags, &s.procFlags, &s.procCharges,
+                         &s.mechanic, &s.casterAuraState, &s.targetAuraState, &s.targetCreatureType, &s.family, &s.focus};
+        for (uint32_t* p : u) *p = b.u32();
+        const uint32_t lo = b.u32(), hi = b.u32();
+        s.familyFlags = (uint64_t)lo | ((uint64_t)hi << 32);
+        s.procChance = b.u8(); s.stackAmount = b.u16(); s.dmgClass = b.u8(); s.prevention = b.u8(); s.speed = b.f32();
+        s.equipClass = b.i32(); s.equipSubMask = b.u32();
+        const uint8_t nr = b.u8();
+        for (uint8_t k = 0; k < nr && !b.bad; ++k) { const uint32_t it = b.u32(); const uint8_t c = b.u8(); s.reagents.emplace_back(it, c); }
+        s.totem[0] = b.u32(); s.totem[1] = b.u32();
+        for (SpellEffectX& e : s.eff) {
+            e.effect = b.u8(); e.aura = b.u8(); e.targetA = b.u8(); e.targetB = b.u8();
+            e.base = b.i32(); e.die = b.i32(); e.baseDice = b.i32(); e.perLevel = b.f32(); e.dicePerLevel = b.f32();
+            e.amplitude = b.i32(); e.radius = b.f32(); e.misc = b.i32(); e.trigger = b.u32(); e.chain = b.u8();
+            e.multiple = b.f32(); e.itemType = b.u32(); e.mechanic = b.u8(); e.perCombo = b.f32(); e.dmgMult = b.f32();
+        }
+        if (!b.bad) w.spellx[s.id] = std::move(s);
+    }
+    return !b.bad;
+}
+
+bool readTrainers(Bin& b, WorldData& w) {   // WoWVita "TRNR"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.trainers.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t entry = b.u32();
+        Trainer t;
+        t.cls = b.u8();
+        const uint16_t k = b.u16();
+        for (uint16_t j = 0; j < k && !b.bad; ++j) {
+            TrainerSpell s;
+            s.teach = b.u32(); s.learn = b.u32(); s.cost = b.u32(); s.level = b.u8(); s.skill = b.u16(); s.skillValue = b.u16();
+            s.reqSpell = b.u32();
+            t.spells.push_back(s);
+        }
+        w.trainers[entry] = std::move(t);
+    }
+    return !b.bad;
+}
+
+bool readCreateSpells(Bin& b, WorldData& w) {   // WoWVita "CRSP"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 4096) return false;
+    w.createSpells.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t race = b.u8(), cls = b.u8();
+        const uint16_t k = b.u16();
+        std::vector<uint32_t> v;
+        for (uint16_t j = 0; j < k && !b.bad; ++j) v.push_back(b.u32());
+        w.createSpells[race | (cls << 8)] = std::move(v);
+    }
+    return !b.bad;
+}
+
 bool readOutfits(Bin& b, WorldData& w) {   // WoWVita "OUTF"
     const uint32_t n = b.u32();
     if (b.bad || n > 4096) return false;
@@ -811,6 +882,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("SPFX"): ok = readSpellControl(b, out); break;
             case fourcc("POOL"): ok = readPools(b, out); break;
             case fourcc("OUTF"): ok = readOutfits(b, out); break;
+            case fourcc("SPX2"): ok = readSpellX(b, out); break;
+            case fourcc("TRNR"): ok = readTrainers(b, out); break;
+            case fourcc("CRSP"): ok = readCreateSpells(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

@@ -493,6 +493,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     lastArea_ = 0;
     eat_ = Eating();
     giveStartOutfit(save_.player);   // WoWVita: what a new character starts with (CharStartOutfit.dbc)
+    setupBook();                     // WoWVita: the spell book
     // WoWVita: every character carries a Hearthstone (an older save gets one)
     if (data_->item(kHearthstoneItem)) {
         CharacterProfile& pr = save_.player;
@@ -508,6 +509,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     incoming_.clear();
     outgoing_.clear();
     world_.reset(nowMs, save_.seed, save_.player, save_.bots, partyEnabled_);
+    startStance(nowMs);   // WoWVita: a warrior in Battle Stance
     if (Entity* p = world_.player(); p && save_.player.hearthCdSec && p->cooldownCount < kMaxCooldowns) {   // WoWVita
         const uint32_t left = std::min<uint32_t>(save_.player.hearthCdSec, 3600u) * 1000u;
         p->cooldowns[p->cooldownCount++] = Cooldown{kHearthstoneSpell, nowMs + left, 3600000u};
@@ -993,6 +995,7 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
             if (op != CMSG_LIST_INVENTORY && lifeHello(npc, near, nowMs)) return;   // WoWVita: a spirit healer
             if (op != CMSG_LIST_INVENTORY && taxiHello(npc, near, false, nowMs)) return;   // WoWVita: a flight master
             if (op != CMSG_LIST_INVENTORY && bankHello(npc, near, nowMs)) return;   // WoWVita: a banker
+            if (op != CMSG_LIST_INVENTORY && questMenu(v->entry, false).empty() && trainerHello(npc, nowMs)) return;   // WoWVita
             // WoWVita: a quest giver shows its quests (and its goods as a gossip option)
             if (op != CMSG_LIST_INVENTORY && near && questHello(npc, op, isVendor)) return;
             if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
@@ -1252,7 +1255,7 @@ void OfflineSession::sendCastFailed(const Entity& caster, uint32_t spell, uint8_
         case 4: out = 77; break;   // not enough power
         case 5: case 6: case 8: case 10: out = 10; break;   // bad targets
         case 7: out = 4; break;    // out of range
-        default: out = 0; break;   // generic failure
+        default: out = reason > 11 ? reason : 0; break;   // WoWVita: the class spell engine gives the 1.12 code itself
     }
     if (reason == 35) {   // interrupted
         Writer f;
@@ -1358,25 +1361,28 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
     }
     sendUpdateObject(u.finish());
 
-    // ---- spell book and action bar
-    {
-        const CharacterProfile& pr = world_.playerProfile();
-        Writer w;
-        w.u8(0);
-        w.u16(pr.spellCount);
-        for (uint8_t i = 0; i < pr.spellCount; ++i) { w.u16((uint16_t)pr.spells[i]); w.u16(i); }
-        w.u16(0);   // no cooldowns
-        send(SMSG_INITIAL_SPELLS, w.b);
-    }
-    {
-        Writer w;
-        uint32_t bar[120] = {0};
-        bar[0] = 6603;
-        const CharacterProfile& pr = world_.playerProfile();
-        for (uint8_t i = 0; i < pr.spellCount && i + 1 < 120; ++i)
-            if (pr.spells[i] != 6603) bar[i + 1] = pr.spells[i];
-        for (int i = 0; i < 120; ++i) w.u32(bar[i]);
-        send(SMSG_ACTION_BUTTONS, w.b);
+    // ---- spell book and action bar (WoWVita: the book of the class spells, offline_class.cpp)
+    if (!world_.playerProfile().book.empty()) sendSpellBook();
+    else {
+        {
+            const CharacterProfile& pr = world_.playerProfile();
+            Writer w;
+            w.u8(0);
+            w.u16(pr.spellCount);
+            for (uint8_t i = 0; i < pr.spellCount; ++i) { w.u16((uint16_t)pr.spells[i]); w.u16(i); }
+            w.u16(0);   // no cooldowns
+            send(SMSG_INITIAL_SPELLS, w.b);
+        }
+        {
+            Writer w;
+            uint32_t bar[120] = {0};
+            bar[0] = 6603;
+            const CharacterProfile& pr = world_.playerProfile();
+            for (uint8_t i = 0; i < pr.spellCount && i + 1 < 120; ++i)
+                if (pr.spells[i] != 6603) bar[i + 1] = pr.spells[i];
+            for (int i = 0; i < 120; ++i) w.u32(bar[i]);
+            send(SMSG_ACTION_BUTTONS, w.b);
+        }
     }
 
     sendInventory();
@@ -1444,7 +1450,15 @@ void OfflineSession::handleCast(const Bytes& data, uint32_t nowMs) {
     const uint32_t spell = r.u32();
     const uint16_t mask = r.u16();
     uint64_t target = 0;
-    if (!r.bad && (mask & 0x0002)) target = r.packedGuid();
+    // WoWVita: SpellCastTargets::read (1.12): a unit / corpse guid, an item guid, the source and the destination point
+    if (!r.bad && (mask & (0x0002 | 0x0800 | 0x8000))) target = r.packedGuid();
+    if (!r.bad && (mask & (0x0010 | 0x0100))) r.packedGuid();
+    if (!r.bad && (mask & 0x0020)) { r.f32(); r.f32(); r.f32(); }
+    p->castHasDest = false;
+    if (!r.bad && (mask & 0x0040)) {
+        p->castDestX = r.f32(); p->castDestY = r.f32(); p->castDestZ = r.f32();
+        p->castHasDest = !r.bad;
+    }
     if (r.bad) return;
     if (spell == 6603) return;   // Attack is a toggle, never a cast (the client enforces this too)
     // No unit target in the packet means: self / no explicit target. Ground-target spells are not
@@ -1859,6 +1873,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 break;
             case SimEvent::Message:
                 if (e.text[0]) sendChat(0x0A, 0, std::string((const char*)e.text));
+                else if (e.value == 1 && e.spell && a && a->self) sendCharge(*a, nowMs);   // WoWVita: Charge
                 break;
             case SimEvent::CreatureText: {   // WoWVita: EventAI says, yells or emotes (broadcast_text)
                 const Entity* me = world_.player();
@@ -2083,6 +2098,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 if (handleTaxi(op, p.second, nowMs)) break;   // WoWVita: flight masters
                 if (handleBank(op, p.second, nowMs)) break;   // WoWVita: the bank
                 if (handleInventory(op, p.second, nowMs)) break;   // WoWVita: unequip, bags, destroy
+                if (handleClassSpells(op, p.second, nowMs)) break;   // WoWVita: trainers, action buttons, auras
                 if (handleRepair(op, p.second, nowMs)) break;   // WoWVita: repairs
                 if (handleMail(op, p.second, nowMs)) break;   // WoWVita: mailboxes
                 if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone

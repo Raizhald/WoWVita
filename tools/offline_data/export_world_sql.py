@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -37,7 +37,8 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "spell_template", "exploration_basexp", "areatrigger_involvedrelation",
           "creature_movement", "creature_movement_template", "creature_ai_scripts", "broadcast_text", "creature_ai_texts",
           "spawn_group", "spawn_group_spawn", "spawn_group_entry", "pool_creature", "pool_creature_template", "pool_template",
-          "creature_linking", "creature_linking_template"}
+          "creature_linking", "creature_linking_template",
+          "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -268,6 +269,10 @@ def load_spell_info(path):
                     info["idx_cast"][int(p[2])] = int(p[3])
                 elif p[0] == "@idx" and p[1] == "dur":
                     info["idx_dur"][int(p[2])] = int(p[3])
+                    info.setdefault("idx_dur_full", {})[int(p[2])] = (int(p[3]), int(p[4]) if len(p) > 4 else 0,
+                                                                      int(p[5]) if len(p) > 5 else int(p[3]))
+                elif p[0] == "@idx" and p[1] == "radius":
+                    info.setdefault("idx_radius", {})[int(p[2])] = float(p[3])
                 elif p[0] == "@idx" and p[1] == "range":
                     info["idx_range"][int(p[2])] = (float(p[3]), float(p[4]))
             except (IndexError, ValueError):
@@ -591,6 +596,148 @@ def group_sections(tables, templates, spawn_rows, spawn_moves, map_id, sec, repo
     sec["LINK"] = lb.b
     report["counts_groups"] = dict(pools=len(out), pooled_spawns=sum(len(m) for _, m in out), links=len(keep),
                                    followers=sum(1 for k in keep if k[2] & 0x200))
+
+
+def full_spell(s, info):
+    """WoWVita 'SPX2': a spell of spell_template with what the offline spell engine (net/offline/offline_spells.cpp)
+    reads - its costs, times, range, requirements and its three effects; the index columns resolved with the
+    converter's @idx tables (SpellCastTimes, SpellDuration, SpellRange, SpellRadius)."""
+    b = Bin()
+    sid = int(num(g(s, "Id")))
+    ci, di, ri = int(num(g(s, "CastingTimeIndex"))), int(num(g(s, "DurationIndex"))), int(num(g(s, "RangeIndex")))
+    cast = info["cast"].get(sid, info["idx_cast"].get(ci, 0))
+    dur = info.get("idx_dur_full", {}).get(di, (0, 0, 0))
+    rng = info["range"].get(sid) or info["idx_range"].get(ri) or (0.0, 0.0)
+    rad = info.get("idx_radius", {})
+    b.u32(sid); b.s(str(g(s, "SpellName", default=""))[:80]); b.s(str(g(s, "Rank1", default=""))[:40])
+    b.u8(int(num(g(s, "School")))); b.u32(max(0, cast))
+    b.u32(int(num(g(s, "RecoveryTime")))); b.u32(int(num(g(s, "CategoryRecoveryTime")))); b.u32(int(num(g(s, "Category"))))
+    b.u32(int(num(g(s, "StartRecoveryTime")))); b.u32(int(num(g(s, "StartRecoveryCategory"))))
+    b.i32(dur[0]); b.i32(dur[1]); b.i32(dur[2])
+    b.f32(rng[0]); b.f32(rng[1])
+    b.u8(int(num(g(s, "PowerType"))) & 0xFF); b.u32(int(num(g(s, "ManaCost")))); b.u32(int(num(g(s, "ManaCostPerlevel"))))
+    b.u32(int(num(g(s, "ManaPerSecond")))); b.u8(int(num(g(s, "ManaCostPercentage"))))
+    b.u16(int(num(g(s, "SpellLevel")))); b.u16(int(num(g(s, "BaseLevel")))); b.u16(int(num(g(s, "MaxLevel"))))
+    for c in ("Attributes", "AttributesEx", "AttributesEx2", "AttributesEx3", "Stances", "StancesNot", "Targets",
+              "InterruptFlags", "AuraInterruptFlags", "ChannelInterruptFlags", "ProcFlags", "ProcCharges", "Mechanic",
+              "CasterAuraState", "TargetAuraState", "TargetCreatureType", "SpellFamilyName", "RequiresSpellFocus"):
+        b.u32(int(num(g(s, c))) & 0xFFFFFFFF)
+    ff = int(num(g(s, "SpellFamilyFlags")))
+    b.u32(ff & 0xFFFFFFFF); b.u32((ff >> 32) & 0xFFFFFFFF)
+    b.u8(int(num(g(s, "ProcChance")))); b.u16(int(num(g(s, "StackAmount")))); b.u8(int(num(g(s, "DmgClass"))))
+    b.u8(int(num(g(s, "PreventionType")))); b.f32(num(g(s, "Speed")))
+    b.i32(int(num(g(s, "EquippedItemClass", default=-1)))); b.u32(int(num(g(s, "EquippedItemSubClassMask"))) & 0xFFFFFFFF)
+    reag = [(int(num(g(s, f"Reagent{k}"))), int(num(g(s, f"ReagentCount{k}")))) for k in range(1, 9)]
+    reag = [r for r in reag if r[0] > 0 and r[1] > 0]
+    b.u8(len(reag))
+    for it, n in reag:
+        b.u32(it); b.u8(min(n, 255))
+    b.u32(int(num(g(s, "Totem1")))); b.u32(int(num(g(s, "Totem2"))))
+    for k in (1, 2, 3):
+        b.u8(int(num(g(s, f"Effect{k}")))); b.u8(int(num(g(s, f"EffectApplyAuraName{k}"))))
+        b.u8(int(num(g(s, f"EffectImplicitTargetA{k}")))); b.u8(int(num(g(s, f"EffectImplicitTargetB{k}"))))
+        b.i32(int(num(g(s, f"EffectBasePoints{k}")))); b.i32(int(num(g(s, f"EffectDieSides{k}"))))
+        b.i32(int(num(g(s, f"EffectBaseDice{k}")))); b.f32(num(g(s, f"EffectRealPointsPerLevel{k}")))
+        b.f32(num(g(s, f"EffectDicePerLevel{k}"))); b.i32(int(num(g(s, f"EffectAmplitude{k}"))))
+        b.f32(rad.get(int(num(g(s, f"EffectRadiusIndex{k}"))), 0.0)); b.i32(int(num(g(s, f"EffectMiscValue{k}"))))
+        b.u32(int(num(g(s, f"EffectTriggerSpell{k}")))); b.u8(int(num(g(s, f"EffectChainTarget{k}"))))
+        b.f32(num(g(s, f"EffectMultipleValue{k}"))); b.u32(int(num(g(s, f"EffectItemType{k}"))))
+        b.u8(int(num(g(s, f"EffectMechanic{k}")))); b.f32(num(g(s, f"EffectPointsPerComboPoint{k}")))
+        b.f32(num(g(s, f"DmgMultiplier{k}", default=1.0)) or 1.0)
+    return b.b
+
+
+def class_spell_sections(tables, templates, used, item_needed, sec, report, info):
+    """'SPX2' (every spell the classes can have, with what they trigger), 'TRNR' (the class trainers on the map:
+    npc_trainer / npc_trainer_template - the teaching spell, the spell it teaches, cost, level, the rank before it),
+    'CRSP' (playercreateinfo_spell: what each race and class starts knowing)."""
+    spells = {int(num(g(r, "Id"))): r for r in tables.get("spell_template", [])}
+    prev = {int(num(g(r, "spell_id"))): int(num(g(r, "prev_spell"))) for r in tables.get("spell_chain", [])}
+    by_entry = {}
+    for r in tables.get("npc_trainer", []):
+        by_entry.setdefault(int(num(g(r, "entry"))), []).append(r)
+    by_tmpl = {}
+    for r in tables.get("npc_trainer_template", []):
+        by_tmpl.setdefault(int(num(g(r, "entry"))), []).append(r)
+    want = set()
+
+    def teaches(sp):
+        r = spells.get(sp)
+        if not r:
+            return 0
+        for k in (1, 2, 3):
+            if int(num(g(r, f"Effect{k}"))) == 36:
+                return int(num(g(r, f"EffectTriggerSpell{k}")))
+        return 0
+    trainers = []
+    for e in used:
+        t = templates[e]
+        if int(num(g(t, "TrainerType"))) != 0 or not int(num(g(t, "TrainerClass"))):
+            continue
+        rows = by_entry.get(e, []) + by_tmpl.get(int(num(g(t, "TrainerTemplateId"))), [])
+        lst = []
+        for r in rows:
+            sp = int(num(g(r, "spell")))
+            learn = teaches(sp) or sp
+            if learn not in spells:
+                continue
+            req = int(num(g(r, "ReqAbility1"))) or prev.get(learn, 0)
+            lst.append((sp, learn, int(num(g(r, "spellcost"))), int(num(g(r, "reqlevel"))) or int(num(g(spells[learn], "SpellLevel"))),
+                        int(num(g(r, "reqskill"))), int(num(g(r, "reqskillvalue"))), req))
+            want.update((sp, learn))
+        if lst:
+            trainers.append((e, int(num(g(t, "TrainerClass"))), lst))
+    create = {}
+    for r in tables.get("playercreateinfo_spell", []):
+        sp = int(num(g(r, "Spell")))
+        if sp in spells:
+            create.setdefault((int(num(g(r, "race"))), int(num(g(r, "class")))), []).append(sp)
+            want.add(sp)
+    # what they trigger (and what that triggers)
+    for _ in range(3):
+        more = set()
+        for sp in want:
+            r = spells.get(sp)
+            if not r:
+                continue
+            for k in (1, 2, 3):
+                tr = int(num(g(r, f"EffectTriggerSpell{k}")))
+                if tr and tr in spells and tr not in want:
+                    more.add(tr)
+        if not more:
+            break
+        want |= more
+    xb = Bin()
+    ids = sorted(want & set(spells))
+    xb.u32(len(ids))
+    for sp in ids:
+        xb.b += full_spell(spells[sp], info)
+        r = spells[sp]
+        for k in range(1, 9):   # the reagents and conjured items must be items of the pack
+            it = int(num(g(r, f"Reagent{k}")))
+            if it > 0:
+                item_needed.add(it)
+        for k in (1, 2, 3):
+            if int(num(g(r, f"Effect{k}"))) == 24 and int(num(g(r, f"EffectItemType{k}"))):
+                item_needed.add(int(num(g(r, f"EffectItemType{k}"))))
+    sec["SPX2"] = xb.b
+    tb = Bin()
+    tb.u32(len(trainers))
+    for e, cls, lst in trainers:
+        tb.u32(e); tb.u8(cls); tb.u16(len(lst))
+        for (sp, learn, cost, lvl, sk, skv, req) in lst:
+            tb.u32(sp); tb.u32(learn); tb.u32(cost); tb.u8(min(lvl, 255)); tb.u16(sk); tb.u16(skv); tb.u32(req)
+    sec["TRNR"] = tb.b
+    cb = Bin()
+    cb.u32(len(create))
+    for (race, cls), lst in sorted(create.items()):
+        cb.u8(race); cb.u8(cls); cb.u16(len(lst))
+        for sp in lst:
+            cb.u32(sp)
+    sec["CRSP"] = cb.b
+    report["counts_class_spells"] = dict(spells=len(ids), trainers=len(trainers),
+                                         trainer_spells=sum(len(l) for _, _, l in trainers), create_lists=len(create),
+                                         radius_known=bool(info.get("idx_radius")))
 
 
 def sample_spell_ids(spel):
@@ -1007,6 +1154,8 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
             ob.u32(it)
     sec_extra["OUTF"] = ob.b
 
+    class_spell_sections(tables, templates, used, item_needed, sec_extra, report, spell_info or load_spell_info(None))
+
     # ---- items: what the loot and the companions need (the sample's item ids are in the DB too)
     for e in (25, 38, 2589, 750, 6948):   # (6948: the Hearthstone every character carries)
         item_needed.add(e)
@@ -1318,7 +1467,7 @@ def main():
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes): " +
           ", ".join(f"{k}={v}" for k, v in report["counts"].items()) +
           f"; {len(errs)} errors, {len(report['warn'])} warnings (see {args.out}.report.txt)")
-    for k in ("counts_movement", "counts_eventai", "counts_groups", "counts_outfits"):
+    for k in ("counts_movement", "counts_eventai", "counts_groups", "counts_outfits", "counts_class_spells"):
         if k in report:
             print(f"  {k[7:]}: {report[k]}")
     return 1 if errs else 0

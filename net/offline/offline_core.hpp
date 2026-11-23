@@ -34,7 +34,7 @@ constexpr uint32_t kSimStepMs = 50;          // fixed simulation tick (20 Hz), i
 constexpr int kMaxEntities = 160;            // player + 4 bots + the creatures around the player (WoWVita: spawn grid)
 constexpr int kMaxEvents = 512;              // up to 8 catch-up steps may be buffered before dispatch
 constexpr int kMaxThreat = 12;
-constexpr int kMaxAuras = 8;
+constexpr int kMaxAuras = 24;              // WoWVita: was 8 (a player keeps several buffs, a stance, debuffs)
 constexpr int kMaxCooldowns = 8;
 constexpr int kMaxLoot = 4;
 constexpr int kMaxParty = 4;
@@ -243,6 +243,51 @@ struct CreatureAi {
 // WoWVita "SPFX": what a spell's auras do to their target, for its duration
 enum class Control : uint8_t { Stun = 1, Root = 2, Slow = 3, Fear = 4, Silence = 5, Confuse = 6, Pacify = 7, PacifySilence = 8 };
 struct SpellControl { uint32_t durationMs = 0; std::vector<std::pair<uint8_t, int32_t>> effects; };   // (Control, value)
+// WoWVita "SPX2": a spell as spell_template has it (the class spells; net/offline/offline_spells.cpp runs them)
+struct SpellEffectX {
+    uint8_t effect = 0, aura = 0, targetA = 0, targetB = 0;
+    int32_t base = 0, die = 0, baseDice = 0;
+    float perLevel = 0, dicePerLevel = 0;
+    int32_t amplitude = 0;
+    float radius = 0;
+    int32_t misc = 0;
+    uint32_t trigger = 0;
+    uint8_t chain = 0;
+    float multiple = 0;
+    uint32_t itemType = 0;
+    uint8_t mechanic = 0;
+    float perCombo = 0, dmgMult = 1;
+};
+struct SpellX {
+    uint32_t id = 0;
+    std::string name, rank;
+    uint8_t school = 0;
+    uint32_t castMs = 0, cooldownMs = 0, catCooldownMs = 0, category = 0, gcdMs = 0, gcdCategory = 0;
+    int32_t durBase = 0, durPerLevel = 0, durMax = 0;
+    float rangeMin = 0, rangeMax = 0;
+    uint8_t powerType = 0;
+    uint32_t manaCost = 0, manaPerLevel = 0, manaPerSecond = 0;
+    uint8_t manaPct = 0;
+    uint16_t spellLevel = 0, baseLevel = 0, maxLevel = 0;
+    uint32_t attr = 0, attrEx = 0, attrEx2 = 0, attrEx3 = 0, stances = 0, stancesNot = 0, targets = 0;
+    uint32_t interruptFlags = 0, auraInterruptFlags = 0, channelInterruptFlags = 0, procFlags = 0, procCharges = 0;
+    uint32_t mechanic = 0, casterAuraState = 0, targetAuraState = 0, targetCreatureType = 0, family = 0, focus = 0;
+    uint64_t familyFlags = 0;
+    uint8_t procChance = 0;
+    uint16_t stackAmount = 0;
+    uint8_t dmgClass = 0, prevention = 0;
+    float speed = 0;
+    int32_t equipClass = -1;
+    uint32_t equipSubMask = 0;
+    std::vector<std::pair<uint32_t, uint8_t>> reagents;
+    uint32_t totem[2] = {0, 0};
+    SpellEffectX eff[3];
+    bool passive() const { return (attr & 0x40) != 0; }
+    bool channeled() const { return (attrEx & 0x44) != 0; }
+};
+struct TrainerSpell { uint32_t teach = 0, learn = 0, cost = 0; uint8_t level = 0; uint16_t skill = 0, skillValue = 0; uint32_t reqSpell = 0; };
+struct Trainer { uint8_t cls = 0; std::vector<TrainerSpell> spells; };
+
 struct SpawnPool { uint16_t limit = 1; std::vector<uint32_t> members; };   // WoWVita "POOL": only 'limit' up at a time
 struct SpawnLink { uint32_t master = 0; uint16_t flags = 0; };              // WoWVita "LINK": creature_linking
 struct AiText { uint8_t chatType = 0; uint32_t emote = 0; std::string text; };   // 0 say, 1 yell, 2/3 emote
@@ -297,6 +342,10 @@ struct WorldData {
     std::unordered_map<int32_t, AiText> aiTexts;                      // "AITX"
     std::unordered_map<uint32_t, SpellControl> spellControl;          // "SPFX"
     std::vector<SpawnPool> pools;                                     // "POOL"
+    std::unordered_map<uint32_t, SpellX> spellx;                      // "SPX2"
+    std::unordered_map<uint32_t, Trainer> trainers;                   // "TRNR": creature entry -> its class spells
+    std::unordered_map<uint32_t, std::vector<uint32_t>> createSpells; // "CRSP": race | class << 8 -> spells
+    const SpellX* sx(uint32_t id) const { auto it = spellx.find(id); return it == spellx.end() ? nullptr : &it->second; }
     std::unordered_map<uint32_t, std::vector<uint32_t>> outfits;      // "OUTF": race | class << 8 | sex << 16 -> items
     std::unordered_map<uint32_t, uint32_t> poolOf;                    // spawn index -> pools index
     std::unordered_map<uint32_t, SpawnLink> links;                    // "LINK": slave spawn -> its master
@@ -340,6 +389,13 @@ struct Aura {
     uint8_t kind = 0;                  // SpellKind
     uint8_t school = 0;
     uint8_t stacks = 1;
+    // WoWVita: a spell_template aura (offline_spells.cpp): its SPELL_AURA_* type, misc value, tick, the client slot
+    uint8_t type = 0, effIndex = 0;
+    int32_t misc = 0;
+    uint32_t amplitudeMs = 0;
+    uint8_t charges = 0;
+    int8_t slot = -1;                  // UNIT_FIELD_AURA slot (0..31 buffs, 32..47 debuffs), kept while it lasts
+    bool positive = false;
 };
 
 struct Cooldown { uint32_t spell = 0, endMs = 0, lengthMs = 0; };
@@ -445,7 +501,21 @@ struct Entity {
     bool feared(uint32_t now) const { return fearUntilMs > now; }
     bool silenced(uint32_t now) const { return silenceUntilMs > now; }
     bool pacified(uint32_t now) const { return pacifyUntilMs > now; }
-    float speedFactor(uint32_t now) const { return slowUntilMs > now ? std::max(0.05f, 1.0f + (float)slowPct / 100.0f) : 1.0f; }
+    float speedFactor(uint32_t now) const {
+        float f = slowUntilMs > now ? std::max(0.05f, 1.0f + (float)slowPct / 100.0f) : 1.0f;
+        int32_t up = 0;   // WoWVita: SPELL_AURA_MOD_INCREASE_SPEED (Sprint, Aspect of the Cheetah), the strongest
+        for (uint8_t i = 0; i < auraCount; ++i) if (auras[i].type == 31 || auras[i].type == 32) up = std::max(up, auras[i].amount);
+        return f * (1.0f + (float)up / 100.0f);
+    }
+    // WoWVita: the class spell engine (offline_spells.cpp)
+    uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
+    uint8_t comboPoints = 0;
+    uint64_t comboTarget = 0;
+    uint32_t nextSwingSpell = 0;               // Heroic Strike and the like: replaces the next swing
+    bool channeling = false;                   // castSpell is a channel: its effects are on already
+    bool castTriggered = false;
+    float castDestX = 0, castDestY = 0, castDestZ = 0;
+    bool castHasDest = false;
     uint8_t castPushes = 0;                    // spell pushback taken in this cast (two at most)
 
     // Player-only profile pointer index (-1 = none).
@@ -517,6 +587,9 @@ struct CharacterProfile {
     std::array<uint32_t, 64> explored{};  // WoWVita: the AreaTable explore bits found (the "EXP1" block)
     std::array<uint16_t, 19> equipLost{}; // WoWVita: durability points gone of the worn items (the "DUR1" block)
     std::array<uint32_t, 4> bags{};       // WoWVita: the bags in the slots 19..22 (the "BAG2" block)
+    std::vector<uint32_t> book;           // WoWVita: the spell book - every spell learned (the "SPB1" block)
+    std::array<uint32_t, 120> actionBar{};// WoWVita: the action buttons as the client set them ("SPB1" too)
+    bool actionBarSet = false;
     uint8_t bankBagSlots = 0;             // WoWVita: bank bag slots bought (0..6; the "BKB1" block)
     std::array<uint32_t, 6> bankBags{};   // the bags in the bank's bag slots 63..68
     std::array<BagItem, 6 * 36> bankBagItems{};   // what is in them: [bag * 36 + slot]
@@ -703,6 +776,30 @@ private:
     // WoWVita: creature behaviour (offline_ai.cpp)
     void initBehaviour(Entity& e, int spawnIndex, uint32_t nowMs);
     void tickBehaviour(Entity& e, uint32_t nowMs);
+    // WoWVita: the class spell engine (offline_spells.cpp)
+    struct AreaFx { uint64_t caster = 0; uint32_t spell = 0; uint8_t eff = 0; float x = 0, y = 0, radius = 0;
+                    uint32_t endMs = 0, nextMs = 0, periodMs = 1000; int32_t value = 0; bool used = false; };
+    AreaFx areas_[16];
+    void tickAreas(uint32_t nowMs);
+    bool finishX(Entity& e, const SpellX& s, uint64_t target, uint32_t nowMs);
+    void applyEffectX(Entity& caster, const SpellX& s, int k, Entity* t, uint32_t nowMs, int combo, int32_t* weaponBonus, int32_t* weaponPct, bool* weapon);
+    void applyAuraX(Entity& caster, Entity& t, const SpellX& s, int k, uint32_t nowMs, int combo);
+    void tickAuraX(Entity& e, Aura& a, uint32_t nowMs);
+    void targetsX(Entity& caster, const SpellX& s, int k, Entity* t, std::vector<Entity*>& out);
+    int32_t auraSum(const Entity& e, uint8_t type, int32_t miscMask = -1) const;
+    int32_t absorb(Entity& dst, int32_t dmg, uint8_t school);
+    void endChannel(Entity& e, uint32_t nowMs);
+    int8_t freeAuraSlot(const Entity& e, bool positive) const;
+public:
+    bool castX(Entity& e, uint32_t spell, uint64_t target, uint32_t nowMs, bool triggered = false);
+    int32_t effValue(const Entity& caster, const SpellX& s, int k, int combo = 0);
+    uint32_t durationX(const Entity& caster, const SpellX& s) const;
+    bool positiveX(const SpellX& s) const;
+    uint32_t powerCostX(const Entity& e, const SpellX& s) const;
+    void gainRage(Entity& e, int32_t damage, bool dealt);
+    bool spellEngine(const Entity& e, uint32_t spell) const { return e.self && data_ && data_->sx(spell); }
+    void cancelAuraX(Entity& e, uint32_t spell);
+private:
     Entity* spawnEntity(uint32_t spawnIndex);
     void releaseCreature(Entity& e, uint32_t nowMs);
     void linkedAggro(Entity& e, uint32_t nowMs);

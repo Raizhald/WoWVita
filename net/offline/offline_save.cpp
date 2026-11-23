@@ -170,6 +170,14 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
             payload.u16((uint16_t)i); payload.u32(b.entry); payload.u16(b.count); payload.u16(b.lost);
         }
     }
+    // WoWVita: the spell books and the action bars
+    payload.u32(0x31425053u);   // "SPB1"
+    for (const CharacterProfile& c : d.roster) {
+        payload.u16((uint16_t)std::min<size_t>(c.book.size(), 4096));
+        for (size_t i = 0; i < c.book.size() && i < 4096; ++i) payload.u32(c.book[i]);
+        payload.u8(c.actionBarSet ? 1 : 0);
+        if (c.actionBarSet) for (uint32_t a : c.actionBar) payload.u32(a);
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -371,6 +379,22 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                     b.entry = p.u32(); b.count = p.u16(); b.lost = p.u16();
                     if (i < c.bankBagItems.size()) { b.slot = (uint8_t)(i % 36); c.bankBagItems[i] = b; }
                 }
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the spell books
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31425053u) {
+            for (CharacterProfile& c : d.roster) {
+                const uint16_t n = p.u16();
+                if (n > 4096) { err = "malformed spell book"; return false; }
+                c.book.resize(n);
+                for (uint32_t& s : c.book) s = p.u32();
+                c.actionBarSet = p.u8() != 0;
+                if (c.actionBarSet) for (uint32_t& a : c.actionBar) a = p.u32();
             }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {

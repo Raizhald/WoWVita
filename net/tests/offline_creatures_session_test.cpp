@@ -60,6 +60,14 @@ int main(int argc, char** argv) {
     run(500);
     off::World& w = session.world();
     off::Entity* p = w.player();
+    {   // WoWVita: the start outfit (a Human Warrior: shirt, pants, boots, sword ... as CharStartOutfit.dbc says)
+        const off::CharacterProfile& pr = w.playerProfile();
+        int worn = 0;
+        std::string names;
+        for (uint32_t e : pr.equipment) if (e) { ++worn; if (const off::ItemTemplate* t = data.item(e)) names += " [" + t->name + "]"; }
+        std::printf("start outfit (race %d class %d):%s\n", pr.race, pr.cls, names.c_str());
+        CHECK(data.outfits.empty() || worn >= 2, "the new character wears its start outfit (%d items)", worn);
+    }
     p->maxHp = 100000; p->hp = 100000;
     auto put = [&](float x, float y, float z) {
         gs.mover.reset(x, y, z, 0, now);

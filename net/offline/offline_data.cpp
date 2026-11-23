@@ -518,6 +518,20 @@ bool readSpellControl(Bin& b, WorldData& w) {   // WoWVita "SPFX"
     return !b.bad;
 }
 
+bool readOutfits(Bin& b, WorldData& w) {   // WoWVita "OUTF"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 4096) return false;
+    w.outfits.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t race = b.u8(), cls = b.u8(), sex = b.u8();
+        const uint8_t k = b.u8();
+        std::vector<uint32_t> items;
+        for (uint8_t j = 0; j < k && !b.bad; ++j) items.push_back(b.u32());
+        w.outfits[race | (cls << 8) | (sex << 16)] = std::move(items);
+    }
+    return !b.bad;
+}
+
 bool readPools(Bin& b, WorldData& w) {   // WoWVita "POOL"
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -796,6 +810,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("AITX"): ok = readAiTexts(b, out); break;
             case fourcc("SPFX"): ok = readSpellControl(b, out); break;
             case fourcc("POOL"): ok = readPools(b, out); break;
+            case fourcc("OUTF"): ok = readOutfits(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

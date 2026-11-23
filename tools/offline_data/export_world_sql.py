@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -605,7 +605,53 @@ def sample_spell_ids(spel):
     return ids
 
 
-def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
+def start_outfits(path, items_db, report):
+    """[(race, class, sex, [item])]: glue.txt 'S' lines (a newer converter: CharStartOutfit.dbc's items), else its 'O'
+    lines (only what is shown on the character: display id + inventory type) matched to item_template - a level 1-5
+    item of that look and slot the race and class may use."""
+    if not path:
+        return []
+    s_lines, o_lines = [], []
+    with open_text(path) as f:
+        for line in f:
+            p = line.rstrip("\n").split("\t")
+            try:
+                if p[0] == "S" and len(p) > 4:
+                    s_lines.append((int(p[1]), int(p[2]), int(p[3]), [int(x) for x in p[4:] if x]))
+                elif p[0] == "O" and len(p) > 5:
+                    o_lines.append((int(p[1]), int(p[2]), int(p[3]), [(int(p[k]), int(p[k + 1])) for k in range(4, len(p) - 1, 2)]))
+            except ValueError:
+                continue
+    if s_lines:
+        out = [(r, c, x, [i for i in its if i in items_db]) for (r, c, x, its) in s_lines]
+        report["counts_outfits"] = dict(source="S lines", outfits=len(out))
+        return out
+    # (the slots of an older glue.txt's O lines can be off by one: the look alone is matched)
+    by_look = {}
+    for e, r in items_db.items():
+        if int(num(g(r, "ItemLevel"))) <= 5:
+            by_look.setdefault(int(num(g(r, "displayid"))), []).append(e)
+    out, missing = [], 0
+    for (race, cls, sex, looks) in o_lines:
+        its = []
+        for (disp, _inv) in looks:
+            cand = []
+            for e in by_look.get(disp, []):
+                r = items_db[e]
+                ac, ar = int(num(g(r, "AllowableClass", default=-1))), int(num(g(r, "AllowableRace", default=-1)))
+                ok_c = ac in (-1, 0) or ac & (1 << (cls - 1))
+                ok_r = ar in (-1, 0) or ar & (1 << (race - 1))
+                cand.append((0 if ok_c and ok_r else 1, e))
+            if cand:
+                its.append(min(cand)[1])
+            else:
+                missing += 1
+        out.append((race, cls, sex, its))
+    report["counts_outfits"] = dict(source="O lines (shown items only)", outfits=len(out), not_found=missing)
+    return out
+
+
+def build(tables, factions, map_id, report, player_faction=1, spell_info=None, glue_path=None):
     sample = build_sample()
     templates = newest_patch(tables.get("creature_template", []), ("Entry", "entry"))
     items_db = newest_patch(tables.get("item_template", []), ("entry",))
@@ -948,6 +994,19 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
             if txt:
                 greetings[t["entry"]] = txt[:600]
 
+    # ---- WoWVita "OUTF": what a new character starts with (the converter's glue.txt: CharStartOutfit.dbc)
+    sec_extra = {}
+    outfits = start_outfits(glue_path, items_db, report)
+    for (_r, _c, _s, its) in outfits:
+        item_needed.update(its)
+    ob = Bin()
+    ob.u32(len(outfits))
+    for (race, cls, sex, its) in outfits:
+        ob.u8(race); ob.u8(cls); ob.u8(sex); ob.u8(min(len(its), 24))
+        for it in its[:24]:
+            ob.u32(it)
+    sec_extra["OUTF"] = ob.b
+
     # ---- items: what the loot and the companions need (the sample's item ids are in the DB too)
     for e in (25, 38, 2589, 750, 6948):   # (6948: the Hearthstone every character carries)
         item_needed.add(e)
@@ -1224,6 +1283,7 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
                             quest_drop_tables=len(qloot), greetings=len(greetings), objects=len(go_used),
                             object_spawns=len(go_spawns), chest_loot=len(go_loot),
                             **{"quests_left_out_" + k.replace(" ", "_").replace("/", ""): v for k, v in skipped_q.items()})
+    sec.update(sec_extra)
     return sec
 
 
@@ -1232,6 +1292,7 @@ def main():
     ap.add_argument("--sql", nargs="+", required=True, help="world dump(s): .sql or .sql.gz")
     ap.add_argument("--factions", required=True, help="factions.txt written by the converter (w3dconv --texts-only)")
     ap.add_argument("--spells", help="spells.txt written by the converter (cast times, ranges, durations of creature spells)")
+    ap.add_argument("--glue", help="glue.txt written by the converter (the start outfits of new characters)")
     ap.add_argument("--map", type=int, default=0, help="0 Eastern Kingdoms (default), 1 Kalimdor")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-compress", action="store_true")
@@ -1247,7 +1308,7 @@ def main():
     if report["errors"]:
         print("\n".join(report["errors"]))
         return 1
-    sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells))
+    sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells), glue_path=args.glue)
     write_pack(args.out, sec, compress=not args.no_compress)
     _, back = read_pack(args.out)
     mine = dict(report["counts"])
@@ -1257,7 +1318,7 @@ def main():
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes): " +
           ", ".join(f"{k}={v}" for k, v in report["counts"].items()) +
           f"; {len(errs)} errors, {len(report['warn'])} warnings (see {args.out}.report.txt)")
-    for k in ("counts_movement", "counts_eventai", "counts_groups"):
+    for k in ("counts_movement", "counts_eventai", "counts_groups", "counts_outfits"):
         if k in report:
             print(f"  {k[7:]}: {report[k]}")
     return 1 if errs else 0

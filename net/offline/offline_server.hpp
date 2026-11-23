@@ -107,6 +107,7 @@ private:
     void sendPartyStats();
     void sendChat(uint8_t type, uint64_t sender, const std::string& text, const std::string& name = std::string());
     void sendEmote(uint64_t guid, uint32_t emote);   // WoWVita
+    void giveStartOutfit(CharacterProfile& p);        // WoWVita
     void sendCreatureQuery(uint32_t entry);
     void sendPlayerName(uint64_t guid);
     void sendItemQuery(uint32_t entry);

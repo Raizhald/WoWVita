@@ -297,6 +297,7 @@ struct WorldData {
     std::unordered_map<int32_t, AiText> aiTexts;                      // "AITX"
     std::unordered_map<uint32_t, SpellControl> spellControl;          // "SPFX"
     std::vector<SpawnPool> pools;                                     // "POOL"
+    std::unordered_map<uint32_t, std::vector<uint32_t>> outfits;      // "OUTF": race | class << 8 | sex << 16 -> items
     std::unordered_map<uint32_t, uint32_t> poolOf;                    // spawn index -> pools index
     std::unordered_map<uint32_t, SpawnLink> links;                    // "LINK": slave spawn -> its master
     std::unordered_multimap<uint32_t, uint32_t> slavesOf;             // master spawn -> slave spawns

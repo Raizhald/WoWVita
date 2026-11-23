@@ -372,6 +372,45 @@ void OfflineSession::refreshCharacters() {
     }
 }
 
+// WoWVita: the start outfit of the race / class / sex (the pack's OUTF, from the converter's glue.txt): worn items in
+// their slots, the rest (food, drink, ammunition) in the backpack - CMaNGOS Player::Create: food 4, drink 2. Given once:
+// to a character that wears nothing and carries none of them (a new one, or one of an older save that started naked).
+void OfflineSession::giveStartOutfit(CharacterProfile& p) {
+    if (!data_) return;
+    auto it = data_->outfits.find((uint32_t)p.race | ((uint32_t)p.cls << 8) | ((uint32_t)p.gender << 16));
+    if (it == data_->outfits.end() || it->second.empty()) return;
+    for (uint32_t e : p.equipment) if (e) return;
+    for (uint32_t e : it->second) {
+        for (uint8_t i = 0; i < p.bagCount; ++i) if (p.bag[i].entry == e) return;
+        for (const BagItem& b : p.bank) if (b.entry == e) return;
+    }
+    auto slotOf = [&](uint32_t inv) -> int {
+        switch (inv) {
+            case 1: return 0; case 2: return 1; case 3: return 2; case 4: return 3; case 5: case 20: return 4;
+            case 6: return 5; case 7: return 6; case 8: return 7; case 9: return 8; case 10: return 9;
+            case 11: return p.equipment[10] ? 11 : 10; case 12: return p.equipment[12] ? 13 : 12; case 16: return 14;
+            case 13: return p.equipment[15] ? 16 : 15; case 17: case 21: return 15; case 14: case 22: case 23: return 16;
+            case 15: case 25: case 26: case 28: return 17; case 19: return 18;
+            default: return -1;
+        }
+    };
+    for (uint32_t e : it->second) {
+        const ItemTemplate* t = data_->item(e);
+        if (!t || e == kHearthstoneItem) continue;
+        const int slot = slotOf(t->inventoryType);
+        if (slot >= 0 && !p.equipment[(size_t)slot]) { p.equipment[(size_t)slot] = e; continue; }
+        if (p.bagCount >= 16) continue;
+        uint16_t count = 1;
+        if (const ItemExt* x = data_->ext(e)) { if (x->kind & 1) count = 4; else if (x->kind & 2) count = 2; }
+        if (t->inventoryType == 24) count = 200;   // arrows / bullets: a stack
+        count = (uint16_t)std::max<uint32_t>(1, std::min<uint32_t>(count, std::max<uint32_t>(1, t->maxStack)));
+        BagItem& b = p.bag[p.bagCount];
+        b = BagItem();
+        b.entry = e; b.count = count; b.slot = p.bagCount;
+        ++p.bagCount;
+    }
+}
+
 int OfflineSession::createCharacter(const CharCreateInfo& ci) {
     if (save_.rosterCount >= 4) return 0x35;   // too many characters
     if (ci.name.size() < 2) return 0x46;       // name too short
@@ -397,6 +436,7 @@ int OfflineSession::createCharacter(const CharCreateInfo& ci) {
     p.mapId = data_ ? data_->mapId : 0;
     p.zoneId = data_ ? data_->zoneId : 0;
     if (data_) { p.x = data_->spawnX; p.y = data_->spawnY; p.z = data_->spawnZ; p.o = data_->spawnO; }
+    giveStartOutfit(p);   // WoWVita: (the character list shows it dressed)
     save_.roster[(size_t)save_.rosterCount] = p;   // append: the roster never has gaps
     ++save_.rosterCount;
     refreshCharacters();
@@ -446,6 +486,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     zone_ = 0;                    // (the client says it: CMSG_ZONEUPDATE)
     lastArea_ = 0;
     eat_ = Eating();
+    giveStartOutfit(save_.player);   // WoWVita: what a new character starts with (CharStartOutfit.dbc)
     // WoWVita: every character carries a Hearthstone (an older save gets one)
     if (data_->item(kHearthstoneItem)) {
         CharacterProfile& pr = save_.player;

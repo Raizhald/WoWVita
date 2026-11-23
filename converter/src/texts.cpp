@@ -405,6 +405,7 @@ bool exportAreaTriggers(const DataDir& data, const std::string& path, bool verbo
 //                       CLASS_INFO_*, ...); "\n" stays as the two characters
 //   L code              the game language (7.18): the client sends it at login, so the server answers in it
 //   O race class sex disp inv ... (12 pairs)   CharStartOutfit.dbc: the clothes a new character is shown in
+//   S race class sex item ...   CharStartOutfit.dbc: the items it starts with (WoWVita: the offline world)
 //   Z area name parent level bit  AreaTable.dbc: the area names (the character list, the zone banner); parent = the zone of
 //                a subzone; WoWVita: the exploration level and the explore bit (the offline world's exploration XP)
 bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose) {
@@ -469,6 +470,16 @@ bool exportGlueTexts(const DataDir& data, const std::string& path, bool verbose)
                 l += "\t" + std::to_string(disp) + "\t" + std::to_string(inv);
                 ++any;
             }
+            // WoWVita: "S race class sex item..." - the items a new character starts with (the offline world gives them)
+            std::string st = "S\t" + std::to_string(race) + "\t" + std::to_string(cls) + "\t" + std::to_string(sex);
+            int items = 0;
+            for (uint32_t k = 0; k < n; ++k) {
+                const uint32_t item = so.u32(r, 2 + k);
+                if (item == 0 || item == 0xFFFFFFFFu) continue;
+                st += "\t" + std::to_string(item);
+                ++items;
+            }
+            if (items) out += st + "\n";
             if (!any) continue;
             out += l + "\n";
             ++no;

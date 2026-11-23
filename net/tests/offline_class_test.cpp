@@ -180,6 +180,18 @@ int main(int argc, char** argv) {
         const int32_t hp1 = mob->hp;
         run(6500);
         CHECK(mob->hp < hp1 && hp1 <= hp0, "it bleeds (%d -> %d)", hp1, mob->hp);
+        // Execute: 125 + 3 a rage point left (less the armour), all the rage gone
+        w.playerProfile().book.push_back(5308);
+        mob->hp = mob->maxHp / 10;
+        p->power = 45;
+        p->gcdEndMs = 0;
+        const int32_t eh = mob->hp;
+        w.tryCast(*p, 5308, mob->guid, now);
+        run(200);
+        std::printf("execute: %d damage, rage %d\n", eh - mob->hp, p->power);
+        CHECK(eh - mob->hp >= 150 && p->power == 0, "Execute: %d damage, rage left %d", eh - mob->hp, p->power);
+        // Shield Block: a charge used by a blocked hit; Evasion-like dodge from an aura
+        mob->hp = mob->maxHp;
         w.stopAttack(*p, now);
     }
     session.leaveWorld();
@@ -236,6 +248,52 @@ int main(int argc, char** argv) {
         gs.castSpell(133, now);
         run(300);
         CHECK(!p->castSpell, "no Fireball without mana");
+        // Polymorph: a sheep that wanders; damage breaks it
+        p->power = (int32_t)p->maxPower;
+        t->hp = t->maxHp; t->rootUntilMs = 0;
+        while (t->auraCount) w.removeAuraSpell(*t, t->auras[0].spell);
+        p->gcdEndMs = 0;
+        w.tryCast(*p, 118, t->guid, now);
+        run(1800);
+        CHECK(w.hasAura(*t, 118), "Polymorph is on it");
+        p->gcdEndMs = 0;
+        p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 133, t->guid, now);   // Fireball breaks it
+        run(4000);
+        CHECK(!w.hasAura(*t, 118), "damage broke the Polymorph");
+        // Mana Shield: hits cost mana instead of health
+        p->gcdEndMs = 0;
+        p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 1463, p->guid, now);
+        run(300);
+        CHECK(w.hasAura(*p, 1463), "Mana Shield is up");
+        {
+            const int32_t hp = p->hp, mana = p->power;
+            w.applyDamage(*t, *p, 40, 0, 0, now);
+            CHECK(p->hp == hp && p->power == mana - 80, "40 damage took 80 mana (%d health, %d mana)", hp - p->hp, mana - p->power);
+        }
+        // Blink: 20 yards ahead, out of the root
+        p->gcdEndMs = 0;
+        p->rootUntilMs = now + 5000;
+        const float bx = p->x, by = p->y;
+        w.tryCast(*p, 1953, p->guid, now);
+        run(300);
+        const float moved = std::hypot(p->x - bx, p->y - by);
+        CHECK(moved > 15.0f && !p->rooted(now), "Blink: %.1f yards, free", moved);
+        // Frost Armor: a swing at the mage chills the attacker (proc of 6136)
+        p->gcdEndMs = 0;
+        p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 168, p->guid, now);
+        run(300);
+        CHECK(w.hasAura(*p, 168), "Frost Armor is up");
+        stand(t, 2.0f);
+        t->hp = t->maxHp;
+        while (t->auraCount) w.removeAuraSpell(*t, t->auras[0].spell);
+        t->victim = t->target = p->guid;
+        w.startAttack(*t, p->guid, now);
+        uint32_t t1 = now;
+        while (now - t1 < 8000 && !w.hasAura(*t, 6136)) run(100);
+        CHECK(w.hasAura(*t, 6136), "the attacker was chilled by Frost Armor");
     }
     session.leaveWorld();
     off::OfflineSaveData sd;

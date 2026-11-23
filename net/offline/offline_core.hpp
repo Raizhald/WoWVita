@@ -506,9 +506,12 @@ struct Entity {
     bool pacified(uint32_t now) const { return pacifyUntilMs > now; }
     float speedFactor(uint32_t now) const {
         float f = slowUntilMs > now ? std::max(0.05f, 1.0f + (float)slowPct / 100.0f) : 1.0f;
-        int32_t up = 0;   // WoWVita: SPELL_AURA_MOD_INCREASE_SPEED (Sprint, Aspect of the Cheetah), the strongest
-        for (uint8_t i = 0; i < auraCount; ++i) if (auras[i].type == 31 || auras[i].type == 32) up = std::max(up, auras[i].amount);
-        return f * (1.0f + (float)up / 100.0f);
+        int32_t up = 0, down = 0;   // WoWVita: SPELL_AURA_MOD_INCREASE / DECREASE_SPEED, the strongest of each
+        for (uint8_t i = 0; i < auraCount; ++i) {
+            if (auras[i].type == 31 || auras[i].type == 32) up = std::max(up, auras[i].amount);
+            if (auras[i].type == 33) down = std::min(down, auras[i].amount);
+        }
+        return std::max(0.05f, f * (1.0f + (float)up / 100.0f) * (1.0f + (float)std::max(-95, down) / 100.0f));
     }
     // WoWVita: the class spell engine (offline_spells.cpp)
     uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
@@ -792,6 +795,12 @@ private:
     void tickAuraX(Entity& e, Aura& a, uint32_t nowMs);
     void targetsX(Entity& caster, const SpellX& s, int k, Entity* t, std::vector<Entity*>& out);
     int32_t auraSum(const Entity& e, uint8_t type, int32_t miscMask = -1) const;
+    bool hasAuraType(const Entity& e, uint8_t type, int32_t miscMask = -1) const;
+    void procAuras(Entity& owner, Entity& other, uint32_t procFlag, uint32_t nowMs);
+    bool scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t nowMs);
+public:
+    void interruptAuras(Entity& e, uint32_t flags);   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
+private:
     int32_t absorb(Entity& dst, int32_t dmg, uint8_t school);
     void endChannel(Entity& e, uint32_t nowMs);
     int8_t freeAuraSlot(const Entity& e, bool positive) const;

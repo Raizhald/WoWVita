@@ -540,6 +540,18 @@ void World::removeAura(Entity& e, int index) {
     for (int i = index; i + 1 < e.auraCount; ++i) e.auras[i] = e.auras[i + 1];
     --e.auraCount;
     if (gone.type == 36 && e.form == (uint8_t)gone.misc) e.form = 0;   // WoWVita: out of the stance / form
+    // WoWVita: a control aura that ends early (broken by damage, dispelled) takes its effect along
+    if (gone.type) {
+        auto stillType = [&](std::initializer_list<uint8_t> ts) {
+            for (uint8_t i = 0; i < e.auraCount; ++i) for (uint8_t t : ts) if (e.auras[i].type == t) return true;
+            return false;
+        };
+        if (gone.type == 12 && !stillType({12})) e.stunnedUntilMs = 0;
+        if (gone.type == 26 && !stillType({26})) e.rootUntilMs = 0;
+        if ((gone.type == 5 || gone.type == 7) && !stillType({5, 7})) { e.fearUntilMs = 0; if (e.self) e.stunnedUntilMs = 0; }
+        if ((gone.type == 27 || gone.type == 60) && !stillType({27, 60})) e.silenceUntilMs = 0;
+        if (e.self && gone.type == 29) recomputeGear();
+    }
     bool still = false;   // WoWVita: the slot empties when the spell's last effect goes
     for (uint8_t i = 0; i < e.auraCount; ++i) still = still || (e.auras[i].slot == gone.slot && gone.slot >= 0);
     if (!still && gone.slot >= 0) emit(SimEvent::AuraRemoved, e.guid, 0, gone.spell, gone.slot);
@@ -748,6 +760,9 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
 void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell, uint8_t school, uint32_t nowMs) {
     if (!dst.alive() || amount <= 0) return;
     if (dst.objType == 3 && dst.aiState == 3) return;   // WoWVita: an evading creature cannot be hurt
+    if (hasAuraType(dst, 39, 1 << school)) { emit(SimEvent::Damage, src.guid, dst.guid, spell, 0, school, 4); return; }   // WoWVita: immune
+    amount += auraSum(src, 13, 1 << school) + auraSum(dst, 14, 1 << school);   // WoWVita: flat damage done / taken
+    if (amount <= 0) return;
     if (dst.objType == 3) { dst.refreshMs = nowMs; dst.refreshX = dst.x; dst.refreshY = dst.y; }   // its combat timer
     int32_t dmg = amount;
     // WoWVita: resurrection sickness - the original takes 75% of the stats; offline it takes 75% of the damage done
@@ -767,6 +782,8 @@ void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell
     dst.lastDamageMs = nowMs;
     dst.incomingDamage = std::min<int32_t>(dst.incomingDamage + dmg, 100000);
     if (dst.self) gainRage(dst, dmg, false);   // WoWVita
+    interruptAuras(dst, 0x2 | (spell ? 0u : 0x01000000u));   // WoWVita: AURA_INTERRUPT_FLAG_DAMAGE (stealth, polymorph)
+    if (&src != &dst) interruptAuras(src, 0x1000);         // ATTACKING
     else if (dst.powerType == 1 && dst.alive())   // rage from being hit
         dst.power = std::min<int32_t>(dst.power + 5, (int32_t)dst.maxPower);
     emit(SimEvent::Damage, src.guid, dst.guid, spell, dmg, school);
@@ -806,8 +823,11 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
     if (!inMeleeRange(a, b)) return;
     if (a.stunnedUntilMs > nowMs || a.feared(nowMs) || a.pacified(nowMs)) return;
     a.o = angleTo(a.x, a.y, b.x, b.y);
-    a.nextSwingMs = nowMs + a.attackMs;
-    if ((int32_t)rng_.below(100) < kMissChancePct) {
+    {   // WoWVita: SPELL_AURA_MOD_HASTE (Slice and Dice, Thunder Clap)
+        const int32_t haste = std::max(-80, auraSum(a, 138));
+        a.nextSwingMs = nowMs + (uint32_t)((int64_t)a.attackMs * 100 / (100 + haste));
+    }
+    if ((int32_t)rng_.below(100) < kMissChancePct + auraSum(b, 49)) {   // (WoWVita: + dodge auras: Evasion)
         emit(SimEvent::Damage, a.guid, b.guid, 0, 0, 0, 1);   // miss
         return;
     }
@@ -825,6 +845,13 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
     }
     int32_t dmg = rng_.range((int32_t)a.dmgMin, (int32_t)a.dmgMax);
     if (const int32_t ap = auraSum(a, 99)) dmg += ap * (int32_t)a.attackMs / 14000;   // WoWVita: attack power auras
+    if (hasAuraType(a, 67)) dmg = std::max(1, dmg / 2);                              // WoWVita: disarmed
+    if (const int32_t block = auraSum(b, 51); block > 0 && (int32_t)rng_.below(100) < block) {   // Shield Block
+        // (the pack has no shield block values: the strength part of CMaNGOS GetShieldBlockValue and a level-sized shield)
+        dmg = std::max(0, dmg - ((int32_t)b.statStr / 20 + 5 + (int32_t)b.level));
+        for (int i = 0; i < b.auraCount; ++i)
+            if (b.auras[i].type == 51 && b.auras[i].charges) { if (--b.auras[i].charges == 0) removeAura(b, i); break; }
+    }
     // WoWVita: wear (vMaNGOS DurabilityLossChance.Damage 0.5 %): the weapon that hits, a piece of armour that is hit
     if (a.self && rng_.below(1000) < 5) wearSlot(15, 1);
     if (b.self && rng_.below(1000) < 5) {
@@ -844,6 +871,7 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
                 applyDamage(b, a, b.auras[i].amount, b.auras[i].spell, b.auras[i].school, nowMs);
                 if (!a.alive()) break;
             }
+    if (a.alive() && b.alive()) { procAuras(a, b, 0x4, nowMs); procAuras(b, a, 0x8, nowMs); }   // WoWVita: procs
     if (crit) {
         // Mark the last damage event as a critical for the HUD.
         for (int i = eventCount_ - 1; i >= 0; --i)

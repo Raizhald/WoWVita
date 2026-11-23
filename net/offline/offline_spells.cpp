@@ -129,12 +129,67 @@ void World::gainRage(Entity& e, int32_t damage, bool dealt) {
     e.power = std::min<int32_t>((int32_t)e.maxPower, e.power + std::max<int32_t>(1, (int32_t)std::lround(r)));
 }
 
+bool World::hasAuraType(const Entity& e, uint8_t type, int32_t miscMask) const {
+    for (uint8_t i = 0; i < e.auraCount; ++i)
+        if (e.auras[i].type == type && (miscMask < 0 || (e.auras[i].misc & miscMask))) return true;
+    return false;
+}
+
+void World::interruptAuras(Entity& e, uint32_t flags) {
+    if (!data_) return;
+    for (int i = 0; i < e.auraCount;) {
+        const SpellX* s = e.auras[i].type ? data_->sx(e.auras[i].spell) : nullptr;
+        if (s && (s->auraInterruptFlags & flags)) { removeAura(e, i); continue; }
+        ++i;
+    }
+}
+
+// PROC_FLAG_* (CMaNGOS SpellMgr.h): 0x4 dealt / 0x8 taken melee swing, 0x10 / 0x20 a melee ability
+void World::procAuras(Entity& o, Entity& other, uint32_t flag, uint32_t now) {
+    if (!data_) return;
+    for (int i = 0; i < o.auraCount && o.alive();) {
+        Aura& a = o.auras[i];
+        const SpellX* s = (a.type == 42 || a.type == 4) ? data_->sx(a.spell) : nullptr;
+        if (!s || !(s->procFlags & flag) || (s->procChance && s->procChance < 100 && (int)rng_.below(100) >= s->procChance)) { ++i; continue; }
+        bool fired = false;
+        if (a.type == 42 && s->eff[a.effIndex].trigger) {   // PROC_TRIGGER_SPELL (Lightning Shield, Frost Armor)
+            castX(o, s->eff[a.effIndex].trigger, other.guid, now, true);
+            fired = true;
+        } else if (a.type == 4 && s->family == 10 && (s->familyFlags & 0x8000000ull) && a.effIndex == 0 && (flag & 0x4) && o.self) {
+            // Seal of Righteousness (CMaNGOS Unit::HandleDummyAuraProc): holy damage by the weapon's speed
+            static const uint32_t ranks[][2] = {{20154, 25742}, {21084, 25741}, {20287, 25740}, {20288, 25739}, {20289, 25738},
+                                                {20290, 25737}, {20291, 25736}, {20292, 25735}, {20293, 25713}};
+            uint32_t sid = 25742;
+            for (const auto& r : ranks) if (r[0] == a.spell) sid = r[1];
+            const ItemTemplate* w = profiles_[0].equipment[15] ? data_->item(profiles_[0].equipment[15]) : nullptr;
+            const float speed = (float)o.attackMs / 1000.0f;
+            float base;
+            if (w && w->inventoryType == 17) base = 1.20f * a.amount * 1.2f * 1.03f * speed / 100.0f + 1;
+            else base = 0.85f * std::ceil(a.amount * 1.2f * 1.03f * speed / 100.0f) - 1;
+            const int32_t dmg = (int32_t)(base + 0.03f * (float)(o.dmgMin + o.dmgMax) / 2.0f) + 1;
+            if (dmg > 0 && other.alive()) applyDamage(o, other, dmg, sid, 1, now);
+            fired = true;
+        }
+        if (fired && a.charges) {
+            if (--a.charges == 0) { removeAura(o, i); continue; }
+        }
+        ++i;
+    }
+}
+
 int32_t World::absorb(Entity& dst, int32_t dmg, uint8_t school) {
     for (int i = 0; i < dst.auraCount && dmg > 0;) {
         Aura& a = dst.auras[i];
         if (a.type == A_SCHOOL_ABSORB && (a.misc & (1 << school)) && a.amount > 0) {
             const int32_t take = std::min(a.amount, dmg);
             a.amount -= take;
+            dmg -= take;
+            if (a.amount <= 0) { removeAura(dst, i); continue; }
+        }
+        if (a.type == 97 && a.amount > 0 && dst.powerType == 0 && dst.power > 1) {   // Mana Shield: 2 mana a point
+            const int32_t take = std::min({a.amount, dmg, dst.power / 2});
+            a.amount -= take;
+            dst.power -= take * 2;
             dmg -= take;
             if (a.amount <= 0) { removeAura(dst, i); continue; }
         }
@@ -210,6 +265,7 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         return true;
     }
     if (s.gcdMs && !triggered) e.gcdEndMs = now + s.gcdMs;
+    if (!triggered) interruptAuras(e, 0x4 | (need == 1 ? 0x1000u : 0u));   // AURA_INTERRUPT_FLAG_ACTION (and ATTACKING)
     e.castTarget = t ? t->guid : e.guid;
     e.castTriggered = triggered;
     if (s.castMs > 0 && !triggered) {
@@ -277,6 +333,7 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
     bool usesCombo = false;
     for (const SpellEffectX& x : s.eff) usesCombo = usesCombo || x.perCombo != 0;
     if (usesCombo) combo = e.comboPoints;
+    if (scriptX(e, s, t, now)) { if (usesCombo) { e.comboPoints = 0; e.comboTarget = 0; } return true; }
     int32_t weaponBonus = 0, weaponPct = 100;
     bool weapon = false;
     for (int k = 0; k < 3; ++k) {
@@ -297,6 +354,7 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
         if ((int32_t)rng_.below(100) < 5) dmg *= 2;   // a crit
         applyDamage(e, *t, std::max(1, dmg), s.id, s.school, now);
         gainRage(e, dmg, true);
+        if (t->alive()) { procAuras(e, *t, 0x10, now); procAuras(*t, e, 0x20, now); }   // a melee ability dealt / taken
         if (!e.victim) startAttack(e, t->guid, now);
     }
     if (usesCombo) { e.comboPoints = 0; e.comboTarget = 0; }
@@ -497,11 +555,16 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
                 if (t.auras[i].type == A_SHAPESHIFT && t.auras[i].spell != s.id) removeAura(t, i);
             t.form = (uint8_t)e.misc;
             break;
-        case A_STUN: case A_ROOT: case A_DEC_SPEED: case A_FEAR: case A_CONFUSE: case A_SILENCE: case A_PACIFY: case A_PACIFY_SILENCE: {
+        case 11:   // SPELL_AURA_MOD_TAUNT (Mocking Blow)
+            if (t.objType == 3) taunt(t, c.guid);
+            break;
+        case 103:   // SPELL_AURA_MOD_TOTAL_THREAT (Fade): less threat with every creature
+            for (Entity& o : pool_) if (o.used && o.objType == 3 && o.alive()) addThreat(o, t.guid, a.amount);
+            break;
+        case A_STUN: case A_ROOT: case A_FEAR: case A_CONFUSE: case A_SILENCE: case A_PACIFY: case A_PACIFY_SILENCE: {
             SpellControl ctl;
             ctl.durationMs = d ? d : 10000;
-            const Control type = e.aura == A_STUN ? Control::Stun : e.aura == A_ROOT ? Control::Root : e.aura == A_DEC_SPEED ? Control::Slow
-                               : e.aura == A_FEAR ? Control::Fear : e.aura == A_CONFUSE ? Control::Confuse : e.aura == A_SILENCE ? Control::Silence
+            const Control type = e.aura == A_STUN ? Control::Stun : e.aura == A_ROOT ? Control::Root : e.aura == A_FEAR ? Control::Fear : e.aura == A_CONFUSE ? Control::Confuse : e.aura == A_SILENCE ? Control::Silence
                                : e.aura == A_PACIFY ? Control::Pacify : Control::PacifySilence;
             ctl.effects.emplace_back((uint8_t)type, a.amount);
             applyControl(t, ctl, now);
@@ -516,6 +579,47 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
     }
     if (!positive && t.objType == 3 && !t.victim && canAttack(t, c)) { t.victim = t.target = c.guid; addThreat(t, c.guid, 1); }
     addAura(t, a);
+    if (t.self && e.aura == 29) recomputeGear();   // SPELL_AURA_MOD_STAT: health, mana, attack power again
+}
+
+// ---------------------------------------------------------------- the class scripts CMaNGOS has for these
+// (Spells/Scripts/Scripting/ClassScripts): true when the spell was done here
+bool World::scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t now) {
+    // Execute (5308 and ranks): effect 0 + the rage left x DmgMultiplier (CMaNGOS rage in tenths), all rage gone
+    if (s.family == 4 && (s.familyFlags & 0x20000000ull) && t && t != &c) {
+        const int32_t dmg = effValue(c, s, 0) + (int32_t)((float)(c.power * 10) * s.eff[0].dmgMult);
+        c.power = 0;
+        applyDamage(c, *t, std::max(1, dmg), s.id, 0, now);
+        emit(SimEvent::PowerChanged, c.guid, 0, 0, c.power);
+        return true;
+    }
+    // Life Tap (1454 and ranks): health into mana
+    if (s.family == 5 && (s.familyFlags & 0x40000ull) && s.eff[0].effect == 3) {
+        const int32_t v = effValue(c, s, 0);
+        if (c.hp <= v) { emit(SimEvent::CastFailed, c.guid, 0, s.id, 21, 0, 0); return true; }   // SPELL_FAILED_FIZZLE
+        c.hp -= v;
+        c.power = std::min<int32_t>((int32_t)c.maxPower, c.power + v);
+        emit(SimEvent::Damage, c.guid, c.guid, s.id, v, s.school, 0);
+        emit(SimEvent::PowerChanged, c.guid, 0, 0, c.power);
+        return true;
+    }
+    // Blink (SPELL_EFFECT_LEAP): 20 yards ahead
+    for (const SpellEffectX& e : s.eff)
+        if (e.effect == 29) {
+            const float d = e.radius > 0 ? e.radius : 20.0f;
+            c.castDestX = c.x; c.castDestY = c.y; c.castDestZ = c.z;
+            c.x += std::cos(c.o) * d;
+            c.y += std::sin(c.o) * d;
+            applyGround(c);
+            for (int k = 0; k < c.auraCount;) {   // free of roots and stuns (its aura effects)
+                if (c.auras[k].type == A_STUN || c.auras[k].type == A_ROOT) { removeAura(c, k); continue; }
+                ++k;
+            }
+            c.stunnedUntilMs = c.rootUntilMs = 0;
+            emit(SimEvent::Message, c.guid, c.guid, s.id, 1);
+            return true;
+        }
+    return false;
 }
 
 void World::tickAuraX(Entity& e, Aura& a, uint32_t now) {

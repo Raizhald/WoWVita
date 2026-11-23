@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -35,7 +35,9 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "gameobject", "gameobject_template", "gameobject_loot_template", "gameobject_questrelation",
           "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone", "areatrigger_tavern",
           "spell_template", "exploration_basexp", "areatrigger_involvedrelation",
-          "creature_movement", "creature_movement_template", "creature_ai_scripts", "broadcast_text", "creature_ai_texts"}
+          "creature_movement", "creature_movement_template", "creature_ai_scripts", "broadcast_text", "creature_ai_texts",
+          "spawn_group", "spawn_group_spawn", "spawn_group_entry", "pool_creature", "pool_creature_template", "pool_template",
+          "creature_linking", "creature_linking_template"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -518,6 +520,79 @@ def behaviour_sections(tables, templates, spawn_rows, spawn_moves, used, sec, re
                                     spell_kinds=kinds, control_spells=len(fx), durations_known=len(info["idx_dur"]) > 0)
 
 
+def group_sections(tables, templates, spawn_rows, spawn_moves, map_id, sec, report):
+    """'POOL': spawns of which only a few are up at a time (pool_creature / pool_creature_template max_limit,
+    spawn_group MaxCount - the rare spawns, Hogger); 'LINK': creature_linking (by spawn) and creature_linking_template
+    (by entry, the nearest master within search_range): 0x1 aggro on the master's aggro, 0x2 the master too,
+    0x200 follow the master, 0x4000 evade with it."""
+    idx_of = {guid: i for i, (guid, _t, _d) in enumerate(spawn_moves)}
+    pools = {}   # key -> (limit, [spawn index])
+    limit_of = {int(num(g(r, "entry"))): int(num(g(r, "max_limit"))) for r in tables.get("pool_template", [])}
+    for r in tables.get("pool_creature", []):
+        i = idx_of.get(int(num(g(r, "guid"))))
+        if i is not None:
+            pe = int(num(g(r, "pool_entry")))
+            pools.setdefault(("p", pe), [limit_of.get(pe, 0), []])[1].append(i)
+    by_entry = {}
+    for i, row in enumerate(spawn_rows):
+        by_entry.setdefault(row[0], []).append(i)
+    for r in tables.get("pool_creature_template", []):
+        pe = int(num(g(r, "pool_entry")))
+        for i in by_entry.get(int(num(g(r, "id"))), []):
+            pools.setdefault(("p", pe), [limit_of.get(pe, 0), []])[1].append(i)
+    sg_max = {int(num(g(r, "Id"))): int(num(g(r, "MaxCount"))) for r in tables.get("spawn_group", [])
+              if int(num(g(r, "Type"))) == 0}
+    for r in tables.get("spawn_group_spawn", []):
+        gid = int(num(g(r, "Id")))
+        i = idx_of.get(int(num(g(r, "Guid"))))
+        if i is not None and sg_max.get(gid, 0) > 0:
+            pools.setdefault(("g", gid), [sg_max[gid], []])[1].append(i)
+    seen, out = set(), []
+    for key in sorted(pools, key=str):
+        lim, mem = pools[key]
+        mem = sorted(set(m for m in mem if m not in seen))
+        if lim <= 0 or len(mem) <= lim:
+            continue
+        seen.update(mem)
+        out.append((lim, mem))
+    pb = Bin()
+    pb.u32(len(out))
+    for lim, mem in out:
+        pb.u16(lim); pb.u16(len(mem))
+        for m in mem:
+            pb.u32(m)
+    sec["POOL"] = pb.b
+    # linking
+    links = {}
+    for r in tables.get("creature_linking", []):
+        sl, ma = idx_of.get(int(num(g(r, "guid")))), idx_of.get(int(num(g(r, "master_guid"))))
+        if sl is not None and ma is not None and sl != ma:
+            links[sl] = (ma, int(num(g(r, "flag"))))
+    for r in tables.get("creature_linking_template", []):
+        if int(num(g(r, "map"))) != map_id:
+            continue
+        rng_ = num(g(r, "search_range"))
+        masters = by_entry.get(int(num(g(r, "master_entry"))), [])
+        if not masters:
+            continue
+        for sl in by_entry.get(int(num(g(r, "entry"))), []):
+            if sl in links:
+                continue
+            sx, sy = spawn_rows[sl][1], spawn_rows[sl][2]
+            best = min(masters, key=lambda m: (spawn_rows[m][1] - sx) ** 2 + (spawn_rows[m][2] - sy) ** 2)
+            d = ((spawn_rows[best][1] - sx) ** 2 + (spawn_rows[best][2] - sy) ** 2) ** 0.5
+            if best != sl and (rng_ <= 0 or d <= rng_):
+                links[sl] = (best, int(num(g(r, "flag"))))
+    lb = Bin()
+    keep = [(sl, ma, fl) for sl, (ma, fl) in sorted(links.items()) if fl & 0x4203]
+    lb.u32(len(keep))
+    for sl, ma, fl in keep:
+        lb.u32(sl); lb.u32(ma); lb.u16(fl & 0xFFFF)
+    sec["LINK"] = lb.b
+    report["counts_groups"] = dict(pools=len(out), pooled_spawns=sum(len(m) for _, m in out), links=len(keep),
+                                   followers=sum(1 for k in keep if k[2] & 0x200))
+
+
 def sample_spell_ids(spel):
     """The spell ids of a SPEL section (to skip ones the sample already defines)."""
     import struct
@@ -543,6 +618,26 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
     spawn_entry = {}   # CMaNGOS: id 0 = one of several entries (creature_spawn_entry); the spawn guid picks one
     for r in tables.get("creature_spawn_entry", []):
         spawn_entry.setdefault(int(num(g(r, "guid"))), []).append(int(num(g(r, "entry"))))
+    # WoWVita: a spawn of a spawn_group with no entry of its own takes one of the group's (spawn_group_entry: those with a
+    # Chance get it in percent, the rest share what is left) - picked once per spawn, by its guid
+    group_of = {int(num(g(r, "Guid"))): int(num(g(r, "Id"))) for r in tables.get("spawn_group_spawn", [])}
+    group_entries = {}
+    for r in tables.get("spawn_group_entry", []):
+        group_entries.setdefault(int(num(g(r, "Id"))), []).append((int(num(g(r, "Entry"))), int(num(g(r, "Chance")))))
+
+    def group_pick(guid):
+        ents = group_entries.get(group_of.get(guid, -1))
+        if not ents:
+            return 0
+        fixed = sum(c for _, c in ents if c > 0)
+        rest = [e for e, c in ents if c <= 0]
+        share = max(0.0, 100.0 - fixed) / len(rest) if rest else 0.0
+        roll = (guid * 2654435761 % 2 ** 32) / 2 ** 32 * max(100.0, fixed + share * len(rest))
+        for e, c in ents:
+            roll -= c if c > 0 else share
+            if roll < 0:
+                return e
+        return ents[-1][0]
     for r in tables.get("creature", []):
         if int(num(g(r, "map"))) != map_id:
             continue
@@ -554,6 +649,8 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
             choices = sorted(spawn_entry.get(int(num(g(r, "guid"))), []))
             if choices:
                 entry = choices[int(num(g(r, "guid"))) % len(choices)]
+            else:
+                entry = group_pick(int(num(g(r, "guid"))))
         t = templates.get(entry)
         if not t:
             report["warn"].append(f"spawn of unknown creature {entry}")
@@ -1080,6 +1177,7 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
     sec["TAVN"] = tb.b
     sec["SPEL"] = sample["SPEL"]
     behaviour_sections(tables, templates, spawn_rows, spawn_moves, used, sec, report, spell_info)
+    group_sections(tables, templates, spawn_rows, spawn_moves, map_id, sec, report)
 
     xb = Bin()   # "ITX1"
     xb.u32(len(itx))
@@ -1159,7 +1257,7 @@ def main():
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes): " +
           ", ".join(f"{k}={v}" for k, v in report["counts"].items()) +
           f"; {len(errs)} errors, {len(report['warn'])} warnings (see {args.out}.report.txt)")
-    for k in ("counts_movement", "counts_eventai"):
+    for k in ("counts_movement", "counts_eventai", "counts_groups"):
         if k in report:
             print(f"  {k[7:]}: {report[k]}")
     return 1 if errs else 0

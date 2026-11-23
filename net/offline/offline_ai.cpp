@@ -98,6 +98,7 @@ bool World::stepLeg(Entity& e, float speed, uint32_t nowMs) {
 }
 
 void World::tickIdleMovement(Entity& e, uint32_t nowMs) {
+    if (followMaster(e, nowMs)) return;   // a linked creature walks with its master
     const SpawnMove* sm = data_ ? data_->spawnMove(e.spawnIndex) : nullptr;
     if (e.legActive) {
         if (!stepLeg(e, e.legWalk ? e.walkSpeed : e.speed, nowMs)) return;
@@ -160,6 +161,7 @@ void World::enterCombat(Entity& e, uint32_t nowMs) {
         else t.next[i] = 0;
     }
     aiEvent(e, 4, nowMs, e.victim);   // aggro
+    linkedAggro(e, nowMs);
 }
 
 void World::startEvade(Entity& e, uint32_t nowMs) {
@@ -179,6 +181,7 @@ void World::startEvade(Entity& e, uint32_t nowMs) {
     if (was) emit(SimEvent::AttackStopped, e.guid, was, 0, 0);
     emit(SimEvent::ThreatChanged, e.guid, 0, 0, 0);
     aiEvent(e, 7, nowMs);   // evade
+    linkedEvade(e, nowMs);
 }
 
 bool World::tickEvade(Entity& e, uint32_t nowMs) {
@@ -437,6 +440,90 @@ void World::applyControl(Entity& t, const SpellControl& c, uint32_t nowMs) {
     }
     if (breaksCast && t.castSpell) cancelCast(t, 35, nowMs);
     if (t.stunned(nowMs) || t.rooted(nowMs)) { t.moving = false; t.legActive = false; }
+}
+
+// ---------------------------------------------------------------- pools and linked creatures
+void World::choosePools() {
+    poolChosen_.clear();
+    if (!data_ || data_->pools.empty()) return;
+    poolChosen_.assign(data_->spawns.size(), 1);
+    for (const SpawnPool& p : data_->pools) {
+        std::vector<uint32_t> m;
+        for (uint32_t i : p.members) if (i < poolChosen_.size()) { poolChosen_[i] = 0; m.push_back(i); }
+        for (uint16_t k = 0; k < p.limit && !m.empty(); ++k) {   // 'limit' of them, at random
+            const uint32_t at = rng_.below((uint32_t)m.size());
+            poolChosen_[m[at]] = 1;
+            m.erase(m.begin() + at);
+        }
+    }
+}
+
+Entity* World::spawnEntity(uint32_t idx) {
+    if (!data_ || idx >= data_->spawns.size()) return nullptr;
+    return entity(0xF130000000000000ull | ((uint64_t)(data_->spawns[idx].entry & 0xFFFFFF) << 24) | (uint64_t)(idx + 1));
+}
+
+void World::releaseCreature(Entity& e, uint32_t nowMs) {   // back to the spawn list (like a far creature)
+    (void)nowMs;
+    const uint32_t idx = (uint32_t)(e.guid & 0xFFFFFF);
+    if (idx >= 1 && idx <= spawnActive_.size()) spawnActive_[idx - 1] = 0;
+    emit(SimEvent::Vanish, e.guid, 0, 0, 0);
+    for (Entity& o : pool_)
+        if (o.used) {
+            if (o.victim == e.guid) o.victim = 0;
+            if (o.target == e.guid) o.target = 0;
+        }
+    e = Entity();
+}
+
+void World::linkedAggro(Entity& e, uint32_t nowMs) {
+    if (!data_ || e.spawnIndex < 0 || !e.victim) return;
+    Entity* enemy = entity(e.victim);
+    if (!enemy) return;
+    auto join = [&](Entity* c) {
+        if (!c || !c->alive() || c->victim || c->aiState == 3 || !canAttack(*c, *enemy)) return;
+        c->victim = c->target = enemy->guid;
+        c->aiState = 1;
+        addThreat(*c, enemy->guid, 1);
+        c->lastDamageMs = nowMs;
+    };
+    auto range = data_->slavesOf.equal_range((uint32_t)e.spawnIndex);   // FLAG_AGGRO_ON_AGGRO: its slaves come
+    for (auto it = range.first; it != range.second; ++it)
+        if (const SpawnLink* l = data_->link((int)it->second))
+            if (l->flags & 0x0001) join(spawnEntity(it->second));
+    if (const SpawnLink* l = data_->link(e.spawnIndex))                // FLAG_TO_AGGRO_ON_AGGRO: and its master
+        if (l->flags & 0x0002) join(spawnEntity(l->master));
+}
+
+void World::linkedEvade(Entity& e, uint32_t nowMs) {
+    if (!data_ || e.spawnIndex < 0) return;
+    auto range = data_->slavesOf.equal_range((uint32_t)e.spawnIndex);   // FLAG_EVADE_ON_EVADE
+    for (auto it = range.first; it != range.second; ++it) {
+        const SpawnLink* l = data_->link((int)it->second);
+        Entity* c = spawnEntity(it->second);
+        if (l && (l->flags & 0x4000) && c && c->alive() && c->aiCombat) startEvade(*c, nowMs);
+    }
+}
+
+bool World::followMaster(Entity& e, uint32_t nowMs) {   // FLAG_FOLLOW: keeps its place beside the master
+    const SpawnLink* l = data_ && e.spawnIndex >= 0 ? data_->link(e.spawnIndex) : nullptr;
+    if (!l || !(l->flags & 0x0200)) return false;
+    Entity* m = spawnEntity(l->master);
+    if (!m || !m->alive() || m->victim || m->aiState == 3) return false;
+    const Spawn& ss = data_->spawns[(uint32_t)e.spawnIndex];
+    const Spawn& ms = data_->spawns[l->master];
+    const float ox = ss.x - ms.x, oy = ss.y - ms.y;
+    const float tx = (m->legActive ? m->legX : m->x) + ox, ty = (m->legActive ? m->legY : m->y) + oy;
+    const float tz = m->legActive ? m->legZ : m->z;
+    const bool walk = m->legActive ? m->legWalk : true;
+    if (e.legActive) {
+        if (d2(e.legX, e.legY, tx, ty) > 0.5f) startLeg(e, tx, ty, tz, walk);
+        const float sp = (walk ? m->walkSpeed : m->speed) * 1.1f;
+        if (stepLeg(e, sp, nowMs)) { e.legActive = false; e.moving = false; e.o = m->o; }
+        return true;
+    }
+    if (d2(e.x, e.y, tx, ty) > 0.7f) startLeg(e, tx, ty, tz, walk);
+    return true;
 }
 
 // ---------------------------------------------------------------- the creature's step

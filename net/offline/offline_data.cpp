@@ -518,6 +518,37 @@ bool readSpellControl(Bin& b, WorldData& w) {   // WoWVita "SPFX"
     return !b.bad;
 }
 
+bool readPools(Bin& b, WorldData& w) {   // WoWVita "POOL"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.pools.clear();
+    w.poolOf.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        SpawnPool p;
+        p.limit = b.u16();
+        const uint16_t k = b.u16();
+        for (uint16_t j = 0; j < k && !b.bad; ++j) p.members.push_back(b.u32());
+        for (uint32_t m : p.members) w.poolOf[m] = (uint32_t)w.pools.size();
+        w.pools.push_back(std::move(p));
+    }
+    return !b.bad;
+}
+
+bool readLinks(Bin& b, WorldData& w) {   // WoWVita "LINK"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 1000000) return false;
+    w.links.clear();
+    w.slavesOf.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t slave = b.u32();
+        SpawnLink l;
+        l.master = b.u32(); l.flags = b.u16();
+        w.links[slave] = l;
+        w.slavesOf.emplace(l.master, slave);
+    }
+    return !b.bad;
+}
+
 bool readAiTexts(Bin& b, WorldData& w) {   // WoWVita "AITX"
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -764,6 +795,8 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("CRAI"): ok = readCreatureAi(b, out); break;
             case fourcc("AITX"): ok = readAiTexts(b, out); break;
             case fourcc("SPFX"): ok = readSpellControl(b, out); break;
+            case fourcc("POOL"): ok = readPools(b, out); break;
+            case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }
         if (!ok) { err = "malformed section"; return false; }

@@ -1332,7 +1332,25 @@ void World::selectCreatureTarget(Entity& e, uint32_t nowMs) {
 
 void World::tickCreature(Entity& e, uint32_t nowMs) {
     if (e.dead) {
-        if (e.respawnAtMs && nowMs >= e.respawnAtMs) respawn(e, nowMs);
+        if (e.respawnAtMs && nowMs >= e.respawnAtMs) {
+            // WoWVita: a pooled spawn (a rare, Hogger) comes back at one of its pool's places, maybe another one
+            const bool pooled = data_ && e.spawnIndex >= 0 && data_->poolOf.count((uint32_t)e.spawnIndex);
+            if (pooled) {
+                const auto pit = data_->poolOf.find((uint32_t)e.spawnIndex);
+                const SpawnPool& pool = data_->pools[pit->second];
+                std::vector<uint32_t> free;
+                for (uint32_t m : pool.members) if (m == (uint32_t)e.spawnIndex || (m < poolChosen_.size() && !poolChosen_[m])) free.push_back(m);
+                const uint32_t next = free.empty() ? (uint32_t)e.spawnIndex : free[rng_.below((uint32_t)free.size())];
+                if (next != (uint32_t)e.spawnIndex && next < poolChosen_.size()) {
+                    poolChosen_[(uint32_t)e.spawnIndex] = 0;
+                    poolChosen_[next] = 1;
+                    spawnRespawnAt_[next] = 0;
+                    releaseCreature(e, nowMs);
+                    return;
+                }
+            }
+            respawn(e, nowMs);
+        }
         return;
     }
     if (behaviourData()) { tickBehaviour(e, nowMs); return; }   // WoWVita: movement, evade, help, EventAI
@@ -1444,6 +1462,7 @@ void World::buildSpawnCells() {
         const Spawn& sp = data_->spawns[i];
         spawnCells_[cellKey(cellOf(sp.x), cellOf(sp.y))].push_back(i);
     }
+    choosePools();   // WoWVita
 }
 
 int World::activeCreatures() const {
@@ -1495,6 +1514,7 @@ void World::updateActivation(uint32_t nowMs, bool initial) {
             for (uint32_t idx : it->second) {
                 if (spawnActive_[idx]) continue;
                 if (spawnRespawnAt_[idx] && nowMs < spawnRespawnAt_[idx]) continue;
+                if (idx < poolChosen_.size() && !poolChosen_[idx]) continue;   // WoWVita: another of its pool is up
                 const Spawn& sp = data_->spawns[idx];
                 const float d = dist2d(sp.x, sp.y, px, py);
                 if (d <= kAppearDist) cands.push_back(Cand{d, idx});

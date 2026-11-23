@@ -243,6 +243,8 @@ struct CreatureAi {
 // WoWVita "SPFX": what a spell's auras do to their target, for its duration
 enum class Control : uint8_t { Stun = 1, Root = 2, Slow = 3, Fear = 4, Silence = 5, Confuse = 6, Pacify = 7, PacifySilence = 8 };
 struct SpellControl { uint32_t durationMs = 0; std::vector<std::pair<uint8_t, int32_t>> effects; };   // (Control, value)
+struct SpawnPool { uint16_t limit = 1; std::vector<uint32_t> members; };   // WoWVita "POOL": only 'limit' up at a time
+struct SpawnLink { uint32_t master = 0; uint16_t flags = 0; };              // WoWVita "LINK": creature_linking
 struct AiText { uint8_t chatType = 0; uint32_t emote = 0; std::string text; };   // 0 say, 1 yell, 2/3 emote
 
 struct Graveyard { uint32_t id = 0; float x = 0, y = 0, z = 0, o = 0; };
@@ -294,6 +296,11 @@ struct WorldData {
     std::unordered_map<uint32_t, CreatureAi> creatureAi;              // "CRAI": creature entry -> behaviour
     std::unordered_map<int32_t, AiText> aiTexts;                      // "AITX"
     std::unordered_map<uint32_t, SpellControl> spellControl;          // "SPFX"
+    std::vector<SpawnPool> pools;                                     // "POOL"
+    std::unordered_map<uint32_t, uint32_t> poolOf;                    // spawn index -> pools index
+    std::unordered_map<uint32_t, SpawnLink> links;                    // "LINK": slave spawn -> its master
+    std::unordered_multimap<uint32_t, uint32_t> slavesOf;             // master spawn -> slave spawns
+    const SpawnLink* link(int spawn) const { auto it = links.find((uint32_t)spawn); return it == links.end() ? nullptr : &it->second; }
     const SpellControl* control(uint32_t spell) const { auto it = spellControl.find(spell); return it == spellControl.end() ? nullptr : &it->second; }
     const CreatureAi* ai(uint32_t entry) const { auto it = creatureAi.find(entry); return it == creatureAi.end() ? nullptr : &it->second; }
     const SpawnMove* spawnMove(int index) const { auto it = spawnMoves.find((uint32_t)index); return it == spawnMoves.end() ? nullptr : &it->second; }
@@ -692,6 +699,13 @@ private:
     // WoWVita: creature behaviour (offline_ai.cpp)
     void initBehaviour(Entity& e, int spawnIndex, uint32_t nowMs);
     void tickBehaviour(Entity& e, uint32_t nowMs);
+    Entity* spawnEntity(uint32_t spawnIndex);
+    void releaseCreature(Entity& e, uint32_t nowMs);
+    void linkedAggro(Entity& e, uint32_t nowMs);
+    void linkedEvade(Entity& e, uint32_t nowMs);
+    bool followMaster(Entity& e, uint32_t nowMs);
+    void choosePools();
+    std::vector<uint8_t> poolChosen_;   // per spawn: a pooled spawn that is up (or may come up)
 public:
     void applyControl(Entity& target, const SpellControl& c, uint32_t nowMs);   // WoWVita: stun, root, slow, ...
 private:

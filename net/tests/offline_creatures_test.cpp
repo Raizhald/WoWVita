@@ -342,6 +342,94 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 9. pools: only 'limit' of a pool up (Hogger is one of six places); dead, it may come back at another place
+    {
+        CHECK(!data.pools.empty(), "pools in the pack");
+        int hog = -1;
+        for (size_t i = 0; i < data.pools.size() && hog < 0; ++i)
+            for (uint32_t m : data.pools[i].members) if (data.spawns[m].entry == 448) hog = (int)i;
+        std::printf("pools: %zu, Hogger %s\n", data.pools.size(), hog >= 0 ? "pooled" : "not pooled");
+        CHECK(hog >= 0, "Hogger is a pool");
+        if (hog >= 0) {
+            const SpawnPool& pool = data.pools[hog];
+            const Spawn& s0 = data.spawns[pool.members[0]];
+            fresh(s0.x, s0.y);
+            int up = 0;
+            Entity* h = nullptr;
+            for (int round = 0; round < 6 && !h; ++round)
+                for (uint32_t m : pool.members) {   // walk past each place: one Hogger at most
+                    Entity* p = w.player();
+                    p->x = data.spawns[m].x + 60; p->y = data.spawns[m].y;
+                    run(600);
+                    if (Entity* e = w.entity(guidOf(m))) { if (!h) h = e; }
+                }
+            up = 0;
+            for (uint32_t m : pool.members) if (w.entity(guidOf(m))) ++up;
+            CHECK(h != nullptr && up <= pool.limit, "Hogger is there, at one place (%d up, limit %d)", up, (int)pool.limit);
+        }
+    }
+    // 10. linked creatures: the master pulled, its slaves come at once
+    {
+        int sl = -1;
+        for (auto& [slave, l] : data.links) {
+            if (!(l.flags & 1) || !hostile(data.spawns[slave].entry) || !hostile(data.spawns[l.master].entry)) continue;
+            if (dist(data.spawns[slave].x, data.spawns[slave].y, data.spawns[l.master].x, data.spawns[l.master].y) < 20) { sl = (int)slave; break; }
+        }
+        CHECK(sl >= 0, "a linked pair");
+        if (sl >= 0) {
+            const uint32_t ma = data.links[sl].master;
+            fresh(data.spawns[ma].x + 45, data.spawns[ma].y);
+            Entity* p = w.player();
+            Entity* m = w.entity(guidOf(ma));
+            Entity* e = w.entity(guidOf(sl));
+            CHECK(m && e, "both there");
+            if (m && e && !e->victim) {
+                w.applyDamage(*p, *m, 1, 0, 1, now);
+                run(200);
+                std::printf("link: %s pulled, %s comes\n", data.creature(m->entry)->name.c_str(), data.creature(e->entry)->name.c_str());
+                CHECK(e->victim == p->guid, "the linked one joins at once");
+            }
+        }
+    }
+    // 11. a follower walks beside its patrolling master
+    {
+        int sl = -1;
+        for (auto& [slave, l] : data.links) {
+            const SpawnMove* mm = data.spawnMove(l.master);
+            if ((l.flags & 0x200) && mm && mm->type == 2 && !hostile(data.spawns[l.master].entry)) { sl = (int)slave; break; }
+        }
+        if (sl < 0)
+            for (auto& [slave, l] : data.links) {
+                const SpawnMove* mm = data.spawnMove(l.master);
+                if ((l.flags & 0x200) && mm && mm->type == 2) { sl = (int)slave; break; }
+            }
+        CHECK(sl >= 0, "a follower of a patrol");
+        if (sl >= 0) {
+            const uint32_t ma = data.links[sl].master;
+            const float ox = data.spawns[sl].x - data.spawns[ma].x, oy = data.spawns[sl].y - data.spawns[ma].y;
+            fresh(data.spawns[ma].x + 50, data.spawns[ma].y + 50);
+            Entity* p = w.player();
+            p->untargetable = true;
+            float worst = 0, masterMoved = 0;
+            float mx0 = 0, my0 = 0;
+            bool first = true;
+            for (int k = 0; k < 20 * 60; ++k) {
+                Entity* m = w.entity(guidOf(ma));
+                Entity* e = w.entity(guidOf(sl));
+                if (!m || !e) { p->x = data.spawns[ma].x + 50; run(50); continue; }
+                if (first) { mx0 = m->x; my0 = m->y; first = false; }
+                p->x = m->x + 50; p->y = m->y + 50;
+                run(50);
+                if (k > 40) worst = std::max(worst, dist(e->x, e->y, m->x + ox, m->y + oy));
+                masterMoved = std::max(masterMoved, dist(mx0, my0, m->x, m->y));
+            }
+            std::printf("follow: %s with %s, master went %.0f yd, the follower at most %.1f yd off its place\n",
+                        data.creature(data.spawns[sl].entry)->name.c_str(), data.creature(data.spawns[ma].entry)->name.c_str(), masterMoved, worst);
+            CHECK(masterMoved > 10, "the master walked");
+            CHECK(worst < 4.0f, "the follower kept its place");
+        }
+    }
+
     std::printf("OFFLINE CREATURES: %d checks, %d failed -> %s\n", checks, failed, failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;
 }

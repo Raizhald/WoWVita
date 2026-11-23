@@ -265,6 +265,10 @@ private:
     // ---- events / state
     void dispatchEvents(uint32_t nowMs);
     void sendMovementToClient(uint32_t nowMs);
+    void syncControl(uint32_t nowMs);   // WoWVita: the player's stun / root / slow -> forced movement packets
+    bool ccRoot_ = false, ccStun_ = false;
+    float ccSpeed_ = 7.0f;
+    uint32_t ccCounter_ = 0;
     void applyEventFieldUpdates(uint32_t nowMs);
     void errorLine(const std::string& text, uint32_t nowMs);
     Entity* botEntity(int i) { return world_.bot(i); }

@@ -247,6 +247,101 @@ int main(int argc, char** argv) {
         }
     }
 
+    // 7. control auras: stun, root, slow, fear on a creature that fights the player; a stunned player
+    {
+        int idx = -1;
+        for (uint32_t i = 0; i < data.spawns.size() && idx < 0; ++i)
+            if (hostile(data.spawns[i].entry) && !data.ai(data.spawns[i].entry)->civilian && dist(data.spawns[i].x, data.spawns[i].y, -8913, -136) < 400)
+                idx = (int)i;
+        CHECK(idx >= 0, "a creature for the control auras");
+        if (idx >= 0) {
+            const Spawn& s = data.spawns[idx];
+            fresh(s.x + 20, s.y);
+            Entity* p = w.player();
+            Entity* e = w.entity(guidOf(idx));
+            if (e) {
+                w.applyDamage(*p, *e, 1, 0, 1, now);
+                SpellControl stun; stun.durationMs = 3000; stun.effects = {{(uint8_t)Control::Stun, 0}};
+                w.applyControl(*e, stun, now);
+                const float x0 = e->x, y0 = e->y;
+                run(2900);
+                CHECK(dist(x0, y0, e->x, e->y) < 0.01f, "stunned: it does not move");
+                run(1500);
+                CHECK(dist(x0, y0, e->x, e->y) > 3.0f, "after the stun it comes on");
+                // slow: half speed
+                e->hp = (int32_t)e->maxHp;
+                p->x = e->x + 30; p->y = e->y;
+                SpellControl slow; slow.durationMs = 2000; slow.effects = {{(uint8_t)Control::Slow, -50}};
+                w.applyControl(*e, slow, now);
+                float x1 = e->x;
+                run(1000);
+                const float slowRun = std::fabs(e->x - x1);
+                x1 = e->x;
+                run(1200);   // (the slow ends)
+                x1 = e->x;
+                run(1000);
+                const float fullRun = std::fabs(e->x - x1);
+                std::printf("slow: %.1f yd/s slowed, %.1f yd/s not\n", slowRun, fullRun);
+                CHECK(slowRun > 0.3f * fullRun && slowRun < 0.7f * fullRun, "slowed to half speed");
+                // root: in reach it still hits, out of reach it does not come
+                p->x = e->x + 15; p->y = e->y;
+                SpellControl root; root.durationMs = 2000; root.effects = {{(uint8_t)Control::Root, 0}};
+                w.applyControl(*e, root, now);
+                const float x2 = e->x;
+                run(1500);
+                CHECK(std::fabs(e->x - x2) < 0.01f, "rooted: it does not move");
+                // fear: runs about and does not hit
+                p->x = e->x + 1; p->y = e->y;
+                run(600);
+                SpellControl fear; fear.durationMs = 3000; fear.effects = {{(uint8_t)Control::Fear, 0}};
+                w.applyControl(*e, fear, now);
+                seen.clear();
+                const float x3 = e->x, y3 = e->y;
+                run(2500);
+                bool hit = false;
+                for (const SimEvent& ev : seen) if (ev.type == SimEvent::Damage && ev.a == e->guid) hit = true;
+                CHECK(!hit, "feared: it does not hit");
+                CHECK(dist(x3, y3, e->x, e->y) > 1.0f, "feared: it runs");
+                // a stunned player casts nothing and swings nothing
+                w.applyControl(*p, stun, now);
+                seen.clear();
+                CHECK(!w.tryCast(*p, 133, e->guid, now), "a stunned player cannot cast");
+                CHECK(p->stunned(now), "the player is stunned");
+            }
+        }
+    }
+
+    // 8. a control spell from the database, cast by its creature, lands on the player
+    {
+        int idx = -1;
+        uint32_t sid = 0;
+        for (uint32_t i = 0; i < data.spawns.size() && idx < 0; ++i) {
+            const CreatureAi* ai = data.ai(data.spawns[i].entry);
+            if (!ai || !hostile(data.spawns[i].entry)) continue;
+            for (const AiEvent& ev : ai->events)
+                for (const AiAction& ac : ev.act)
+                    if (ac.type == 11 && ac.p[1] != 0 && data.control((uint32_t)ac.p[0]) && data.spell((uint32_t)ac.p[0]) &&
+                        data.spell((uint32_t)ac.p[0])->castMs == 0) { idx = (int)i; sid = (uint32_t)ac.p[0]; }
+        }
+        CHECK(idx >= 0, "a creature with a control spell");
+        if (idx >= 0) {
+            const Spawn& s = data.spawns[idx];
+            fresh(s.x + 2, s.y);
+            Entity* p = w.player();
+            Entity* e = w.entity(guidOf(idx));
+            if (e) {
+                e->gcdEndMs = 0;
+                const bool ok = w.tryCast(*e, sid, p->guid, now);
+                const SpellControl* c = data.control(sid);
+                std::printf("control: %s casts %s (%u): %u ms, effect %d\n", data.creature(s.entry)->name.c_str(),
+                            data.spell(sid)->name.c_str(), sid, c->durationMs, (int)c->effects[0].first);
+                CHECK(ok, "it casts");
+                CHECK(p->stunned(now) || p->rooted(now) || p->slowUntilMs > now || p->silenced(now) || p->pacified(now),
+                      "the player is under it");
+            }
+        }
+    }
+
     std::printf("OFFLINE CREATURES: %d checks, %d failed -> %s\n", checks, failed, failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;
 }

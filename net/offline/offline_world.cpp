@@ -431,7 +431,8 @@ void World::moveToward(Entity& e, float tx, float ty, uint32_t nowMs, float stop
     const float dx = tx - e.x, dy = ty - e.y;
     const float d = std::sqrt(dx * dx + dy * dy);
     if (d <= stopAt || d < 0.01f) { e.moving = false; return; }
-    const float step = e.speed * ((float)kSimStepMs / 1000.0f);
+    if (e.stunned(now_) || e.rooted(now_)) { e.moving = false; return; }   // WoWVita: control auras
+    const float step = e.speed * e.speedFactor(now_) * ((float)kSimStepMs / 1000.0f);
     const float k = std::min(1.0f, step / d);
     e.x += dx * k;
     e.y += dy * k;
@@ -524,6 +525,13 @@ bool World::tryCast(Entity& actor, uint32_t spellId, uint64_t targetGuid, uint32
     const SpellDef* s = data_->spell(spellId);
     if (!s) return false;
     if (actor.castSpell) { emit(SimEvent::CastFailed, actor.guid, 0, spellId, 0, 0, 1); return false; }
+    // WoWVita: stunned / feared / confused nothing, silenced no spells, pacified no weapon strikes
+    if (actor.stunned(nowMs) || actor.feared(nowMs) ||
+        (actor.silenced(nowMs) && s->kind != SpellKind::Melee && s->school != 0) ||
+        (actor.pacified(nowMs) && s->kind == SpellKind::Melee)) {
+        emit(SimEvent::CastFailed, actor.guid, 0, spellId, 0, 0, 11);
+        return false;
+    }
     if (actor.gcdEndMs > nowMs && s->kind != SpellKind::Melee) {
         emit(SimEvent::CastFailed, actor.guid, 0, spellId, 0, 0, 2);
         return false;
@@ -631,6 +639,17 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
         return;
     }
     emit(SimEvent::CastFinished, e.guid, t->guid, spellId, 0, s->school);
+    if (const SpellControl* ctl = data_ ? data_->control(spellId) : nullptr) {   // WoWVita: stun, root, slow, ...
+        if (t != &e && t->alive()) {
+            applyControl(*t, *ctl, now_);
+            if (s->kind != SpellKind::Debuff && s->kind != SpellKind::Dot) {   // (a strike with a root: show its aura)
+                Aura a;
+                a.spell = spellId; a.caster = e.guid; a.kind = (uint8_t)SpellKind::Debuff; a.school = s->school;
+                a.endMs = now_ + ctl->durationMs;
+                addAura(*t, a);
+            }
+        }
+    }
 
     switch (s->kind) {
         case SpellKind::Melee:
@@ -748,7 +767,7 @@ void World::applyHeal(Entity& src, Entity& dst, int32_t amount, uint32_t spell, 
 void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
     if (!a.alive() || !b.alive()) { a.victim = 0; return; }
     if (!inMeleeRange(a, b)) return;
-    if (a.stunnedUntilMs > nowMs) return;
+    if (a.stunnedUntilMs > nowMs || a.feared(nowMs) || a.pacified(nowMs)) return;
     a.o = angleTo(a.x, a.y, b.x, b.y);
     a.nextSwingMs = nowMs + a.attackMs;
     if ((int32_t)rng_.below(100) < kMissChancePct) {
@@ -1381,7 +1400,7 @@ void World::tickEntity(Entity& e, uint32_t nowMs, bool isPlayer) {
     if (e.victim && e.alive()) {
         Entity* t = entity(e.victim);
         if (!t || !t->alive()) { e.victim = e.target = 0; }
-        else if (e.objType == 3 && (e.fleeUntilMs > nowMs || e.aiState == 3 || e.castSpell)) {}   // WoWVita: no swings
+        else if (e.objType == 3 && (e.fleeUntilMs > nowMs || e.aiState == 3 || e.castSpell || e.feared(nowMs))) {}   // WoWVita: no swings
         else if (nowMs >= e.nextSwingMs) resolveSwing(e, *t, nowMs);
     }
     (void)isPlayer;

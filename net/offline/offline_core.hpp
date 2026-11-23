@@ -15,6 +15,7 @@
 // death/respawn. No line of sight, no vmaps, no pathfinding around geometry, no full spell fidelity.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -239,6 +240,9 @@ struct CreatureAi {
     bool civilian = false;
     std::vector<AiEvent> events;
 };
+// WoWVita "SPFX": what a spell's auras do to their target, for its duration
+enum class Control : uint8_t { Stun = 1, Root = 2, Slow = 3, Fear = 4, Silence = 5, Confuse = 6, Pacify = 7, PacifySilence = 8 };
+struct SpellControl { uint32_t durationMs = 0; std::vector<std::pair<uint8_t, int32_t>> effects; };   // (Control, value)
 struct AiText { uint8_t chatType = 0; uint32_t emote = 0; std::string text; };   // 0 say, 1 yell, 2/3 emote
 
 struct Graveyard { uint32_t id = 0; float x = 0, y = 0, z = 0, o = 0; };
@@ -289,6 +293,8 @@ struct WorldData {
     std::unordered_map<uint32_t, SpawnMove> spawnMoves;               // spawn index -> how it moves
     std::unordered_map<uint32_t, CreatureAi> creatureAi;              // "CRAI": creature entry -> behaviour
     std::unordered_map<int32_t, AiText> aiTexts;                      // "AITX"
+    std::unordered_map<uint32_t, SpellControl> spellControl;          // "SPFX"
+    const SpellControl* control(uint32_t spell) const { auto it = spellControl.find(spell); return it == spellControl.end() ? nullptr : &it->second; }
     const CreatureAi* ai(uint32_t entry) const { auto it = creatureAi.find(entry); return it == creatureAi.end() ? nullptr : &it->second; }
     const SpawnMove* spawnMove(int index) const { auto it = spawnMoves.find((uint32_t)index); return it == spawnMoves.end() ? nullptr : &it->second; }
     const ItemExt* ext(uint32_t item) const { auto it = itemExt.find(item); return it == itemExt.end() ? nullptr : &it->second; }
@@ -421,6 +427,17 @@ struct Entity {
     uint64_t lastHitBy = 0;
     uint32_t refreshMs = 0;                    // CMaNGOS combat timer: the last time it was hurt, and where
     float refreshX = 0, refreshY = 0;
+    // WoWVita: control auras on it (until these times): stunnedUntilMs (above) also takes confuse for a player
+    uint32_t rootUntilMs = 0, fearUntilMs = 0, silenceUntilMs = 0, pacifyUntilMs = 0, slowUntilMs = 0;
+    int32_t slowPct = 0;                       // -50 = half speed
+    uint32_t nextFearMoveMs = 0;
+    bool netStun = false;                      // the client was told UNIT_FLAG_STUNNED
+    bool stunned(uint32_t now) const { return stunnedUntilMs > now; }
+    bool rooted(uint32_t now) const { return rootUntilMs > now; }
+    bool feared(uint32_t now) const { return fearUntilMs > now; }
+    bool silenced(uint32_t now) const { return silenceUntilMs > now; }
+    bool pacified(uint32_t now) const { return pacifyUntilMs > now; }
+    float speedFactor(uint32_t now) const { return slowUntilMs > now ? std::max(0.05f, 1.0f + (float)slowPct / 100.0f) : 1.0f; }
     uint8_t castPushes = 0;                    // spell pushback taken in this cast (two at most)
 
     // Player-only profile pointer index (-1 = none).
@@ -675,6 +692,9 @@ private:
     // WoWVita: creature behaviour (offline_ai.cpp)
     void initBehaviour(Entity& e, int spawnIndex, uint32_t nowMs);
     void tickBehaviour(Entity& e, uint32_t nowMs);
+public:
+    void applyControl(Entity& target, const SpellControl& c, uint32_t nowMs);   // WoWVita: stun, root, slow, ...
+private:
     bool behaviourData() const { return behaviourOn_ && data_ && (!data_->creatureAi.empty() || !data_->spawnMoves.empty()); }
     void tickIdleMovement(Entity& e, uint32_t nowMs);
     bool stepLeg(Entity& e, float speed, uint32_t nowMs);

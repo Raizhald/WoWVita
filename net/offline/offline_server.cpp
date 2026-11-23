@@ -587,7 +587,7 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_NEXT_LEVEL_XP, p->nextLevelXp);
     f.set(UF::PLAYER_FIELD_COINAGE, p->money);
     f.set(UF::PLAYER_FLAGS, (ghost_ ? 0x10u : 0u) | (resting_ ? 0x20u : 0u));   // WoWVita: resting (an inn, a capital)
-    f.set(UF::UNIT_FLAGS, flight_.active ? 0x00100004u : 0u);                  // WoWVita: TAXI_FLIGHT | DISABLE_MOVE
+    f.set(UF::UNIT_FLAGS, (flight_.active ? 0x00100004u : 0u) | (ccStun_ ? 0x00040000u : 0u));   // WoWVita: TAXI_FLIGHT | DISABLE_MOVE, STUNNED
     f.set(UF::UNIT_MOUNTDISPLAYID, flight_.active ? flight_.mount : 0u);       // the gryphon
     f.set(UF::UNIT_BYTES_1, eat_.active ? 1u : 0u);                            // WoWVita: sitting while eating (stand state 1)
     {   // WoWVita: rested experience
@@ -1720,6 +1720,44 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
     (void)nowMs;
 }
 
+void OfflineSession::syncControl(uint32_t nowMs) {   // WoWVita
+    Entity* p = world_.player();
+    if (!p) return;
+    const bool stun = p->alive() && p->stunned(nowMs);
+    const bool root = p->alive() && (stun || p->rooted(nowMs));
+    const float speed = 7.0f * (p->alive() ? p->speedFactor(nowMs) : 1.0f);
+    if (root != ccRoot_) {
+        ccRoot_ = root;
+        Writer w;
+        w.packedGuid(p->guid);
+        w.u32(++ccCounter_);
+        send(root ? 0x0E8 : 0x0EA, w.b);   // SMSG_FORCE_MOVE_ROOT / UNROOT
+        if (root && p->castSpell && stun) world_.stopCast(*p, 35, nowMs);
+    }
+    if (std::fabs(speed - ccSpeed_) > 0.01f) {
+        ccSpeed_ = speed;
+        Writer w;
+        w.packedGuid(p->guid);
+        w.u32(++ccCounter_);
+        w.f32(speed);
+        send(0x0E2, w.b);                   // SMSG_FORCE_RUN_SPEED_CHANGE
+    }
+    if (stun != ccStun_) { ccStun_ = stun; sendSelfFields(); }
+    // creatures: the stun animation (UNIT_FLAG_STUNNED)
+    for (int i = 0; i < kMaxEntities; ++i) {
+        Entity* e = world_.byIndex(i);
+        if (!e || !e->used || e->self || e->objType != 3) continue;
+        const bool s = e->alive() && (e->stunned(nowMs));
+        if (s == e->netStun) continue;
+        e->netStun = s;
+        FieldSet f;
+        f.set(UF::UNIT_FLAGS, s ? 0x00040000u : 0u);
+        UpdateBuilder u;
+        addValues(u, e->guid, f);
+        sendUpdateObject(u.finish());
+    }
+}
+
 void OfflineSession::sendMovementToClient(uint32_t nowMs) {
     if (nowMs - lastMoveSend_ < 400) return;
     lastMoveSend_ = nowMs;
@@ -1885,6 +1923,7 @@ void OfflineSession::update(uint32_t nowMs) {
     updateFlight(nowMs);   // WoWVita: on a gryphon
     updateEating(nowMs);   // WoWVita: food and drink
     sendMovementToClient(nowMs);
+    syncControl(nowMs);
     if (nowMs - lastPartyStats_ >= 1000) {
         lastPartyStats_ = nowMs;
         uint32_t h = 2166136261u;

@@ -408,9 +408,51 @@ bool World::aiAction(Entity& e, const AiAction& a, uint32_t nowMs, uint64_t othe
     return true;
 }
 
+// ---------------------------------------------------------------- control auras (SPFX)
+void World::applyControl(Entity& t, const SpellControl& c, uint32_t nowMs) {
+    const uint32_t until = nowMs + c.durationMs;
+    bool breaksCast = false;
+    for (const auto& [type, value] : c.effects) {
+        switch ((Control)type) {
+            case Control::Stun: t.stunnedUntilMs = std::max(t.stunnedUntilMs, until); breaksCast = true; break;
+            case Control::Root: t.rootUntilMs = std::max(t.rootUntilMs, until); break;
+            case Control::Slow:
+                if (value < 0 && (t.slowUntilMs <= nowMs || value < t.slowPct)) t.slowPct = std::max(-95, value);   // the strongest
+                if (value < 0) t.slowUntilMs = std::max(t.slowUntilMs, until);
+                break;
+            case Control::Fear:
+            case Control::Confuse:
+                if (t.objType == 3) { t.fearUntilMs = std::max(t.fearUntilMs, until); t.nextFearMoveMs = 0; }
+                else t.stunnedUntilMs = std::max(t.stunnedUntilMs, until);   // a player: loses control (no server-driven run yet)
+                breaksCast = true;
+                break;
+            case Control::Silence: t.silenceUntilMs = std::max(t.silenceUntilMs, until); breaksCast = true; break;
+            case Control::Pacify: t.pacifyUntilMs = std::max(t.pacifyUntilMs, until); break;
+            case Control::PacifySilence:
+                t.pacifyUntilMs = std::max(t.pacifyUntilMs, until);
+                t.silenceUntilMs = std::max(t.silenceUntilMs, until);
+                breaksCast = true;
+                break;
+        }
+    }
+    if (breaksCast && t.castSpell) cancelCast(t, 35, nowMs);
+    if (t.stunned(nowMs) || t.rooted(nowMs)) { t.moving = false; t.legActive = false; }
+}
+
 // ---------------------------------------------------------------- the creature's step
 void World::tickBehaviour(Entity& e, uint32_t nowMs) {
     const CreatureAi* ai = data_->ai(e.entry);
+    if (e.stunned(nowMs)) { e.moving = false; return; }   // stunned: nothing at all
+    if (e.feared(nowMs)) {                                // feared / confused: runs about, does nothing else
+        if (nowMs >= e.nextFearMoveMs || !e.moving) {
+            const float a = (float)rng_.below(6283) / 1000.0f;
+            e.moveX = e.x + std::cos(a) * 8.0f;
+            e.moveY = e.y + std::sin(a) * 8.0f;
+            e.nextFearMoveMs = nowMs + 1500;
+        }
+        moveToward(e, e.moveX, e.moveY, nowMs, 0.3f);
+        return;
+    }
     aiTick(e, nowMs);
     if (!e.used || !e.alive()) return;
     if (e.aiState == 3) { tickEvade(e, nowMs); return; }

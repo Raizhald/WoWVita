@@ -139,6 +139,27 @@ int main(int argc, char** argv) {
             CHECK(seen, "the client shows '<name> attempts to run away in fear!'");
         }
     }
+    // control auras on the player reach the client: root, stun flag, slower run speed
+    {
+        off::SpellControl root; root.durationMs = 1500; root.effects = {{(uint8_t)off::Control::Root, 0}};
+        w.applyControl(*p, root, now);
+        run(300);
+        CHECK(gs.mover.rooted(), "rooted: the client is held");
+        run(1600);
+        CHECK(!gs.mover.rooted(), "and let go after it");
+        off::SpellControl slow; slow.durationMs = 1500; slow.effects = {{(uint8_t)off::Control::Slow, -50}};
+        w.applyControl(*p, slow, now);
+        run(300);
+        CHECK(std::fabs(gs.mover.speeds.run - 3.5f) < 0.05f, "slowed: run speed %.2f", gs.mover.speeds.run);
+        run(1600);
+        CHECK(std::fabs(gs.mover.speeds.run - 7.0f) < 0.05f, "normal speed again (%.2f)", gs.mover.speeds.run);
+        off::SpellControl stun; stun.durationMs = 1500; stun.effects = {{(uint8_t)off::Control::Stun, 0}};
+        w.applyControl(*p, stun, now);
+        run(300);
+        const w3n::WorldObject* me = gs.objects.find(p->guid);
+        CHECK(gs.mover.rooted() && me && (me->field(w3n::UF::UNIT_FLAGS) & 0x40000), "stunned: held, UNIT_FLAG_STUNNED");
+        run(1600);
+    }
     remove(savePath);
     remove((std::string(savePath) + ".bak").c_str());
     std::printf("OFFLINE CREATURES (SESSION): %d checks, %d failed -> %s\n", checks, failed, failed ? "FAIL" : "PASS");

@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -329,6 +329,26 @@ def creature_spell(s, info, durs):
                 friendly=friendly)
 
 
+# auras that take control (SPFX): 12 stun, 26 root, 33 slow (its points: -50 = half speed), 7 fear, 27 silence,
+# 5 confuse, 25 pacify, 60 pacify + silence
+CONTROL_AURAS = {12: 1, 26: 2, 33: 3, 7: 4, 27: 5, 5: 6, 25: 7, 60: 8}
+
+
+def spell_control(s, durs):
+    """(duration ms, [(type, value)]) of the control auras a spell puts on its target, or None."""
+    d = durs.get(int(num(g(s, "DurationIndex"))))
+    if not d or d <= 0:
+        return None
+    out = []
+    for k in (1, 2, 3):
+        if int(num(g(s, f"Effect{k}"))) not in (6, 27, 35):
+            continue
+        t = CONTROL_AURAS.get(int(num(g(s, f"EffectApplyAuraName{k}"))))
+        if t:
+            out.append((t, int(num(g(s, f"EffectBasePoints{k}"))) + 1))
+    return (min(d, 3600000), out) if out else None
+
+
 def behaviour_sections(tables, templates, spawn_rows, spawn_moves, used, sec, report, spell_info=None):
     """'MOVE' (random wander and waypoint paths of the spawns), 'CRAI' (walk speed, civilians, EventAI) and
     'AITX' (the texts EventAI says), plus the creature spells EventAI casts appended to 'SPEL'."""
@@ -476,13 +496,26 @@ def behaviour_sections(tables, templates, spawn_rows, spawn_moves, used, sec, re
         sb.i32(c["amin"]); sb.i32(c["amax"]); sb.u32(c["dur"]); sb.u32(c["tick"]); sb.i32(0); sb.f32(0.0)
         sb.u8(1 if c["friendly"] else 0); sb.u8(0)
     sec["SPEL"] = sb.b
+    # -- what the auras of those spells do (stun, root, slow, fear, silence, confuse, pacify)
+    fx = []
+    for c in add:
+        ctl = spell_control(spells_db[c["id"]], durs)
+        if ctl:
+            fx.append((c["id"],) + ctl)
+    xb = Bin()
+    xb.u32(len(fx))
+    for (sid, dur, effs) in fx:
+        xb.u32(sid); xb.u32(dur); xb.u8(len(effs))
+        for (t, v) in effs:
+            xb.u8(t); xb.i32(v)
+    sec["SPFX"] = xb.b
     kinds = {}
     for c in add:
         kinds[c["kind"]] = kinds.get(c["kind"], 0) + 1
     report["counts_eventai"] = dict(creatures=len(ai), events=ev_kept, events_dropped=ev_dropped,
                                     actions_dropped=act_dropped, texts=len(out), spells=len(add),
                                     spells_not_supported=sum(1 for c in cspells.values() if not c),
-                                    spell_kinds=kinds, durations_known=len(info["idx_dur"]) > 0)
+                                    spell_kinds=kinds, control_spells=len(fx), durations_known=len(info["idx_dur"]) > 0)
 
 
 def sample_spell_ids(spel):

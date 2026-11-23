@@ -499,6 +499,25 @@ bool readCreatureAi(Bin& b, WorldData& w) {   // WoWVita "CRAI"
     return !b.bad;
 }
 
+bool readSpellControl(Bin& b, WorldData& w) {   // WoWVita "SPFX"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.spellControl.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t id = b.u32();
+        SpellControl c;
+        c.durationMs = b.u32();
+        const uint8_t k = b.u8();
+        for (uint8_t j = 0; j < k && !b.bad; ++j) {
+            const uint8_t t = b.u8();
+            const int32_t v = b.i32();
+            c.effects.emplace_back(t, v);
+        }
+        if (!b.bad && c.durationMs) w.spellControl[id] = std::move(c);
+    }
+    return !b.bad;
+}
+
 bool readAiTexts(Bin& b, WorldData& w) {   // WoWVita "AITX"
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -744,6 +763,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("MOVE"): ok = readMovement(b, out); break;
             case fourcc("CRAI"): ok = readCreatureAi(b, out); break;
             case fourcc("AITX"): ok = readAiTexts(b, out); break;
+            case fourcc("SPFX"): ok = readSpellControl(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }
         if (!ok) { err = "malformed section"; return false; }

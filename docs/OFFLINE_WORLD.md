@@ -92,13 +92,16 @@ Creature behaviour (`MOVE`, `CRAI`, `AITX`, net/offline/offline_ai.cpp), as CMaN
   the actions say / yell / text emote (broadcast_text, e.g. "attempts to run away in fear!"), animations, cast (the
   creature spells of the subset: direct damage, weapon strikes, heals, damage over time, auras shown on their target),
   phases, combat movement, ranged mode, evade, flee for help (30 yd, 10 s) and call for help. A hit pushes a creature's
-  cast back (500 ms, twice) instead of breaking it. Left out: summons, scripts, despawns, unit flags and the spell effects
-  the core does not have (stuns, roots, slows only show as an aura for now).
+  cast back (500 ms, twice) instead of breaking it. Left out: summons, scripts, despawns and unit flags.
+- control auras (`SPFX`: the spell's auras 12 stun, 26 root, 33 slow, 7 fear, 27 silence, 5 confuse, 25 / 60 pacify,
+  for their SpellDuration): a stunned unit does nothing (the client: UNIT_FLAG_STUNNED, held by SMSG_FORCE_MOVE_ROOT),
+  a rooted one cannot move, a slowed one runs slower (the player: SMSG_FORCE_RUN_SPEED_CHANGE), a silenced one casts
+  no spells, a pacified one does not strike; a feared / confused creature runs about. A feared player is held like a
+  stunned one (the server does not run the player yet).
 
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.
 
-Still missing (the offline core's own limits): trainers, talents, the effects of most creature auras (stun, root,
-slow), pathfinding, other maps. The start is Northshire Abbey.
+Still missing (the offline core's own limits): trainers, talents, stat auras (armour, damage), pathfinding, other maps. The start is Northshire Abbey.
 
 Tests: `net/tests/run_offline_grid.sh offline.w3do`, `net/tests/run_offline_life.sh offline.w3do`.

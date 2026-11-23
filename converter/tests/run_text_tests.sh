@@ -22,6 +22,8 @@ printf '@combat\t1752\t1\n@combat\t1776\t4\n@combat\t3044\t2\n@combat\t75\t2\n@c
 diff <(grep "^@combat" "$OUT/sd/spells.txt") "$OUT/combat.expect" && echo "AUTO-ATTACK SPELLS: PASS"
 # 6.87: ranges of learnable spells at a unit (Arcane Shot 8-35; the bolts are not learnable here)
 [ "$(grep "^@range" "$OUT/sd/spells.txt")" = "$(printf "@range\t3044\t8.0\t35.0")" ] && echo "SPELL RANGES: PASS"
+# WoWVita: the index tables the offline world exporter uses for creature spells
+grep -q "^@idx	cast	4	3500$" "$OUT/sd/spells.txt" && grep -q "^@idx	dur	21	120000$" "$OUT/sd/spells.txt" && grep -q "^@idx	range	" "$OUT/sd/spells.txt" && echo "SPELL INDEX TABLES: PASS"
 # 6.90: recipes.txt - the enchant names what it fits (armour, feet), the smelting none
 grep -q "^R	186	7863	0	0	0	1	0	1	-	10940:1	4:0:256$" "$OUT/sd/recipes.txt" && grep -q "^R	186	2657	0	0	0	0	2840	1	-	2770:1	-1:0:0$" "$OUT/sd/recipes.txt" && echo "RECIPE ITEM REQUIREMENTS: PASS"
 # 6.19: skills.txt - the category is kept, the nameless row skipped, tabs / newlines of a description flattened

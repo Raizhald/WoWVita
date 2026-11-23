@@ -470,6 +470,27 @@ bool exportSpellNames(const DataDir& data, const std::string& path, bool verbose
         }
         std::printf("  spell ranges: %zu\n", ranges);
     }
+    // WoWVita: the offline world's creature spells - "@idx cast id ms" (SpellCastTimes.dbc), "@idx dur id ms"
+    // (SpellDuration.dbc, -1 = until cancelled) and "@idx range id min max" (SpellRange.dbc): the world exporter
+    // (tools/offline_data/export_world_sql.py --spells) looks up spell_template's indexes in them.
+    {
+        size_t rows = 0;
+        DbcTable ct, du;
+        Table rg;
+        if (ct.load(data, "SpellCastTimes.dbc"))
+            for (uint32_t r = 0; r < ct.records; ++r, ++rows)
+                out += "@idx\tcast\t" + std::to_string(ct.u32(r, 0)) + "\t" + std::to_string((int32_t)ct.u32(r, 1)) + "\n";
+        if (du.load(data, "SpellDuration.dbc") && du.fields > 1)
+            for (uint32_t r = 0; r < du.records; ++r, ++rows)
+                out += "@idx\tdur\t" + std::to_string(du.u32(r, 0)) + "\t" + std::to_string((int32_t)du.u32(r, 1)) + "\n";
+        if (rg.load(data, "SpellRange.dbc") && rg.fields > 2)
+            for (uint32_t r = 0; r < rg.records; ++r, ++rows) {
+                char line[96];
+                std::snprintf(line, sizeof line, "@idx\trange\t%u\t%.1f\t%.1f\n", rg.u32(r, 0), rg.f32(r, 1), rg.f32(r, 2));
+                out += line;
+            }
+        std::printf("  spell index tables: %zu rows\n", rows);
+    }
     FILE* f = std::fopen(path.c_str(), "wb");
     if (!f) {
         std::fprintf(stderr, "spells: cannot write %s\n", path.c_str());

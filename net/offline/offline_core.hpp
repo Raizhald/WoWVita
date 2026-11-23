@@ -65,6 +65,7 @@ enum class SpellKind : uint8_t {
     Taunt = 5,       // pulls the target's attention to the caster
     Interrupt = 6,   // stops the target's cast
     Script = 7,      // WoWVita: no effect in the world; the session acts when the cast finishes (the Hearthstone)
+    Debuff = 8,      // WoWVita: an aura on an enemy (a creature spell): shown for its duration, no numeric effect yet
 };
 constexpr uint32_t kHearthstoneSpell = 8690, kHearthstoneItem = 6948;   // WoWVita
 constexpr uint32_t kResurrectionSickness = 15007;                       // WoWVita: after the spirit healer (level 11+)
@@ -220,6 +221,26 @@ struct QuestDrop { uint32_t item = 0; uint16_t chance = 0; };   // chance in 1/1
 struct VendorGoods { uint32_t item = 0; uint16_t buyCount = 1; };
 
 // WoWVita: a graveyard ("GRAV": world_safe_locs) and a zone it serves (game_graveyard_zone; faction 0 any, 469 Alliance, 67 Horde)
+// WoWVita: creature behaviour ("MOVE", "CRAI", "AITX")
+struct MovePoint { float x = 0, y = 0, z = 0, o = 100.0f; uint32_t waitMs = 0; };   // o 100 = keep the heading
+struct SpawnMove { uint8_t type = 0; float wander = 0; uint32_t path = 0xFFFFFFFFu; }; // 1 random, 2 waypoints
+struct AiAction { uint8_t type = 0; int32_t p[3] = {0, 0, 0}; };
+struct AiEvent {   // CMaNGOS EventAI (creature_ai_scripts): the subset the core runs
+    uint8_t type = 0, chance = 100;
+    uint16_t flags = 0;                // 0x01 repeatable, 0x20 one random action
+    uint32_t phaseMask = 0;            // the phases it does NOT run in
+    int32_t p[6] = {0, 0, 0, 0, 0, 0};
+    AiAction act[3];
+};
+struct CreatureAi {
+    float walkSpeed = 2.5f, callForHelp = 0;
+    float leash = 0;                   // the most it follows from where the fight began (0: no limit)
+    uint32_t pursuitMs = 15000;        // CMaNGOS Pursuit: no damage that long and the enemy 30 yd off -> evade
+    bool civilian = false;
+    std::vector<AiEvent> events;
+};
+struct AiText { uint8_t chatType = 0; uint32_t emote = 0; std::string text; };   // 0 say, 1 yell, 2/3 emote
+
 struct Graveyard { uint32_t id = 0; float x = 0, y = 0, z = 0, o = 0; };
 struct GraveyardLink { uint32_t id = 0, zone = 0; uint16_t faction = 0; };
 
@@ -264,6 +285,12 @@ struct WorldData {
     std::unordered_map<uint32_t, ItemExt> itemExt;                    // "ITX1"
     std::vector<uint32_t> explorationXp;                              // "EXPL": by area level
     std::unordered_multimap<uint32_t, uint32_t> questTriggers;        // "QTRG": area trigger -> exploration quest
+    std::vector<std::vector<MovePoint>> paths;                        // "MOVE": waypoint paths
+    std::unordered_map<uint32_t, SpawnMove> spawnMoves;               // spawn index -> how it moves
+    std::unordered_map<uint32_t, CreatureAi> creatureAi;              // "CRAI": creature entry -> behaviour
+    std::unordered_map<int32_t, AiText> aiTexts;                      // "AITX"
+    const CreatureAi* ai(uint32_t entry) const { auto it = creatureAi.find(entry); return it == creatureAi.end() ? nullptr : &it->second; }
+    const SpawnMove* spawnMove(int index) const { auto it = spawnMoves.find((uint32_t)index); return it == spawnMoves.end() ? nullptr : &it->second; }
     const ItemExt* ext(uint32_t item) const { auto it = itemExt.find(item); return it == itemExt.end() ? nullptr : &it->second; }
     const QuestFull* questFull(uint32_t id) const {
         auto it = questIndex.find(id);
@@ -374,6 +401,28 @@ struct Entity {
     float netO = 0;                    // the orientation the client was last told
     uint32_t recoveringUntilMs = 0;
 
+    // WoWVita: behaviour (offline_ai.cpp)
+    int32_t spawnIndex = -1;
+    float walkSpeed = 2.5f;
+    bool legActive = false, legWalk = false;   // an idle move (wander / waypoint) the client got as one spline
+    uint16_t moveLeg = 0, netLeg = 0;
+    float legX = 0, legY = 0, legZ = 0, legFromZ = 0, legLen = 0;
+    uint32_t nextIdleMoveMs = 0;
+    uint16_t wpIndex = 0;
+    bool aiCombat = false;                     // in combat as EventAI sees it (enter / leave)
+    float combatX = 0, combatY = 0, combatZ = 0;   // where the fight began: evade goes back there
+    uint32_t fleeUntilMs = 0;                  // fleeing for help
+    uint64_t fleeTo = 0;
+    uint32_t assistAtMs = 0;                   // called for help: joins assistTarget then (CreatureFamilyAssistanceDelay)
+    uint64_t assistTarget = 0;
+    uint8_t aiPhase = 0;
+    bool combatMove = true;
+    float rangedDist = 0;                      // EventAI ranged mode: stays this far and casts
+    uint64_t lastHitBy = 0;
+    uint32_t refreshMs = 0;                    // CMaNGOS combat timer: the last time it was hurt, and where
+    float refreshX = 0, refreshY = 0;
+    uint8_t castPushes = 0;                    // spell pushback taken in this cast (two at most)
+
     // Player-only profile pointer index (-1 = none).
     int8_t profileIndex = -1;
 
@@ -393,6 +442,8 @@ struct SimEvent {
         ThreatChanged = 17, PowerChanged = 18, ItemGained = 19, QuestProgress = 20, QuestComplete = 21,
         Appear = 22, Vanish = 23,      // WoWVita: a spawn came into / went out of the active area around the player
         Durability = 24,               // WoWVita: an equipped item lost durability (value = the equipment slot)
+        CreatureText = 25,             // WoWVita: EventAI says / yells / emotes AITX text 'value' (b = its target)
+        CreatureEmote = 26,            // WoWVita: an animation (value = the emote id)
     };
     uint8_t type = 0;
     uint64_t a = 0, b = 0;             // actor / target (or victim / attacker)
@@ -621,6 +672,31 @@ private:
     void selectCreatureTarget(Entity& e, uint32_t nowMs);
     void addAura(Entity& e, const Aura& a);
     void removeAura(Entity& e, int index);
+    // WoWVita: creature behaviour (offline_ai.cpp)
+    void initBehaviour(Entity& e, int spawnIndex, uint32_t nowMs);
+    void tickBehaviour(Entity& e, uint32_t nowMs);
+    bool behaviourData() const { return behaviourOn_ && data_ && (!data_->creatureAi.empty() || !data_->spawnMoves.empty()); }
+    void tickIdleMovement(Entity& e, uint32_t nowMs);
+    bool stepLeg(Entity& e, float speed, uint32_t nowMs);
+    void startLeg(Entity& e, float x, float y, float z, bool walk);
+    void startEvade(Entity& e, uint32_t nowMs);
+    bool tickEvade(Entity& e, uint32_t nowMs);
+    bool tickFlee(Entity& e, uint32_t nowMs);
+    void enterCombat(Entity& e, uint32_t nowMs);
+    void callAssistance(Entity& e, float radius, uint32_t nowMs, uint32_t delayMs = 0);
+    void aiEvent(Entity& e, uint8_t type, uint32_t nowMs, uint64_t other = 0);
+    void aiTick(Entity& e, uint32_t nowMs);
+    bool aiRun(Entity& e, int index, const AiEvent& ev, uint32_t nowMs, uint64_t other);
+    bool aiAction(Entity& e, const AiAction& a, uint32_t nowMs, uint64_t other);
+    void aiArm(Entity& e, int index, const AiEvent& ev, bool initial, uint32_t nowMs);
+    bool aiCanRun(const Entity& e, const AiEvent& ev) const;
+    struct AiTimers { uint32_t next[48] = {}; uint64_t done = 0; };
+    AiTimers aiTimers_[kMaxEntities];
+    AiTimers& timersOf(const Entity& e) { return aiTimers_[&e - pool_]; }
+    bool behaviourOn_ = true;
+public:
+    void setBehaviour(bool on) { behaviourOn_ = on; }   // tests: the upstream checks run without it
+private:
 
     const WorldData* data_ = nullptr;
     Entity pool_[kMaxEntities];

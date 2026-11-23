@@ -544,7 +544,11 @@ void OfflineSession::sendChat(uint8_t type, uint64_t sender, const std::string& 
     Writer w;
     w.u8(type);
     w.u32(7);   // LANG_COMMON
-    if (type == 0x0B || type == 0x0C || type == 0x0D || type == 0x1A) {
+    if (type == 0x0D) {   // WoWVita: a creature's text emote - the name, then the one it is aimed at
+        w.u32((uint32_t)name.size() + 1);
+        w.raw(name.c_str(), name.size() + 1);
+        w.u64(0);
+    } else if (type == 0x0B || type == 0x0C || type == 0x1A) {
         w.u64(sender);
         w.u32((uint32_t)name.size() + 1);
         w.raw(name.c_str(), name.size() + 1);
@@ -559,6 +563,13 @@ void OfflineSession::sendChat(uint8_t type, uint64_t sender, const std::string& 
     w.raw(text.c_str(), text.size() + 1);
     w.u8(0);
     send(SMSG_MESSAGECHAT, w.b);
+}
+
+void OfflineSession::sendEmote(uint64_t guid, uint32_t emote) {   // WoWVita: SMSG_EMOTE (an Emotes.dbc id)
+    Writer w;
+    w.u32(emote);
+    w.u64(guid);
+    send(0x103, w.b);
 }
 
 void OfflineSession::errorLine(const std::string& text, uint32_t nowMs) { (void)nowMs; sendChat(0x0A, 0, text); }
@@ -1667,6 +1678,39 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
             case SimEvent::Message:
                 if (e.text[0]) sendChat(0x0A, 0, std::string((const char*)e.text));
                 break;
+            case SimEvent::CreatureText: {   // WoWVita: EventAI says, yells or emotes (broadcast_text)
+                const Entity* me = world_.player();
+                if (!a || !me || !data_) break;
+                auto it = data_->aiTexts.find(e.value);
+                if (it == data_->aiTexts.end()) break;
+                const AiText& t = it->second;
+                const float dx = a->x - me->x, dy = a->y - me->y;
+                const float hear = t.chatType == 1 ? 300.0f : 40.0f;
+                if (dx * dx + dy * dy > hear * hear) break;
+                const CreatureTemplate* ct = data_->creature(a->entry);
+                const std::string name = ct ? ct->name : std::string();
+                std::string text = t.text;
+                const Entity* to = world_.entity(e.b);
+                const std::string toName = (to && to->self) ? world_.playerProfile().name : std::string();
+                auto subst = [&](const std::string& key, const std::string& val) {
+                    for (size_t at; (at = text.find(key)) != std::string::npos;) text.replace(at, key.size(), val);
+                };
+                subst("$N", toName.empty() ? "you" : toName);
+                subst("$n", toName.empty() ? "you" : toName);
+                if (t.chatType == 2 || t.chatType == 3) {
+                    if (text.rfind("%s ", 0) == 0) text = text.substr(3);   // the client puts the name in front
+                    subst("%s", name);
+                    sendChat(0x0D, a->guid, text, name);
+                } else {
+                    subst("%s", name);
+                    sendChat(t.chatType == 1 ? 0x0C : 0x0B, a->guid, text, name);
+                }
+                if (t.emote) sendEmote(a->guid, t.emote);
+                break;
+            }
+            case SimEvent::CreatureEmote:
+                if (a) sendEmote(a->guid, (uint32_t)e.value);
+                break;
             default:
                 break;
         }
@@ -1682,6 +1726,27 @@ void OfflineSession::sendMovementToClient(uint32_t nowMs) {
     for (int i = 0; i < kMaxEntities; ++i) {
         Entity* e = world_.byIndex(i);
         if (!e || !e->used || e->self) continue;
+        if (!e->dead && e->moving && e->legActive) {
+            // WoWVita: a wander / waypoint move goes out once, as one spline to its end (walking: no run flag)
+            if (e->netLeg == e->moveLeg && e->netMoveState == 1) continue;
+            const float speed = e->legWalk ? e->walkSpeed : e->speed;
+            const float dx = e->legX - e->x, dy = e->legY - e->y;
+            const float dist = std::sqrt(dx * dx + dy * dy);
+            Writer w;
+            w.packedGuid(e->guid);
+            w.f32(e->x); w.f32(e->y); w.f32(e->z);
+            w.u32(nowMs);
+            w.u8(0);
+            w.u32(e->legWalk ? 0u : 0x100u);
+            w.u32((uint32_t)std::max(50.0f, dist / std::max(0.5f, speed) * 1000.0f));
+            w.u32(1);
+            w.f32(e->legX); w.f32(e->legY); w.f32(e->legZ);
+            send(0x0DD, w.b);
+            e->netMoveState = 1;
+            e->netLeg = e->moveLeg;
+            e->netO = e->o;
+            continue;
+        }
         if (!e->dead && e->moving) {
             // Companions and creatures use the same server spline: the client interpolates it and blends
             // from where the model was drawn. Player dead-reckoning from a 500 ms heartbeat made the

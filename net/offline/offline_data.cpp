@@ -449,6 +449,69 @@ bool readTaverns(Bin& b, WorldData& w) {   // WoWVita
     return !b.bad;
 }
 
+bool readMovement(Bin& b, WorldData& w) {   // WoWVita "MOVE"
+    const uint32_t np = b.u32();
+    if (b.bad || np > 65536) return false;
+    w.paths.clear();
+    w.paths.reserve(np);
+    for (uint32_t i = 0; i < np && !b.bad; ++i) {
+        const uint16_t n = b.u16();
+        if (n > 1000) return false;
+        std::vector<MovePoint> pts(n);
+        for (MovePoint& m : pts) { m.x = b.f32(); m.y = b.f32(); m.z = b.f32(); m.o = b.f32(); m.waitMs = b.u32(); }
+        w.paths.push_back(std::move(pts));
+    }
+    const uint32_t nm = b.u32();
+    if (b.bad || nm > 1000000) return false;
+    w.spawnMoves.clear();
+    for (uint32_t i = 0; i < nm && !b.bad; ++i) {
+        const uint32_t idx = b.u32();
+        SpawnMove m;
+        m.type = b.u8(); m.wander = b.f32(); m.path = b.u32();
+        if (m.type == 2 && m.path >= w.paths.size()) continue;
+        w.spawnMoves[idx] = m;
+    }
+    return !b.bad;
+}
+
+bool readCreatureAi(Bin& b, WorldData& w) {   // WoWVita "CRAI"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.creatureAi.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t entry = b.u32();
+        CreatureAi a;
+        a.walkSpeed = b.f32(); a.callForHelp = b.f32();
+        const uint8_t flags = b.u8();
+        a.civilian = (flags & 1) != 0;
+        a.leash = b.f32(); a.pursuitMs = b.u32();
+        const uint8_t ne = b.u8();
+        for (uint8_t k = 0; k < ne && !b.bad; ++k) {
+            AiEvent e;
+            e.type = b.u8(); e.phaseMask = b.u32(); e.chance = b.u8(); e.flags = b.u16();
+            for (int32_t& v : e.p) v = b.i32();
+            for (AiAction& ac : e.act) { ac.type = b.u8(); for (int32_t& v : ac.p) v = b.i32(); }
+            a.events.push_back(e);
+        }
+        if (!(a.walkSpeed > 0.1f && a.walkSpeed < 50.0f)) a.walkSpeed = 2.5f;
+        w.creatureAi[entry] = std::move(a);
+    }
+    return !b.bad;
+}
+
+bool readAiTexts(Bin& b, WorldData& w) {   // WoWVita "AITX"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 65536) return false;
+    w.aiTexts.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const int32_t id = b.i32();
+        AiText t;
+        t.chatType = b.u8(); t.emote = b.u32(); t.text = b.str();
+        if (!b.bad) w.aiTexts[id] = std::move(t);
+    }
+    return !b.bad;
+}
+
 bool readGoLoot(Bin& b, WorldData& w) {   // WoWVita
     const uint32_t n = b.u32();
     if (b.bad || n > 65536) return false;
@@ -678,6 +741,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("EXPL"): ok = readExploration(b, out); break;
             case fourcc("QTRG"): ok = readQuestTriggers(b, out); break;
             case fourcc("GLOT"): ok = readGoLoot(b, out); break;
+            case fourcc("MOVE"): ok = readMovement(b, out); break;
+            case fourcc("CRAI"): ok = readCreatureAi(b, out); break;
+            case fourcc("AITX"): ok = readAiTexts(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }
         if (!ok) { err = "malformed section"; return false; }

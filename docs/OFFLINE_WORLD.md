@@ -18,8 +18,13 @@ vMaNGOS world dump) and the `factions.txt` the converter writes (`w3dconv --text
 
 ```
 python3 tools/offline_data/export_world_sql.py --sql ClassicDB_1_12_1_z2815.sql.gz --factions factions.txt \
-    --map 0 --out offline.w3do
+    --spells spells.txt --map 0 --out offline.w3do
 ```
+
+`--spells` (the converter's spells.txt, same folder as factions.txt) gives the creature spells their cast times,
+ranges and durations (`@cast`, `@range`, and the `@idx cast|dur|range` lines of the SpellCastTimes / SpellDuration /
+SpellRange tables a newer converter writes). Without the `@idx` lines most damage-over-time and aura spells of the
+creatures are left out.
 
 Map 0 (Eastern Kingdoms) gives about 24 000 spawns, 3 300 creature kinds and 3 500 items in 0.7 MB. Copy
 `offline.w3do` to `ux0:data/wowvita/offline.w3do`; without it the game uses the Northshire sample.
@@ -72,10 +77,28 @@ client's DurabilityCosts / DurabilityQuality: durability.txt from the converter)
 backpack grows by their slots (no moving items between bags yet, no bank bags). Exploration: quests completed at their
 area trigger (`QTRG`), exploration XP for a new area (`EXPL`; the area's level and bit are the converter's glue.txt). Eastern Kingdoms: 51 graveyards, 40 spirit healers, 26 innkeepers.
 
+Creature behaviour (`MOVE`, `CRAI`, `AITX`, net/offline/offline_ai.cpp), as CMaNGOS runs the classic-db data:
+- movement: `MovementType` 1 wanders at walking speed (SpeedWalk) within `spawndist` of its spawn, one to three moves
+  and then a 3-10 s pause (WanderMovementGenerator); `MovementType` 2 walks its path (`creature_movement` by spawn,
+  `creature_movement_template` by entry) and waits each point's WaitTime. A move goes to the client once, as one walking
+  spline to its end. Eastern Kingdoms: 16 000 wanderers, 1 009 patrols (25 000 points).
+- evade: the creature remembers where the fight began; with no one left to fight, or when it leashes (not hurt for its
+  Pursuit, 15 s, and its enemy more than 30 yd from where it was last hurt; or past its Leash from the start) it runs
+  back there, cannot be hurt on the way and is whole again when it arrives (CMaNGOS CombatManager).
+- assistance: 1.5 s after a creature is pulled, the creatures of its faction within 5 yd (or its CallForHelp) that are
+  not fighting and are hostile to the enemy join in (CallAssistance / CanAssistTo; neutral ones do not).
+- EventAI (`creature_ai_scripts`, 2 100 events of 1 000 creatures here): timers in and out of combat, health, mana,
+  range, target health, target casting, a hurt friend, a missing aura, aggro, kill, death, evade, spawn and reached home;
+  the actions say / yell / text emote (broadcast_text, e.g. "attempts to run away in fear!"), animations, cast (the
+  creature spells of the subset: direct damage, weapon strikes, heals, damage over time, auras shown on their target),
+  phases, combat movement, ranged mode, evade, flee for help (30 yd, 10 s) and call for help. A hit pushes a creature's
+  cast back (500 ms, twice) instead of breaking it. Left out: summons, scripts, despawns, unit flags and the spell effects
+  the core does not have (stuns, roots, slows only show as an aura for now).
+
 No companions: the upstream core gives the player four AI party members; WoWVita leaves them out. An empty
 `ux0:data/wowvita/offline_party.txt` brings them back.
 
-Still missing (the offline core's own limits): trainers, talents, creature spells beyond the
-documented subset, pathfinding, other maps. The start is Northshire Abbey.
+Still missing (the offline core's own limits): trainers, talents, the effects of most creature auras (stun, root,
+slow), pathfinding, other maps. The start is Northshire Abbey.
 
 Tests: `net/tests/run_offline_grid.sh offline.w3do`, `net/tests/run_offline_life.sh offline.w3do`.

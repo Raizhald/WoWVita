@@ -27,14 +27,15 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
           "quest_template", "creature_questrelation", "creature_involvedrelation", "gossip_menu", "npc_text",
           "gameobject", "gameobject_template", "gameobject_loot_template", "gameobject_questrelation",
           "gameobject_involvedrelation", "gameobject_spawn_entry", "world_safe_locs", "game_graveyard_zone", "areatrigger_tavern",
-          "spell_template", "exploration_basexp", "areatrigger_involvedrelation"}
+          "spell_template", "exploration_basexp", "areatrigger_involvedrelation",
+          "creature_movement", "creature_movement_template", "creature_ai_scripts", "broadcast_text", "creature_ai_texts"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -240,7 +241,263 @@ def xp_for(level, rank, ctype, mult):
     return int(base * (mult if mult > 0 else 1.0))
 
 
-def build(tables, factions, map_id, report, player_faction=1):
+# ---------------------------------------------------------------- WoWVita: creature behaviour
+# EventAI (creature_ai_scripts) as CMaNGOS runs it: the events and actions the offline core implements are kept,
+# the rest are dropped (an event without one kept action goes).
+AI_EVENTS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 14, 21, 27}
+AI_ACTIONS = {1, 5, 10, 11, 21, 22, 23, 24, 25, 30, 31, 39, 57}
+SPELL_KIND = dict(melee=0, damage=1, heal=2, dot=3, buff=4, debuff=8)
+
+
+def load_spell_info(path):
+    """The converter's spells.txt: '@cast id ms', '@range id min max' and (newer) '@idx cast|dur|range idx a [b]'."""
+    info = dict(cast={}, range={}, idx_cast={}, idx_dur={}, idx_range={})
+    if not path:
+        return info
+    with open_text(path) as f:
+        for line in f:
+            p = line.rstrip("\n").split("\t")
+            try:
+                if p[0] == "@cast":
+                    info["cast"][int(p[1])] = int(p[2])
+                elif p[0] == "@range":
+                    info["range"][int(p[1])] = (float(p[2]), float(p[3]))
+                elif p[0] == "@idx" and p[1] == "cast":
+                    info["idx_cast"][int(p[2])] = int(p[3])
+                elif p[0] == "@idx" and p[1] == "dur":
+                    info["idx_dur"][int(p[2])] = int(p[3])
+                elif p[0] == "@idx" and p[1] == "range":
+                    info["idx_range"][int(p[2])] = (float(p[3]), float(p[4]))
+            except (IndexError, ValueError):
+                continue
+    return info
+
+
+def creature_spell(s, info, durs):
+    """A creature spell of spell_template as the core's SpellDef subset, or None. durs: DurationIndex -> ms."""
+    sid = int(num(g(s, "Id")))
+    attr, attr1 = int(num(g(s, "Attributes"))), int(num(g(s, "AttributesEx")))
+    if attr & 0x40 or attr1 & 0x44:          # passive, channelled
+        return None
+    eff = [(int(num(g(s, f"Effect{k}"))), int(num(g(s, f"EffectApplyAuraName{k}"))),
+            int(num(g(s, f"EffectBasePoints{k}"))), int(num(g(s, f"EffectDieSides{k}"))),
+            int(num(g(s, f"EffectAmplitude{k}"))), int(num(g(s, f"EffectImplicitTargetA{k}")))) for k in (1, 2, 3)]
+    eff = [e for e in eff if e[0]]
+    if not eff:
+        return None
+    di = int(num(g(s, "DurationIndex")))
+    dur = durs.get(di)
+    if dur is not None and dur < 0:
+        dur = 0                               # -1: until cancelled
+    kind = amin = amax = tick = 0
+    friendly = False
+    e0 = eff[0]
+    if e0[0] == 2:                            # school damage
+        kind, amin, amax = SPELL_KIND["damage"], e0[2] + 1, e0[2] + max(1, e0[3])
+    elif e0[0] in (17, 58, 121, 31):          # weapon damage (+ the creature's own swing, added by the core)
+        kind = SPELL_KIND["melee"]
+        amin = amax = 0 if e0[0] == 31 else max(0, e0[2] + 1)
+        for e in eff[1:]:                     # Heroic Strike style: the bonus may be in a second effect
+            if e[0] in (17, 58, 121):
+                amin = amax = max(amin, e[2] + 1)
+    elif e0[0] == 10:                         # heal
+        kind, amin, amax, friendly = SPELL_KIND["heal"], e0[2] + 1, e0[2] + max(1, e0[3]), True
+    elif e0[0] in (6, 35, 27) and e0[1] == 3:   # periodic damage
+        if not dur or not e0[4]:
+            return None
+        kind, amin, amax, tick = SPELL_KIND["dot"], e0[2] + 1, e0[2] + max(1, e0[3]), e0[4]
+    elif e0[0] in (6, 35, 27):                # any other aura: shown on its target for its duration
+        if dur is None or (not dur and e0[5] not in (0, 1, 21, 22, 30, 31, 32, 33)):
+            return None                       # (an enemy's aura for ever: left out)
+        self_target = e0[5] in (0, 1, 21, 22, 30, 31, 32, 33)   # caster / friendly area around the caster
+        kind = SPELL_KIND["buff"] if self_target else SPELL_KIND["debuff"]
+        friendly = self_target
+    else:
+        return None
+    ci = int(num(g(s, "CastingTimeIndex")))
+    cast = info["cast"].get(sid, info["idx_cast"].get(ci, 0 if ci <= 1 else None))
+    if cast is None:
+        return None
+    ri = int(num(g(s, "RangeIndex")))
+    rng = info["range"].get(sid) or info["idx_range"].get(ri)
+    if rng is None:
+        rng = (0.0, 0.0) if ri in (1, 2) else (0.0, 30.0)   # 1 self, 2 melee reach; else the common 30 yd
+    return dict(id=sid, name=str(g(s, "SpellName", default=""))[:60], kind=kind,
+                school=int(num(g(s, "School"))), cast=cast, cd=int(num(g(s, "RecoveryTime"))),
+                cat=int(num(g(s, "Category"))), catcd=int(num(g(s, "CategoryRecoveryTime"))),
+                rmin=rng[0], rmax=rng[1], amin=amin, amax=max(amin, amax), dur=min(dur or 0, 3600000), tick=tick,
+                friendly=friendly)
+
+
+def behaviour_sections(tables, templates, spawn_rows, spawn_moves, used, sec, report, spell_info=None):
+    """'MOVE' (random wander and waypoint paths of the spawns), 'CRAI' (walk speed, civilians, EventAI) and
+    'AITX' (the texts EventAI says), plus the creature spells EventAI casts appended to 'SPEL'."""
+    info = spell_info or load_spell_info(None)
+    # -- waypoints: creature_movement (by spawn guid), else creature_movement_template (by entry, path 0)
+    by_guid, by_entry = {}, {}
+    for r in tables.get("creature_movement", []):
+        by_guid.setdefault(int(num(g(r, "Id", "id"))), []).append(r)
+    for r in tables.get("creature_movement_template", []):
+        if int(num(g(r, "PathId", default=0))) == 0:
+            by_entry.setdefault(int(num(g(r, "Entry", "entry"))), []).append(r)
+    paths, path_of, moves = [], {}, []
+    counts = dict(random=0, waypoint=0, waypoint_no_path=0, points=0)
+    for idx, ((entry, *_), (guid, mtype, dist)) in enumerate(zip(spawn_rows, spawn_moves)):
+        if mtype == 1 and dist >= 0.5:
+            moves.append((idx, 1, min(dist, 60.0), 0xFFFFFFFF))
+            counts["random"] += 1
+        elif mtype == 2:
+            key = ("g", guid) if guid in by_guid else (("e", entry) if entry in by_entry else None)
+            if key is None:
+                counts["waypoint_no_path"] += 1
+                continue
+            if key not in path_of:
+                rows = sorted(by_guid[guid] if key[0] == "g" else by_entry[entry], key=lambda r: int(num(g(r, "Point"))))
+                pts = [(num(g(r, "PositionX")), num(g(r, "PositionY")), num(g(r, "PositionZ")),
+                        num(g(r, "Orientation", default=100)), max(0, int(num(g(r, "WaitTime"))))) for r in rows]
+                if len(pts) < 2:
+                    continue
+                path_of[key] = len(paths)
+                paths.append(pts[:1000])
+                counts["points"] += len(paths[-1])
+            moves.append((idx, 2, 0.0, path_of[key]))
+            counts["waypoint"] += 1
+    mb = Bin()
+    mb.u32(len(paths))
+    for pts in paths:
+        mb.u16(len(pts))
+        for (x, y, z, o, w) in pts:
+            mb.f32(x); mb.f32(y); mb.f32(z); mb.f32(o); mb.u32(min(w, 0x7FFFFFFF))
+    mb.u32(len(moves))
+    for (idx, t, d, pi) in moves:
+        mb.u32(idx); mb.u8(t); mb.f32(d); mb.u32(pi)
+    sec["MOVE"] = mb.b
+    counts["paths"] = len(paths)
+    report["counts_movement"] = counts
+
+    # -- EventAI
+    used_set = set(used)
+    spells_db = {int(num(g(r, "Id"))): r for r in tables.get("spell_template", [])}
+    durs = dict(info["idx_dur"])
+    if not durs:   # an older spells.txt: only the rows of SpellDuration.dbc the food needs are known
+        durs = {1: 10000, 8: 15000, 85: 18000, 86: 21000, 106: 24000, 205: 27000, 9: 30000, 42: 3600000, 21: -1}
+    by_cr = {}
+    for r in tables.get("creature_ai_scripts", []):
+        cid = int(num(g(r, "creature_id")))
+        if cid in used_set:
+            by_cr.setdefault(cid, []).append(r)
+    texts_needed, spells_needed, cspells = set(), set(), {}
+    ai = {}
+    ev_kept = ev_dropped = act_dropped = 0
+    for cid, rows in by_cr.items():
+        evs = []
+        for r in sorted(rows, key=lambda r: int(num(g(r, "id")))):
+            et, fl = int(num(g(r, "event_type"))), int(num(g(r, "event_flags")))
+            if et not in AI_EVENTS or fl & 0x80:
+                ev_dropped += 1
+                continue
+            acts = []
+            for k in (1, 2, 3):
+                at = int(num(g(r, f"action{k}_type")))
+                ap = [int(num(g(r, f"action{k}_param{j}"))) for j in (1, 2, 3)]
+                if at == 11:
+                    sid = ap[0]
+                    if sid not in cspells:
+                        s = spells_db.get(sid)
+                        cspells[sid] = creature_spell(s, info, durs) if s else None
+                    if not cspells[sid]:
+                        at = 0
+                if at and at not in AI_ACTIONS:
+                    at = 0
+                if at == 0 and int(num(g(r, f"action{k}_type"))):
+                    act_dropped += 1
+                if at == 1:
+                    texts_needed.update(t for t in ap if t)
+                acts.append((at, ap))
+            if not any(a[0] for a in acts):
+                ev_dropped += 1
+                continue
+            evs.append((et, int(num(g(r, "event_inverse_phase_mask"))), int(num(g(r, "event_chance", default=100))), fl,
+                        [int(num(g(r, f"event_param{j}"))) for j in range(1, 7)], acts))
+            ev_kept += 1
+        if evs:
+            ai[cid] = evs[:48]
+    # -- per creature: walk speed, civilian, the radius it calls for help in, its events
+    cb = Bin()
+    cb.u32(len(used))
+    for entry in used:
+        t = templates[entry]
+        walk = (num(g(t, "SpeedWalk", "speed_walk", default=1.0)) or 1.0) * 2.5
+        flags = (1 if int(num(g(t, "Civilian", default=0))) else 0) | (2 if entry in ai else 0)
+        cb.u32(entry); cb.f32(walk); cb.f32(num(g(t, "CallForHelp", default=0))); cb.u8(flags)
+        cb.f32(num(g(t, "Leash", default=0))); cb.u32(int(num(g(t, "Pursuit", default=15000))) or 15000)
+        evs = ai.get(entry, [])
+        cb.u8(len(evs))
+        for (et, mask, chance, fl, ep, acts) in evs:
+            cb.u8(et); cb.u32(mask); cb.u8(max(0, min(100, chance))); cb.u16(fl)
+            for v in ep:
+                cb.i32(v)
+            for (at, ap) in acts:
+                cb.u8(at)
+                for v in ap:
+                    cb.i32(v)
+    sec["CRAI"] = cb.b
+    # -- texts: broadcast_text (positive ids) and creature_ai_texts (negative ids)
+    bt = {int(num(g(r, "Id"))): r for r in tables.get("broadcast_text", [])}
+    at_ = {int(num(g(r, "entry"))): r for r in tables.get("creature_ai_texts", [])}
+    tx = Bin()
+    out = []
+    for tid in sorted(texts_needed):
+        if tid > 0 and tid in bt:
+            r = bt[tid]
+            text = str(g(r, "Text", default="") or g(r, "Text1", default="") or "")
+            out.append((tid, int(num(g(r, "ChatTypeID"))), int(num(g(r, "EmoteID1"))), text))
+        elif tid < 0 and tid in at_:
+            r = at_[tid]
+            bid = int(num(g(r, "broadcast_text_id")))
+            text = str(g(r, "content_default", default="") or "")
+            if bid in bt:
+                text = str(g(bt[bid], "Text", default="") or text)
+            out.append((tid, int(num(g(r, "type"))), int(num(g(r, "emote"))), text))
+    tx.u32(len(out))
+    for (tid, ctype, emote, text) in out:
+        tx.i32(tid); tx.u8(ctype); tx.u32(emote); long_s(tx, text, 500)
+    sec["AITX"] = tx.b
+    # -- the creature spells EventAI casts, after the sample's spells
+    old = sec["SPEL"]
+    n_old = int.from_bytes(old[:4], "little")
+    sb = Bin()
+    have = set(sample_spell_ids(old))
+    add = [cs for sid, cs in sorted(cspells.items()) if cs and sid not in have]
+    sb.b += (n_old + len(add)).to_bytes(4, "little") + old[4:]
+    for c in add:
+        sb.u32(c["id"]); sb.s(c["name"]); sb.u8(c["kind"]); sb.u8(c["school"]); sb.u32(c["cast"]); sb.u32(c["cd"])
+        sb.u32(c["cat"]); sb.u32(c["catcd"]); sb.f32(c["rmin"]); sb.f32(c["rmax"]); sb.u8(0); sb.u32(0)
+        sb.i32(c["amin"]); sb.i32(c["amax"]); sb.u32(c["dur"]); sb.u32(c["tick"]); sb.i32(0); sb.f32(0.0)
+        sb.u8(1 if c["friendly"] else 0); sb.u8(0)
+    sec["SPEL"] = sb.b
+    kinds = {}
+    for c in add:
+        kinds[c["kind"]] = kinds.get(c["kind"], 0) + 1
+    report["counts_eventai"] = dict(creatures=len(ai), events=ev_kept, events_dropped=ev_dropped,
+                                    actions_dropped=act_dropped, texts=len(out), spells=len(add),
+                                    spells_not_supported=sum(1 for c in cspells.values() if not c),
+                                    spell_kinds=kinds, durations_known=len(info["idx_dur"]) > 0)
+
+
+def sample_spell_ids(spel):
+    """The spell ids of a SPEL section (to skip ones the sample already defines)."""
+    import struct
+    ids, pos = [], 4
+    n = int.from_bytes(spel[:4], "little")
+    for _ in range(n):
+        ids.append(struct.unpack_from("<I", spel, pos)[0]); pos += 4
+        ln = struct.unpack_from("<H", spel, pos)[0]; pos += 2 + ln
+        pos += 1 + 1 + 4 * 4 + 4 + 4 + 1 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1 + 1
+    return ids
+
+
+def build(tables, factions, map_id, report, player_faction=1, spell_info=None):
     sample = build_sample()
     templates = newest_patch(tables.get("creature_template", []), ("Entry", "entry"))
     items_db = newest_patch(tables.get("item_template", []), ("entry",))
@@ -248,6 +505,7 @@ def build(tables, factions, map_id, report, player_faction=1):
 
     # ---- spawns of the map (vMaNGOS: patch_min/patch_max; only those of the last patch)
     spawn_rows = []
+    spawn_moves = []   # WoWVita: (guid, MovementType, spawndist) of each spawn row, in the same order
     skipped_invisible = 0
     spawn_entry = {}   # CMaNGOS: id 0 = one of several entries (creature_spawn_entry); the spawn guid picks one
     for r in tables.get("creature_spawn_entry", []):
@@ -278,6 +536,8 @@ def build(tables, factions, map_id, report, player_faction=1):
         respawn = int(num(g(r, "spawntimesecsmin", "spawntimesecs", "spawntimesecsmax", default=300)))
         spawn_rows.append((entry, num(g(r, "position_x")), num(g(r, "position_y")), num(g(r, "position_z")),
                            num(g(r, "orientation")), max(5000, respawn * 1000)))
+        spawn_moves.append((int(num(g(r, "guid"))), int(num(g(r, "MovementType", "movement_type"))),
+                            num(g(r, "spawndist", "wander_distance"))))
     used = sorted({s[0] for s in spawn_rows})
 
     # ---- creature templates
@@ -785,6 +1045,8 @@ def build(tables, factions, map_id, report, player_faction=1):
     for t in tav:
         tb.u32(t)
     sec["TAVN"] = tb.b
+    sec["SPEL"] = sample["SPEL"]
+    behaviour_sections(tables, templates, spawn_rows, spawn_moves, used, sec, report, spell_info)
 
     xb = Bin()   # "ITX1"
     xb.u32(len(itx))
@@ -819,7 +1081,6 @@ def build(tables, factions, map_id, report, player_faction=1):
         info.f32(v)
     info.s("Eastern Kingdoms (offline)" if map_id == 0 else f"map {map_id} (offline)")
     sec["INFO"] = info.b
-    sec["SPEL"] = sample["SPEL"]
     sec["BOTS"] = sample["BOTS"]
     qb = Bin()
     qb.u32(0)           # (no quests: the offline core has no quest dialogs yet)
@@ -839,6 +1100,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--sql", nargs="+", required=True, help="world dump(s): .sql or .sql.gz")
     ap.add_argument("--factions", required=True, help="factions.txt written by the converter (w3dconv --texts-only)")
+    ap.add_argument("--spells", help="spells.txt written by the converter (cast times, ranges, durations of creature spells)")
     ap.add_argument("--map", type=int, default=0, help="0 Eastern Kingdoms (default), 1 Kalimdor")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-compress", action="store_true")
@@ -854,7 +1116,7 @@ def main():
     if report["errors"]:
         print("\n".join(report["errors"]))
         return 1
-    sec = build(tables, load_factions(args.factions), args.map, report)
+    sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells))
     write_pack(args.out, sec, compress=not args.no_compress)
     _, back = read_pack(args.out)
     mine = dict(report["counts"])
@@ -864,6 +1126,9 @@ def main():
     print(f"wrote {args.out} ({os.path.getsize(args.out)} bytes): " +
           ", ".join(f"{k}={v}" for k, v in report["counts"].items()) +
           f"; {len(errs)} errors, {len(report['warn'])} warnings (see {args.out}.report.txt)")
+    for k in ("counts_movement", "counts_eventai"):
+        if k in report:
+            print(f"  {k[7:]}: {report[k]}")
     return 1 if errs else 0
 
 

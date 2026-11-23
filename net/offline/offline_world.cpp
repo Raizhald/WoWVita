@@ -218,6 +218,7 @@ void World::spawnCreature(const Spawn& s, uint32_t nowMs, int index) {
     e.lootCount = 0;
     e.dead = false;
     applyGround(e);
+    initBehaviour(e, index, nowMs);   // WoWVita
 }
 
 // ---------------------------------------------------------------- events
@@ -538,7 +539,11 @@ bool World::tryCast(Entity& actor, uint32_t spellId, uint64_t targetGuid, uint32
         }
     }
     Entity* target = entity(targetGuid);
-    if (s->friendly) {
+    if (s->friendly && actor.objType == 3) {   // WoWVita: a creature heals itself or one of its faction
+        if (!target || !target->alive() || target->objType != 3 || target->faction != actor.faction) target = &actor;
+    } else if (s->kind == SpellKind::Buff && actor.objType == 3) {
+        target = &actor;
+    } else if (s->friendly) {
         if (!target || !target->alive() || !(target->self || target->bot)) target = &actor;
         if (!target->alive()) {
             emit(SimEvent::CastFailed, actor.guid, targetGuid, spellId, 0, 0, 5);
@@ -631,6 +636,7 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
         case SpellKind::Melee:
         case SpellKind::Damage: {
             int32_t dmg = rng_.range(s->amountMin, s->amountMax);
+            if (s->kind == SpellKind::Melee && e.objType == 3) dmg += rng_.range((int32_t)e.dmgMin, (int32_t)e.dmgMax);   // WoWVita: + its swing
             applyDamage(e, *t, dmg, spellId, s->school, now_);
             if (s->threatBonus) addThreat(*t, e.guid, s->threatBonus);
             if (s->startsAutoAttack) startAttack(e, t->guid, now_);
@@ -662,6 +668,17 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
             addAura(*t, a);
             break;
         }
+        case SpellKind::Debuff: {   // WoWVita: a creature's aura on its enemy
+            Aura a;
+            a.spell = spellId;
+            a.caster = e.guid;
+            a.kind = (uint8_t)SpellKind::Debuff;
+            a.school = s->school;
+            a.endMs = now_ + (s->durationMs ? s->durationMs : 10000);
+            addAura(*t, a);
+            if (t->objType == 3 && !t->victim && canAttack(*t, e)) { t->victim = t->target = e.guid; addThreat(*t, e.guid, 1); }
+            break;
+        }
         case SpellKind::Taunt:
             taunt(*t, e.guid);
             break;
@@ -684,6 +701,8 @@ void World::finishCast(Entity& e, uint32_t nowMs) {
 
 void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell, uint8_t school, uint32_t nowMs) {
     if (!dst.alive() || amount <= 0) return;
+    if (dst.objType == 3 && dst.aiState == 3) return;   // WoWVita: an evading creature cannot be hurt
+    if (dst.objType == 3) { dst.refreshMs = nowMs; dst.refreshX = dst.x; dst.refreshY = dst.y; }   // its combat timer
     int32_t dmg = amount;
     // WoWVita: resurrection sickness - the original takes 75% of the stats; offline it takes 75% of the damage done
     if (src.self && hasAura(src, kResurrectionSickness)) dmg = std::max<int32_t>(1, dmg / 4);
@@ -705,7 +724,10 @@ void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell
         }
     }
     // A unit that is hit by a spell interrupts its own creature filler cast.
-    if (dst.objType == 3 && dst.castSpell && dst.castInterruptible) cancelCast(dst, 35, nowMs);
+    // WoWVita: one with EventAI casts as in the original: a hit only pushes the cast back (500 ms, twice at most)
+    if (dst.objType == 3 && dst.castSpell && behaviourData() && data_->ai(dst.entry)) {
+        if (dst.castPushes < 2) { dst.castEndMs += 500; ++dst.castPushes; }
+    } else if (dst.objType == 3 && dst.castSpell && dst.castInterruptible) cancelCast(dst, 35, nowMs);
 }
 
 void World::applyHeal(Entity& src, Entity& dst, int32_t amount, uint32_t spell, uint32_t nowMs) {
@@ -770,6 +792,8 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
     e.moving = false;
     if (e.netMoveState == 1) e.netMoveState = 2;   // the client gets one stop at the death spot
     emit(SimEvent::Death, e.guid, killer.guid, 0, 0);
+    if (e.objType == 3) aiEvent(e, 6, nowMs, killer.guid);                          // WoWVita: EventAI death
+    if (killer.objType == 3 && (e.self || e.bot)) aiEvent(killer, 5, nowMs, e.guid);  // and kill
     if (e.objType == 3) {
         rollLoot(e);
         if (const CreatureTemplate* t = data_ ? data_->creature(e.entry) : nullptr) {
@@ -832,6 +856,7 @@ void World::respawn(Entity& e, uint32_t nowMs) {
     e.moving = false;
     applyGround(e);
     emit(SimEvent::Respawn, e.guid, 0, 0, 0);
+    if (e.objType == 3 && !e.bot) initBehaviour(e, e.spawnIndex, nowMs);   // WoWVita
 }
 
 void World::rollLoot(Entity& e) {
@@ -1291,6 +1316,7 @@ void World::tickCreature(Entity& e, uint32_t nowMs) {
         if (e.respawnAtMs && nowMs >= e.respawnAtMs) respawn(e, nowMs);
         return;
     }
+    if (behaviourData()) { tickBehaviour(e, nowMs); return; }   // WoWVita: movement, evade, help, EventAI
     // Evade: too far from home, or the target is unreachable for too long.
     if (e.victim) {
         Entity* t = entity(e.victim);
@@ -1355,6 +1381,7 @@ void World::tickEntity(Entity& e, uint32_t nowMs, bool isPlayer) {
     if (e.victim && e.alive()) {
         Entity* t = entity(e.victim);
         if (!t || !t->alive()) { e.victim = e.target = 0; }
+        else if (e.objType == 3 && (e.fleeUntilMs > nowMs || e.aiState == 3 || e.castSpell)) {}   // WoWVita: no swings
         else if (nowMs >= e.nextSwingMs) resolveSwing(e, *t, nowMs);
     }
     (void)isPlayer;

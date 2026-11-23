@@ -123,7 +123,9 @@ Polymorph break on damage / action), stat, haste, dodge, block, immunity, mechan
 threat auras; CMaNGOS class scripts for Execute, Life Tap, Blink, Vanish, Eviscerate. Rogues: stealth seen as CMaNGOS
 sees it (30 + 5 a viewer level - the stealth's strength, x 0.3 yd, only in front), behind / in front / peaceful target
 checks, combo points by SPELL_ATTR_EX_REQ_COMBO_POINTS, stretching durations, shown on the target frame
-(PLAYER_FIELD_COMBO_TARGET / PLAYER_FIELD_BYTES).
+(PLAYER_FIELD_COMBO_TARGET / PLAYER_FIELD_BYTES). Forms as CMaNGOS GetErrorAtShapeshiftedCast has them (stances,
+Shadowform and Stealth count as no form). Precast spells (Weakened Soul, Forbearance: the pack carries them), Judgement
+casts the judgement its seal holds and ends the seal, charges of auras (Inner Fire).
 Not yet: pets, totems, talents, poisons (weapon enchantments), pick pocketing, Distract, more single-spell scripts,
 spell power.
 

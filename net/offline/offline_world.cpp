@@ -1135,8 +1135,10 @@ bool World::takeFromBag(int index, uint16_t n) {
 }
 
 void World::removeAuraSpell(Entity& e, uint32_t spell) {
-    for (int i = 0; i < e.auraCount; ++i)
-        if (e.auras[i].spell == spell) { removeAura(e, i); return; }
+    for (int i = 0; i < e.auraCount;) {   // (WoWVita: every effect of it)
+        if (e.auras[i].spell == spell) { removeAura(e, i); continue; }
+        ++i;
+    }
 }
 
 void World::wearSlot(int slot, uint16_t points) {

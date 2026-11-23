@@ -8,6 +8,8 @@
 //   - Execute, Polymorph broken by damage, Mana Shield, Blink, Frost Armor's proc
 //   - a Human Rogue: Stealth (CMaNGOS detection range), Backstab only from behind, combo points (on the client too),
 //     Slice and Dice longer with more points, Eviscerate, no Stealth in combat, Vanish
+//   - a Dwarf Priest: spells outside Shadowform, Power Word: Shield + Weakened Soul, Inner Fire's charges
+//   - a Human Paladin: Seal of Righteousness + Judgement, Divine Protection + Forbearance (no Blessing of Protection then)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -45,7 +47,10 @@ int main(int argc, char** argv) {
     w3n::CharCreateInfo rogue; rogue.name = "Shade"; rogue.race = 1; rogue.cls = 4;
     CHECK(session.createCharacter(rogue) == w3n::CHAR_CREATE_SUCCESS, "a human rogue");
     const uint64_t warriorGuid = session.characters()[0].guid, mageGuid = session.characters()[1].guid;
-    const uint64_t rogueGuid = session.characters()[2].guid;
+    w3n::CharCreateInfo priest; priest.name = "Brann"; priest.race = 3; priest.cls = 5;
+    CHECK(session.createCharacter(priest) == w3n::CHAR_CREATE_SUCCESS, "a dwarf priest");
+    const uint64_t rogueGuid = session.characters()[2].guid, priestGuid = session.characters()[3].guid;
+    uint64_t paladinGuid = 0;   // (made when the mage has gone: four characters a save)
     w3n::WorldClient wc;
     w3n::GameSession gs;
     auto play = [&](uint64_t guid) {
@@ -385,6 +390,91 @@ int main(int argc, char** argv) {
         run(100);
         std::printf("vanish %d, stealth %d, victim %llx\n", vanished, w.hasAura(*p, 1784), (unsigned long long)r->victim);
         CHECK(w.hasAura(*p, 1784) && r->victim != p->guid, "Vanish: in Stealth, the creature lets go");
+    }
+    session.leaveWorld();
+
+    // ---- the priest: spells without a form (Stances + ALLOW_WHILE_NOT_SHAPESHIFTED), Power Word: Shield and Weakened Soul,
+    // Inner Fire's charges
+    play(priestGuid);
+    run(800);
+    p = w.player();
+    p->maxHp = p->hp = 5000;
+    p->level = 12;
+    off::CharacterProfile& pp = w.playerProfile();
+    for (uint32_t s : {589u, 17u, 588u, 2050u})
+        if (std::find(pp.book.begin(), pp.book.end(), s) == pp.book.end()) pp.book.push_back(s);
+    off::Entity* pm = nearestHostile(p->x, p->y, 300);
+    CHECK(pm != nullptr, "something for the priest");
+    if (pm) {
+        pm->maxHp = pm->hp = 3000;
+        stand(pm, 10.0f);
+        run(200);
+        p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 589, pm->guid, now);
+        run(200);
+        CHECK(w.hasAura(*pm, 589), "Shadow Word: Pain without Shadowform");
+        p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 17, p->guid, now);
+        run(200);
+        CHECK(w.hasAura(*p, 17) && w.hasAura(*p, 6788), "Power Word: Shield (%d) and Weakened Soul (%d)", w.hasAura(*p, 17), w.hasAura(*p, 6788));
+        w.removeAuraSpell(*p, 17);
+        p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 17, p->guid, now);
+        run(200);
+        CHECK(!w.hasAura(*p, 17), "no second shield under Weakened Soul");
+        p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 588, p->guid, now);
+        run(200);
+        int ch0 = -1;
+        for (uint8_t i = 0; i < p->auraCount; ++i) if (p->auras[i].spell == 588) ch0 = p->auras[i].charges;
+        CHECK(ch0 >= 18, "Inner Fire with 20 charges (%d)", ch0);
+        stand(pm, 2.0f);
+        pm->victim = pm->target = p->guid;
+        w.startAttack(*pm, p->guid, now);
+        run(6000);
+        int ch1 = -1;
+        for (uint8_t i = 0; i < p->auraCount; ++i) if (p->auras[i].spell == 588) ch1 = p->auras[i].charges;
+        CHECK(ch1 >= 0 && ch1 < 20, "hits used its charges (%d left)", ch1);
+        w.stopAttack(*pm, now);
+    }
+    session.leaveWorld();
+
+    // ---- the paladin: Seal of Righteousness + Judgement, Divine Protection and Forbearance
+    CHECK(session.deleteCharacter(mageGuid) == w3n::CHAR_DELETE_SUCCESS, "the mage leaves room");
+    w3n::CharCreateInfo pal; pal.name = "Uther"; pal.race = 1; pal.cls = 2;
+    CHECK(session.createCharacter(pal) == w3n::CHAR_CREATE_SUCCESS, "a human paladin");
+    for (const auto& c : session.characters()) if (c.name == "Uther") paladinGuid = c.guid;
+    play(paladinGuid);
+    run(800);
+    p = w.player();
+    p->maxHp = p->hp = 5000;
+    p->level = 12;
+    off::CharacterProfile& lp = w.playerProfile();
+    for (uint32_t s : {21084u, 20271u, 498u, 1022u})
+        if (std::find(lp.book.begin(), lp.book.end(), s) == lp.book.end()) lp.book.push_back(s);
+    off::Entity* lm = nearestHostile(p->x, p->y, 300);
+    CHECK(lm != nullptr, "something for the paladin");
+    if (lm) {
+        lm->maxHp = lm->hp = 3000;
+        stand(lm, 5.0f);
+        run(200);
+        p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 21084, p->guid, now);
+        run(200);
+        CHECK(w.hasAura(*p, 21084), "Seal of Righteousness");
+        p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+        const int32_t jh = lm->hp;
+        w.tryCast(*p, 20271, lm->guid, now);
+        run(300);
+        CHECK(!w.hasAura(*p, 21084) && lm->hp < jh, "Judgement of Righteousness: %d, the seal used (%d)", jh - lm->hp, w.hasAura(*p, 21084));
+        p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 498, p->guid, now);
+        run(200);
+        CHECK(w.hasAura(*p, 498) && w.hasAura(*p, 25771), "Divine Protection (%d) and Forbearance (%d)", w.hasAura(*p, 498), w.hasAura(*p, 25771));
+        p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 1022, p->guid, now);
+        run(200);
+        CHECK(!w.hasAura(*p, 1022), "no Blessing of Protection under Forbearance");
     }
     session.leaveWorld();
     off::OfflineSaveData sd;

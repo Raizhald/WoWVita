@@ -151,7 +151,7 @@ void World::procAuras(Entity& o, Entity& other, uint32_t flag, uint32_t now) {
     if (!data_) return;
     for (int i = 0; i < o.auraCount && o.alive();) {
         Aura& a = o.auras[i];
-        const SpellX* s = (a.type == 42 || a.type == 4) ? data_->sx(a.spell) : nullptr;
+        const SpellX* s = (a.type == 42 || a.type == 4 || a.charges) ? data_->sx(a.spell) : nullptr;
         if (!s || !(s->procFlags & flag) || (s->procChance && s->procChance < 100 && (int)rng_.below(100) >= s->procChance)) { ++i; continue; }
         bool fired = false;
         if (a.type == 42 && s->eff[a.effIndex].trigger) {   // PROC_TRIGGER_SPELL (Lightning Shield, Frost Armor)
@@ -172,6 +172,7 @@ void World::procAuras(Entity& o, Entity& other, uint32_t flag, uint32_t now) {
             if (dmg > 0 && other.alive()) applyDamage(o, other, dmg, sid, 1, now);
             fired = true;
         }
+        else if (a.charges && a.type != 51 && a.type != 42 && a.type != 4) fired = true;   // a charge used (Inner Fire)
         if (fired && a.charges) {
             if (--a.charges == 0) { removeAura(o, i); continue; }
         }
@@ -225,8 +226,17 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (cooldownLeft(e, id, now) || (s.category && cooldownLeft(e, kSlotCategoryBit | s.category, now))) return fail(60);
         if ((s.attr & 0x20000) && !hasAuraType(e, 16)) return fail(0x57);   // SPELL_ATTR_ONLY_STEALTHED
         if ((s.attr & 0x10000000) && inCombatNow(e)) return fail(0);          // NOT_IN_COMBAT: SPELL_FAILED_AFFECTING_COMBAT
-        if (s.stances && !(e.form && (s.stances & (1u << (e.form - 1))))) return fail(86);   // SPELL_FAILED_ONLY_SHAPESHIFT
-        if (s.stancesNot && e.form && (s.stancesNot & (1u << (e.form - 1)))) return fail(61);  // SPELL_FAILED_NOT_SHAPESHIFT
+        // CMaNGOS GetErrorAtShapeshiftedCast. Stances, Shadowform and Stealth act as no form (SpellShapeshiftForm flags1 & 1)
+        {
+            const uint32_t mask = e.form ? 1u << (e.form - 1) : 0;
+            const bool shifted = e.form && e.form != 17 && e.form != 18 && e.form != 19 && e.form != 28 && e.form != 30;
+            if (mask & s.stancesNot) return fail(61);                                    // SPELL_FAILED_NOT_SHAPESHIFT
+            if (!(mask & s.stances)) {
+                if (shifted && (s.attr & 0x10000)) return fail(61);                        // SPELL_ATTR_NOT_SHAPESHIFT
+                if (shifted && s.stances) return fail(86);                                 // SPELL_FAILED_ONLY_SHAPESHIFT
+                if (!shifted && s.stances && !(s.attrEx2 & 0x80000)) return fail(86);      // (ALLOW_WHILE_NOT_SHAPESHIFTED)
+            }
+        }
         const uint32_t cost = powerCostX(e, s);
         if (cost && (s.powerType == e.powerType || s.powerType > 3) && e.power < (int32_t)cost) return fail(77);   // SPELL_FAILED_NO_POWER
         if (s.powerType == 0xFE && e.hp <= (int32_t)cost) return fail(77);   // (health)
@@ -262,6 +272,10 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (d > maxR) return fail(89, t->guid);                            // SPELL_FAILED_OUT_OF_RANGE
         if (s.rangeMin > 0 && d < s.rangeMin) return fail(118, t->guid);    // SPELL_FAILED_TOO_CLOSE
         if (s.targetAuraState == 1 && t->hp * 5 > (int32_t)t->maxHp) return fail(103, t->guid);   // (Execute: under 20 %)
+        if (s.mechanic && hasAuraType(*t, 77, -1)) {
+            for (uint8_t i = 0; i < t->auraCount; ++i)
+                if (t->auras[i].type == 77 && (uint32_t)t->auras[i].misc == s.mechanic) return fail(10, t->guid);
+        }
         // (CMaNGOS Spell::CheckCast) behind the target: Backstab, Ambush, Garrote; Pounce is exempt
         if ((s.attrEx2 & 0x100000) && (s.attrEx & 0x200) && !(s.family == 7 && (s.familyFlags & 0x20000ull)) &&
             (hasInArc(*t, e, 3.14159265f) || !hasInArc(e, *t, 3.14159265f)))
@@ -370,6 +384,14 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
         if (!e.victim) startAttack(e, t->guid, now);
     }
     if (usesCombo) { e.comboPoints = 0; e.comboTarget = 0; }
+    // CMaNGOS Spell::prepare precast spells (here after the effects, so that they do not stop their own spell):
+    // Weakened Soul after Power Word: Shield, Forbearance after Divine Shield / Protection, Blessing of Protection
+    uint32_t pre = 0;
+    if (s.family == 6 && (s.familyFlags & 0x1ull)) pre = 6788;
+    else if (s.mechanic == 25 && s.id != 25771 && (s.family == 0 || s.family == 10)) pre = 25771;
+    if (const SpellX* ps = pre ? data_->sx(pre) : nullptr)
+        for (int k = 0; k < 3; ++k)
+            if (ps->eff[k].effect == E_APPLY_AURA && t->alive()) applyAuraX(e, *t, *ps, k, now, 0);
     return true;
 }
 
@@ -558,7 +580,8 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
 
 void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t now, int combo) {
     const SpellEffectX& e = s.eff[k];
-    const bool positive = positiveX(s) && !canAttack(c, t);
+    // (a spell of one's own on oneself - Divine Protection with its pacify - is a blessing)
+    const bool positive = (positiveX(s) || (&c == &t && unitTarget(s) != 1)) && !canAttack(c, t);
     Aura a;
     a.spell = s.id;
     a.caster = c.guid;
@@ -573,7 +596,7 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
     // WoWVita: SPELL_AURA_MECHANIC_IMMUNITY (Vanish, Blink, Blessing of Freedom) keeps such auras off
     {
         const uint32_t mech = e.mechanic ? e.mechanic : s.mechanic;
-        if (mech && &c != &t)
+        if (mech && !(e.aura == 77 && s.mechanic == (uint32_t)e.misc))   // (Weakened Soul itself has the mechanic it blocks)
             for (uint8_t i = 0; i < t.auraCount; ++i)
                 if (t.auras[i].type == 77 && (uint32_t)t.auras[i].misc == mech) return;
     }
@@ -649,6 +672,19 @@ bool World::scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t now) {
         c.power = std::min<int32_t>((int32_t)c.maxPower, c.power + v);
         emit(SimEvent::Damage, c.guid, c.guid, s.id, v, s.school, 0);
         emit(SimEvent::PowerChanged, c.guid, 0, 0, c.power);
+        return true;
+    }
+    // Judgement (CMaNGOS spell_judgement): the seal's third effect holds the judgement to cast; the seal goes
+    if (s.family == 10 && (s.familyFlags & 0x800000ull) && t && t != &c) {
+        for (int i = 0; i < c.auraCount; ++i) {
+            const SpellX* seal = data_->sx(c.auras[i].spell);
+            if (!seal || c.auras[i].type != 4 || c.auras[i].effIndex != 2 || seal->family != 10 || !(seal->familyFlags & 0x0A000200ull))
+                continue;
+            const uint32_t j = (uint32_t)(seal->eff[2].base + 1);
+            removeAuraSpell(c, seal->id);
+            if (j > 1) castX(c, j, t->guid, now, true);
+            break;
+        }
         return true;
     }
     // Vanish (CMaNGOS VanishRogue::OnCast): the best Stealth known, its cooldown no matter; the effects still run

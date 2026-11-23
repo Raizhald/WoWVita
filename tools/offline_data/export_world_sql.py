@@ -694,20 +694,33 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
         if sp in spells:
             create.setdefault((int(num(g(r, "race"))), int(num(g(r, "class")))), []).append(sp)
             want.add(sp)
-    # what they trigger (and what that triggers)
-    for _ in range(3):
-        more = set()
-        for sp in want:
+    # what CMaNGOS casts along with them (Spell::prepare "precast" spells): Weakened Soul after Power Word: Shield,
+    # Forbearance after the paladin's invulnerabilities, Recently Bandaged
+    want.update(x for x in (6788, 25771, 11196) if x in spells)
+    for _pass in range(2):   # (twice: a judgement found in a seal triggers spells too)
+        # what they trigger (and what that triggers)
+        for _ in range(3):
+            more = set()
+            for sp in want:
+                r = spells.get(sp)
+                if not r:
+                    continue
+                for k in (1, 2, 3):
+                    tr = int(num(g(r, f"EffectTriggerSpell{k}")))
+                    if tr and tr in spells and tr not in want:
+                        more.add(tr)
+            if not more:
+                break
+            want |= more
+        # the judgement each seal holds in its third effect's base points (CMaNGOS spell_judgement)
+        for sp in list(want):
             r = spells.get(sp)
-            if not r:
+            if not r or int(num(g(r, "SpellFamilyName"))) != 10 or not (int(num(g(r, "SpellFamilyFlags"))) & 0x0A000200):
                 continue
-            for k in (1, 2, 3):
-                tr = int(num(g(r, f"EffectTriggerSpell{k}")))
-                if tr and tr in spells and tr not in want:
-                    more.add(tr)
-        if not more:
-            break
-        want |= more
+            if int(num(g(r, "Effect3"))) == 6 and int(num(g(r, "EffectApplyAuraName3"))) == 4:
+                j = int(num(g(r, "EffectBasePoints3"))) + 1
+                if j > 1 and j in spells:
+                    want.add(j)
     xb = Bin()
     ids = sorted(want & set(spells))
     xb.u32(len(ids))

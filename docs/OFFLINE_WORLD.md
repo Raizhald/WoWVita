@@ -135,7 +135,10 @@ RewSpell cast; SPELL_EFFECT_LEARN_SPELL teaches). Mana cost percentages of the b
 "PETS": pet_levelstats, creature_template_classlevelstats damage, petcreateinfo_spell, pet_name_generation): summoned
 by SPELL_EFFECT_SUMMON_PET, they follow at the owner's side, assist and defend (passive / defensive / aggressive,
 stay / follow / attack), the Imp keeps 25 yd and casts Firebolt (PetAI), autocast, kills count as the owner's, the pet
-bar (SMSG_PET_SPELLS, CMSG_PET_ACTION...), back at login ("PET1" in the save).
+bar (SMSG_PET_SPELLS, CMSG_PET_ACTION...), back at login ("PET1" in the save). Quest items that cast ("IUSE") and the
+creatures their SPELL_EFFECT_SEND_EVENT summons ("EVSC": dbscripts_on_event SCRIPT_COMMAND_TEMP_SUMMON_CREATURE) - the
+warlocks' "The Binding" at the Summoning Circle (RequiresSpellFocus: a GAMEOBJECT_TYPE_SPELL_FOCUS within its
+distance), EventAI EVENT_T_TIMER_GENERIC, ACTION_T_SET_FACTION, ACTION_T_ATTACK_START (TARGET_T_SPAWNER).
 Not yet: pets, totems, talents, poisons (weapon enchantments), pick pocketing, Distract, more single-spell scripts,
 spell power.
 

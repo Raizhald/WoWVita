@@ -222,6 +222,48 @@ void World::spawnCreature(const Spawn& s, uint32_t nowMs, int index) {
     initBehaviour(e, index, nowMs);   // WoWVita
 }
 
+// WoWVita: a creature a script calls (dbscripts SCRIPT_COMMAND_TEMP_SUMMON_CREATURE, TEMPSUMMON_TIMED_OR_DEAD_DESPAWN):
+// no spawn of the grid, it goes when its time is up or its corpse does; EventAI sees it spawned with its summoner
+Entity* World::summonCreature(uint32_t entry, float x, float y, float z, float o, uint32_t despawnMs, uint64_t summoner, uint32_t nowMs) {
+    const CreatureTemplate* t = data_ ? data_->creature(entry) : nullptr;
+    if (!t) return nullptr;
+    const uint64_t guid = 0xF130000000000000ull | ((uint64_t)(t->entry & 0xFFFFFF) << 24) | (uint64_t)(0xC00000u + (++summonCounter_ & 0x3FFFFF));
+    Entity& e = allocate(guid);
+    if (!e.used) return nullptr;
+    e.objType = 3;
+    e.entry = t->entry;
+    e.level = (uint8_t)std::max<uint16_t>(1, t->minLevel);
+    e.hp = (int32_t)t->hp;
+    e.maxHp = t->hp;
+    e.powerType = t->powerType;
+    e.power = (int32_t)t->power;
+    e.maxPower = t->power;
+    e.faction = t->faction;
+    e.displayId = t->displayId;
+    e.rank = t->rank;
+    e.creatureType = t->creatureType;
+    e.npcFlags = t->npcFlags;
+    e.scale = t->scale;
+    e.speed = t->speed;
+    e.combatReach = t->combatReach;
+    e.boundingRadius = t->boundingRadius;
+    e.dmgMin = t->dmgMin;
+    e.dmgMax = t->dmgMax;
+    e.attackMs = t->attackMs;
+    e.armor = t->armor;
+    e.x = x; e.y = y; e.z = z; e.o = o;
+    e.homeX = x; e.homeY = y; e.homeZ = z; e.homeO = o;
+    e.spellCount = std::min<uint8_t>(t->abilityCount, (uint8_t)e.spells.size());
+    for (uint8_t i = 0; i < e.spellCount; ++i) e.spells[i] = t->abilities[i];
+    e.nextAbilityMs = nowMs + 1500 + rng_.below(2000);
+    e.summonerGuid = summoner;
+    e.despawnAtMs = despawnMs ? nowMs + despawnMs : 0;
+    applyGround(e);
+    emit(SimEvent::Appear, guid, 0, 0, 0);
+    initBehaviour(e, -1, nowMs);   // (EventAI: spawned)
+    return &e;
+}
+
 // ---------------------------------------------------------------- events
 void World::emit(uint8_t type, uint64_t a, uint64_t b, uint32_t spell, int32_t value, uint8_t school, uint8_t flags) {
     if (eventCount_ >= kMaxEvents) return;
@@ -1485,6 +1527,11 @@ void World::selectCreatureTarget(Entity& e, uint32_t nowMs) {
 
 void World::tickCreature(Entity& e, uint32_t nowMs) {
     if (e.ownerGuid) { tickPet(e, nowMs); return; }   // WoWVita: a pet (offline_pet.cpp)
+    if (e.summonerGuid && ((e.dead && e.respawnAtMs && nowMs >= e.respawnAtMs) || (!e.dead && e.despawnAtMs && nowMs >= e.despawnAtMs))) {
+        emit(SimEvent::Vanish, e.guid, 0, 0, 0);   // WoWVita: a script summon's time is up / its corpse goes
+        e = Entity();
+        return;
+    }
     if (e.dead) {
         if (e.respawnAtMs && nowMs >= e.respawnAtMs) {
             // WoWVita: a pooled spawn (a rare, Hogger) comes back at one of its pool's places, maybe another one
@@ -1647,7 +1694,7 @@ void World::updateActivation(uint32_t nowMs, bool initial) {
     for (Entity& e : pool_) {
         if (!e.used) continue;
         ++used;
-        if (e.objType != 3 || e.ownerGuid) continue;   // (WoWVita: a pet stays with its owner)
+        if (e.objType != 3 || e.ownerGuid || e.summonerGuid) continue;   // (WoWVita: a pet, a summon stay)
         const float d = std::min(dist2d(e.x, e.y, px, py), dist2d(e.homeX, e.homeY, px, py));
         if (d <= kVanishDist) continue;
         if (!e.dead && e.victim) continue;

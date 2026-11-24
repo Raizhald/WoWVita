@@ -289,6 +289,7 @@ private:
     void syncControl(uint32_t nowMs);   // WoWVita: the player's stun / root / slow -> forced movement packets
     bool ccRoot_ = false, ccStun_ = false;
     uint8_t netCombo_ = 0;       // WoWVita: the combo points the client was last told
+    uint32_t itemCastSpell_ = 0, itemCastEntry_ = 0;   // WoWVita: an item's use spell under way (used up when it goes off)
     uint8_t netForm_ = 0, netPowerType_ = 0xFF;   // ... the form and power type
     uint64_t netComboTarget_ = 0;
     float ccSpeed_ = 7.0f;

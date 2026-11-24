@@ -62,8 +62,8 @@ void World::initBehaviour(Entity& e, int spawnIndex, uint32_t nowMs) {
     t = AiTimers();
     if (!ai) return;
     for (int i = 0; i < (int)ai->events.size() && i < 48; ++i)
-        if (ai->events[i].type == 1) aiArm(e, i, ai->events[i], true, nowMs);
-    aiEvent(e, 11, nowMs);   // spawned
+        if (ai->events[i].type == 1 || ai->events[i].type == 29) aiArm(e, i, ai->events[i], true, nowMs);
+    aiEvent(e, 11, nowMs, e.summonerGuid);   // spawned (the invoker: who summoned it)
 }
 
 // ---------------------------------------------------------------- movement
@@ -253,7 +253,7 @@ bool World::aiCanRun(const Entity& e, const AiEvent& ev) const {
 void World::aiArm(Entity& e, int index, const AiEvent& ev, bool initial, uint32_t nowMs) {
     AiTimers& t = timersOf(e);
     int lo, hi;
-    if (ev.type == 0 || ev.type == 1) {
+    if (ev.type == 0 || ev.type == 1 || ev.type == 29) {   // (29: EVENT_T_TIMER_GENERIC, in and out of combat)
         lo = initial ? ev.p[0] : ev.p[2];
         hi = initial ? ev.p[1] : ev.p[3];
         if (!initial && !lo && !hi) { t.done |= 1ull << index; return; }
@@ -295,6 +295,7 @@ void World::aiTick(Entity& e, uint32_t nowMs) {
                 }
                 break;
             case 27: fire = !hasAura(e, (uint32_t)ev.p[0]); other = e.guid; break;
+            case 29: fire = e.aiState != 3; other = e.summonerGuid; break;   // EVENT_T_TIMER_GENERIC
             default: continue;   // the ones that happen (aggro, death, ...) run from aiEvent
         }
         if (fire && (ev.flags & 0x300) && vic) {   // ranged / melee mode only
@@ -346,6 +347,20 @@ bool World::aiAction(Entity& e, const AiAction& a, uint32_t nowMs, uint64_t othe
         return n ? v[rng_.below((uint32_t)n)] : 0;
     };
     switch (a.type) {
+        case 2:     // ACTION_T_SET_FACTION: p1 the faction template (0: its own again)
+            if (const CreatureTemplate* t = data_ ? data_->creature(e.entry) : nullptr) e.faction = a.p[0] ? (uint32_t)a.p[0] : t->faction;
+            emit(SimEvent::Message, e.guid, e.guid, 0, 3);   // (the client's faction field)
+            break;
+        case 55: {  // ACTION_T_ATTACK_START: p1 the target (11 TARGET_T_SPAWNER, 6 the invoker, 1 the victim)
+            uint64_t t = a.p[0] == 11 ? e.summonerGuid : a.p[0] == 6 ? other : e.victim;
+            Entity* v = t ? entity(t) : nullptr;
+            if (!v || !v->alive() || !canAttack(e, *v)) break;
+            e.victim = e.target = v->guid;
+            e.aiState = 1;
+            addThreat(e, v->guid, 1);
+            if (!e.aiCombat) enterCombat(e, nowMs);
+            break;
+        }
         case 1: {   // text
             const int32_t id = randomOf(a.p);
             if (id && data_ && data_->aiTexts.count(id)) emit(SimEvent::CreatureText, e.guid, e.victim ? e.victim : other, 0, id);

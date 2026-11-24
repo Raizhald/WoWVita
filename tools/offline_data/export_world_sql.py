@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -40,7 +40,8 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "creature_linking", "creature_linking_template",
           "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain",
           "player_classlevelstats", "player_levelstats",
-          "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats"}
+          "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats",
+          "dbscripts_on_event"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -249,8 +250,8 @@ def xp_for(level, rank, ctype, mult):
 # ---------------------------------------------------------------- WoWVita: creature behaviour
 # EventAI (creature_ai_scripts) as CMaNGOS runs it: the events and actions the offline core implements are kept,
 # the rest are dropped (an event without one kept action goes).
-AI_EVENTS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 14, 21, 27}
-AI_ACTIONS = {1, 5, 10, 11, 21, 22, 23, 24, 25, 30, 31, 39, 57}
+AI_EVENTS = {0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 13, 14, 21, 27, 29}
+AI_ACTIONS = {1, 2, 5, 10, 11, 21, 22, 23, 24, 25, 30, 31, 39, 55, 57}
 SPELL_KIND = dict(melee=0, damage=1, heal=2, dot=3, buff=4, debuff=8)
 
 
@@ -649,7 +650,7 @@ def full_spell(s, info):
     return b.b
 
 
-def class_spell_sections(tables, templates, used, item_needed, sec, report, info):
+def class_spell_sections(tables, templates, used, item_needed, sec, report, info, extra_spells=()):
     """'SPX2' (every spell the classes can have, with what they trigger), 'TRNR' (the class trainers on the map:
     npc_trainer / npc_trainer_template - the teaching spell, the spell it teaches, cost, level, the rank before it),
     'CRSP' (playercreateinfo_spell: what each race and class starts knowing)."""
@@ -698,6 +699,7 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
     # what CMaNGOS casts along with them (Spell::prepare "precast" spells): Weakened Soul after Power Word: Shield,
     # Forbearance after the paladin's invulnerabilities, Recently Bandaged
     want.update(x for x in (6788, 25771, 11196) if x in spells)
+    want.update(x for x in extra_spells if x in spells)   # what quest items cast (the Bloodstone Choker...)
     # what quests teach or cast (quest_template RewSpell / RewSpellCast: Bear Form, Aquatic Form, the totems...)
     for q in newest_patch(tables.get("quest_template", []), ("entry",)).values():
         for k in ("RewSpellCast", "RewSpell"):
@@ -949,6 +951,50 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         spawn_moves.append((int(num(g(r, "guid"))), int(num(g(r, "MovementType", "movement_type"))),
                             num(g(r, "spawndist", "wander_distance"))))
     used = sorted({s[0] for s in spawn_rows})
+
+    # ---- WoWVita: what a quest's item summons through its spell's SPELL_EFFECT_SEND_EVENT (61) and
+    # dbscripts_on_event SCRIPT_COMMAND_TEMP_SUMMON_CREATURE (10): the warlocks' "The Binding" (the Bloodstone Choker at
+    # the Summoning Circle calls the Summoned Voidwalker), ... - those creatures come along (template, EventAI)
+    spell_rows = {int(num(g(r, "Id"))): r for r in tables.get("spell_template", [])}
+    ev_rows = {}
+    for r in tables.get("dbscripts_on_event", []):
+        ev_rows.setdefault(int(num(g(r, "id"))), []).append(r)
+    on_map = {s_[0] for s_ in spawn_rows}
+    quest_givers = {}
+    for r in tables.get("creature_questrelation", []):
+        quest_givers.setdefault(int(num(g(r, "quest"))), set()).add(int(num(g(r, "id"))))
+    script_events, item_use = {}, {}
+    for q in newest_patch(tables.get("quest_template", []), ("entry",)).values():
+        src = int(num(g(q, "SrcItemId")))
+        if not src or not (quest_givers.get(int(num(g(q, "entry"))), set()) & on_map):
+            continue
+        it = items_db.get(src)
+        if not it:
+            continue
+        sp = int(num(g(it, "spellid_1")))
+        if not sp or int(num(g(it, "spelltrigger_1"))) != 0 or sp not in spell_rows:
+            continue
+        evs = [int(num(g(spell_rows[sp], f"EffectMiscValue{k}"))) for k in (1, 2, 3) if int(num(g(spell_rows[sp], f"Effect{k}"))) == 61]
+        rows = [r for e_ in evs for r in ev_rows.get(e_, []) if int(num(g(r, "command"))) == 10 and int(num(g(r, "datalong"))) in templates]
+        if not rows:
+            continue
+        item_use[src] = (sp, int(num(g(it, "spellcharges_1"))), int(num(g(it, "spellcooldown_1"))))
+        for e_ in evs:
+            script_events[e_] = [r for r in ev_rows.get(e_, []) if int(num(g(r, "command"))) == 10 and int(num(g(r, "datalong"))) in templates]
+    used = sorted(set(used) | {int(num(g(r, "datalong"))) for rows in script_events.values() for r in rows})
+    eb = Bin()
+    eb.u32(len(script_events))
+    for e_, rows in sorted(script_events.items()):
+        eb.u32(e_); eb.u8(len(rows))
+        for r in rows:
+            eb.u32(int(num(g(r, "datalong")))); eb.u32(int(num(g(r, "datalong2")))); eb.u32(int(num(g(r, "delay"))))
+            for k in ("x", "y", "z", "o"):
+                eb.f32(num(g(r, k)))
+    ub = Bin()
+    ub.u32(len(item_use))
+    for it_, (sp, charges, cd) in sorted(item_use.items()):
+        ub.u32(it_); ub.u32(sp); ub.i32(charges); ub.u32(max(0, cd))
+    report["counts_script_summons"] = dict(events=len(script_events), items=sorted(item_use))
 
     # ---- creature templates
     crea, loot_ids, money_by_loot, factions_used = [], {}, {}, set()
@@ -1241,7 +1287,12 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
             ob.u32(it)
     sec_extra["OUTF"] = ob.b
 
-    class_spell_sections(tables, templates, used, item_needed, sec_extra, report, spell_info or load_spell_info(None))
+    sec_extra["EVSC"] = eb.b
+    sec_extra["IUSE"] = ub.b
+    for it_ in item_use:
+        item_needed.add(it_)
+    class_spell_sections(tables, templates, used, item_needed, sec_extra, report, spell_info or load_spell_info(None),
+                         extra_spells=[v[0] for v in item_use.values()])
     # ---- WoWVita "PLST": base health / mana (player_classlevelstats) and stats (player_levelstats) by race, class, level
     cls_stats = {(int(num(g(r, "class"))), int(num(g(r, "level")))): (int(num(g(r, "basehp"))), int(num(g(r, "basemana"))))
                  for r in tables.get("player_classlevelstats", [])}
@@ -1337,6 +1388,13 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         if slots or maxdur or use[0]:
             itx.append((entry, slots, maxdur) + use)
 
+    # (the factions EventAI switches its creatures to: ACTION_T_SET_FACTION, e.g. 14 for the Summoned Voidwalker)
+    used_set = set(used)
+    for r in tables.get("creature_ai_scripts", []):
+        if int(num(g(r, "creature_id"))) in used_set:
+            for k in (1, 2, 3):
+                if int(num(g(r, f"action{k}_type"))) == 2 and int(num(g(r, f"action{k}_param1"))):
+                    factions_used.add(int(num(g(r, f"action{k}_param1"))))
     # ---- hostility towards the player's faction template (1: Human; the companions use it too)
     host = []
     hostile_n = neutral_n = 0

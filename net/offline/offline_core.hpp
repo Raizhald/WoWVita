@@ -287,6 +287,10 @@ struct SpellX {
     bool channeled() const { return (attrEx & 0x44) != 0; }
 };
 struct PlayerLevelStats { uint16_t hp = 0, mana = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; };   // WoWVita "PLST"
+// WoWVita "EVSC": dbscripts_on_event SCRIPT_COMMAND_TEMP_SUMMON_CREATURE (10) rows of the events quest items send
+struct EventSummon { uint32_t entry = 0, despawnMs = 0, delayMs = 0; float x = 0, y = 0, z = 0, o = 0; };
+// WoWVita "IUSE": an item whose use casts a spell (spelltrigger 0): charges < 0 are used up with the item
+struct ItemUse { uint32_t spell = 0; int32_t charges = 0; uint32_t cooldownMs = 0; };
 // WoWVita "PETS": a summoned pet (CMaNGOS Pet::InitStatsForLevel for SUMMON_PET)
 struct PetLevel { uint16_t hp = 0, mana = 0, armor = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; float dmgMin = 1, dmgMax = 2; };
 struct PetTemplate {
@@ -359,6 +363,8 @@ struct WorldData {
     std::unordered_map<uint32_t, SpellX> spellx;                      // "SPX2"
     std::unordered_map<uint32_t, PlayerLevelStats> playerStats;       // "PLST": race | class << 8 | level << 16
     std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
+    std::unordered_map<uint32_t, std::vector<EventSummon>> eventSummons;   // "EVSC": event id -> what it summons
+    std::unordered_map<uint32_t, ItemUse> itemUse;                    // "IUSE": item entry -> its use spell
     std::unordered_map<uint32_t, std::vector<std::pair<uint8_t, int32_t>>> itemStats;   // "ISTA": item -> (stat type, value)
     std::unordered_map<uint32_t, Trainer> trainers;                   // "TRNR": creature entry -> its class spells
     std::unordered_map<uint32_t, std::vector<uint32_t>> createSpells; // "CRSP": race | class << 8 -> spells
@@ -530,6 +536,8 @@ struct Entity {
     // WoWVita: the class spell engine (offline_spells.cpp)
     uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
     uint64_t ownerGuid = 0;                    // WoWVita: a pet's owner (offline_pet.cpp)
+    uint64_t summonerGuid = 0;                 // WoWVita: who summoned it (a script summon: TARGET_T_SPAWNER)
+    uint32_t despawnAtMs = 0;                  // ... and when it goes (TEMPSUMMON_TIMED_OR_DEAD_DESPAWN)
     uint32_t petNumber = 0, createdBySpell = 0;
     uint8_t petCommand = 1, petReact = 1;      // CommandStates (0 stay, 1 follow) / ReactStates (0 passive, 1 defensive, 2 aggressive)
     uint8_t petAutocastOff = 0;                // its spells (bit = index) that it does not cast by itself
@@ -841,7 +849,9 @@ public:
     void setPetReact(uint8_t react) { if (Entity* e = pet()) e->petReact = react > 2 ? 1 : react; }
     void setPetAutocast(uint32_t spell, bool on);
     bool petCast(uint32_t spell, uint64_t target, uint32_t nowMs);
-    void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);   // a quest's reward spell (a learning one teaches)   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
+    void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);
+    Entity* summonCreature(uint32_t entry, float x, float y, float z, float o, uint32_t despawnMs, uint64_t summoner, uint32_t nowMs);
+    bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach   // a quest's reward spell (a learning one teaches)   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
 private:
     int32_t absorb(Entity& dst, int32_t dmg, uint8_t school);
     void endChannel(Entity& e, uint32_t nowMs);
@@ -898,6 +908,7 @@ private:
     Entity* bots_[kMaxParty] = {nullptr, nullptr, nullptr, nullptr};
     uint64_t petGuid_ = 0;     // WoWVita: our pet
     uint32_t petCounter_ = 0;
+    uint32_t summonCounter_ = 0;   // WoWVita: script summons' guids
     void tickPet(Entity& e, uint32_t nowMs);
     void applyPetLevel(Entity& e);
     CharacterProfile profiles_[kMaxParty + 1];

@@ -531,6 +531,36 @@ bool readPlayerStats(Bin& b, WorldData& w) {   // WoWVita "PLST"
     return !b.bad;
 }
 
+bool readEventSummons(Bin& b, WorldData& w) {   // WoWVita "EVSC"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t id = b.u32();
+        const uint8_t k = b.u8();
+        std::vector<EventSummon> rows;
+        for (uint8_t j = 0; j < k && !b.bad; ++j) {
+            EventSummon s;
+            s.entry = b.u32(); s.despawnMs = b.u32(); s.delayMs = b.u32();
+            s.x = b.f32(); s.y = b.f32(); s.z = b.f32(); s.o = b.f32();
+            rows.push_back(s);
+        }
+        w.eventSummons[id] = std::move(rows);
+    }
+    return !b.bad;
+}
+
+bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t item = b.u32();
+        ItemUse u;
+        u.spell = b.u32(); u.charges = b.i32(); u.cooldownMs = b.u32();
+        w.itemUse[item] = u;
+    }
+    return !b.bad;
+}
+
 bool readPets(Bin& b, WorldData& w) {   // WoWVita "PETS"
     const uint32_t n = b.u32();
     if (b.bad || n > 1000) return false;
@@ -954,6 +984,8 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("ISTA"): ok = readItemStats(b, out); break;
             case fourcc("QSPL"): ok = readQuestSpells(b, out); break;
             case fourcc("PETS"): ok = readPets(b, out); break;
+            case fourcc("EVSC"): ok = readEventSummons(b, out); break;
+            case fourcc("IUSE"): ok = readItemUse(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

@@ -13,7 +13,7 @@
 //   - a Night Elf Druid: Bear Form / Cat Form (model, power, swing, armour; on the client too), Maul, no Moonfire as a bear,
 //     the mana back after; a learning reward spell
 //   - a Human Warlock: Summon Imp (pet_levelstats, name, the pet bar), follow, Firebolt at our target and our kill,
-//     stay, the Imp back at login, dismissed
+//     stay, the Imp back at login, dismissed; The Binding: the Summoning Circle's focus, the Summoned Voidwalker
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -641,6 +641,39 @@ int main(int argc, char** argv) {
         gs.petDismiss(now);
         run(300);
         CHECK(!w.pet() && !gs.pet.active && gs.petGuid() == 0, "dismissed");
+        // "The Binding": the Bloodstone Choker's Summon Voidwalker needs the Summoning Circle (spell focus 83); there it
+        // calls the Summoned Voidwalker (dbscripts_on_event 1131), which turns hostile and goes for its summoner (EventAI)
+        p->level = 10; p->maxHp = p->hp = 3000;
+        p->power = (int32_t)p->maxPower; p->gcdEndMs = 0;
+        lk.book.push_back(7728);
+        CHECK(!w.tryCast(*p, 7728, p->guid, now), "no Summon Voidwalker away from the circle");
+        const off::GoSpawn* circle = nullptr;
+        for (const off::GoSpawn& g : data.goSpawns) if (g.entry == 92015) circle = &g;
+        CHECK(circle != nullptr, "the Summoning Circle under the Slaughtered Lamb");
+        if (circle) {
+            gs.mover.reset(circle->x + 2, circle->y, circle->z, 0, now);
+            w.setPosition(*p, circle->x + 2, circle->y, circle->z, 0);
+            run(300);
+            p->gcdEndMs = 0;
+            CHECK(w.tryCast(*p, 7728, p->guid, now), "Summon Voidwalker at the circle");
+            run(10300);   // a 10 s cast
+            off::Entity* vw = nullptr;
+            for (int i = 0; i < off::kMaxEntities; ++i) {
+                off::Entity* e = w.byIndex(i);
+                if (e && e->used && e->entry == 5676 && e->alive()) vw = e;
+            }
+            CHECK(vw && vw->summonerGuid == p->guid, "the Summoned Voidwalker is here");
+            run(2500);
+            CHECK(vw && vw->faction == 14 && vw->victim == p->guid, "it turns on its summoner (faction %u)", vw ? vw->faction : 0);
+            if (vw) {
+                vw->hp = 1;
+                w.startAttack(*p, vw->guid, now);
+                uint32_t t1 = now;
+                while (now - t1 < 6000 && vw->alive()) run(200);
+                CHECK(!vw->alive(), "it is beaten");
+                w.stopAttack(*p, now);
+            }
+        }
     }
     session.leaveWorld();
     off::OfflineSaveData sd;

@@ -1229,6 +1229,12 @@ void OfflineSession::sendItemQuery(uint32_t entry) {
     for (int i = 0; i < 5; ++i) {   // spell, trigger, charges, cd, category, cat cd (WoWVita: the Hearthstone's, food, potions)
         const bool hearth = i == 0 && entry == kHearthstoneItem;
         const bool use = i == 0 && ext && ext->kind;
+        const ItemUse* iu = i == 0 && !use && data_ && data_->itemUse.count(entry) ? &data_->itemUse.at(entry) : nullptr;
+        if (iu) {   // WoWVita: "Use:" its spell ("IUSE": the Bloodstone Choker)
+            w.u32(iu->spell); w.u32(0); w.u32((uint32_t)iu->charges); w.u32(iu->cooldownMs ? iu->cooldownMs : 0xFFFFFFFFu);
+            w.u32(0); w.u32(0xFFFFFFFFu);
+            continue;
+        }
         w.u32(hearth ? kHearthstoneSpell : use ? ext->spell : 0); w.u32(0);
         w.u32(use && (ext->flags & 2) ? 0xFFFFFFFFu : 0);   // charges -1: used up
         w.u32(hearth ? 0xFFFFFFFFu : 0); w.u32(use ? ext->category : 0);
@@ -1306,6 +1312,7 @@ void OfflineSession::sendCastFailed(const Entity& caster, uint32_t spell, uint8_
     w.u32(spell);
     w.u8(2);        // failed
     w.u8(out);
+    if (out == 0x5E) w.u32(data_ && data_->sx(spell) ? data_->sx(spell)->focus : 0);   // REQUIRES_SPELL_FOCUS: which
     send(SMSG_CAST_FAILED, w.b);
 }
 
@@ -1841,6 +1848,21 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 if (!a) break;
                 sendSpellGo(*a, e.spell, e.b, e.school);
                 if (a->self && e.spell == kHearthstoneSpell) hearthHome(nowMs);   // WoWVita
+                if (a->self && itemCastSpell_ && e.spell == itemCastSpell_) {   // WoWVita: an item's charge is spent
+                    const ItemUse* u = data_ && data_->itemUse.count(itemCastEntry_) ? &data_->itemUse.at(itemCastEntry_) : nullptr;
+                    const CharacterProfile& pr = world_.playerProfile();
+                    if (u && u->charges < 0)
+                        for (int i = 0; i < pr.bagCount; ++i)
+                            if (pr.bag[i].entry == itemCastEntry_) {
+                                const uint8_t before = pr.bagCount;
+                                world_.takeFromBag(i, 1);
+                                if (world_.playerProfile().bagCount != before) bankChanged({}, i, before);
+                                else sendInventory();
+                                break;
+                            }
+                    itemCastSpell_ = itemCastEntry_ = 0;
+                    saveSoon_ = true;
+                }
                 break;
             }
             case SimEvent::PetChanged:   // WoWVita: our pet came or went
@@ -1917,6 +1939,13 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 if (e.text[0]) sendChat(0x0A, 0, std::string((const char*)e.text));
                 else if (e.value == 1 && e.spell && a && a->self) sendCharge(*a, nowMs);   // WoWVita: Charge
                 else if (e.value == 2 && e.spell && a && a->self) learn(e.spell, nowMs);   // a learning spell
+                else if (e.value == 3 && a) {   // WoWVita: a creature's faction changed (EventAI ACTION_T_SET_FACTION)
+                    FieldSet f;
+                    f.set(UF::UNIT_FACTIONTEMPLATE, a->faction);
+                    UpdateBuilder u;
+                    addValues(u, a->guid, f);
+                    sendUpdateObject(u.finish());
+                }
                 break;
             case SimEvent::CreatureText: {   // WoWVita: EventAI says, yells or emotes (broadcast_text)
                 const Entity* me = world_.player();

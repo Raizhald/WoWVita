@@ -232,6 +232,14 @@ bool OfflineSession::handleLife(uint16_t op, const Bytes& data, uint32_t nowMs) 
             const int index = r.bad ? -1 : bagIndex(bag, slot);   // the backpack or a bag
             if (index < 0) return false;
             const CharacterProfile& pr = world_.playerProfile();
+            // WoWVita: an item whose use casts a spell ("IUSE": the Bloodstone Choker at the Summoning Circle)
+            if (index < pr.bagCount && data_ && data_->itemUse.count(pr.bag[index].entry)) {
+                if (ghost_ || !p->alive()) { errorLine("You can't do that while dead.", nowMs); return true; }
+                const uint32_t entry = pr.bag[index].entry;
+                const ItemUse& u = data_->itemUse.at(entry);
+                if (world_.tryCast(*p, u.spell, p->guid, nowMs)) { itemCastSpell_ = u.spell; itemCastEntry_ = entry; }
+                return true;
+            }
             if (index < pr.bagCount && pr.bag[index].entry != kHearthstoneItem) return useConsumable(index, nowMs);   // food, potions
             if (index >= pr.bagCount || pr.bag[index].entry != kHearthstoneItem) return false;
             if (ghost_ || !p->alive()) { errorLine("You can't do that while dead.", nowMs); return true; }

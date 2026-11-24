@@ -247,6 +247,7 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (s.gcdMs && e.gcdEndMs > now) return fail(60);                    // SPELL_FAILED_NOT_READY
         if (cooldownLeft(e, id, now) || (s.category && cooldownLeft(e, kSlotCategoryBit | s.category, now))) return fail(60);
         if ((s.attr & 0x20000) && !hasAuraType(e, 16)) return fail(0x57);   // SPELL_ATTR_ONLY_STEALTHED
+        if (s.focus && !nearSpellFocus(e, s.focus)) return fail(0x5E);        // SPELL_FAILED_REQUIRES_SPELL_FOCUS (a circle)
         if ((s.attr & 0x10000000) && inCombatNow(e)) return fail(0);          // NOT_IN_COMBAT: SPELL_FAILED_AFFECTING_COMBAT
         // CMaNGOS GetErrorAtShapeshiftedCast. Stances, Shadowform and Stealth act as no form (SpellShapeshiftForm flags1 & 1)
         {
@@ -551,6 +552,14 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
             break;
         case E_INTERRUPT:
             for (Entity* x : ts) if (x->castSpell && x != &c) cancelCast(*x, 35, now);
+            break;
+        case 61:   // SPELL_EFFECT_SEND_EVENT: the event's script summons (dbscripts_on_event command 10)
+            if (data_) {
+                auto it = data_->eventSummons.find((uint32_t)e.misc);
+                if (it != data_->eventSummons.end())
+                    for (const EventSummon& es : it->second)
+                        summonCreature(es.entry, es.x, es.y, es.z, es.o, es.despawnMs, c.guid, now);
+            }
             break;
         case 56:   // SPELL_EFFECT_SUMMON_PET (Summon Imp, Voidwalker...): offline_pet.cpp
             if (c.self && e.misc > 0) summonPet(c, (uint32_t)e.misc, s.id, now);
@@ -882,6 +891,19 @@ void World::leaveForm(Entity& t, uint8_t form) {
 }
 
 // ---------------------------------------------------------------- facing, combat, stealth
+// CMaNGOS GameObjectFocusCheck: a spell focus object (type 8) of that focus id (data0) within its distance (data1)
+bool World::nearSpellFocus(const Entity& e, uint32_t focus) const {
+    if (!data_) return false;
+    for (const GoSpawn& g : data_->goSpawns) {
+        auto it = data_->goTemplates.find(g.entry);
+        if (it == data_->goTemplates.end() || it->second.type != 8 || it->second.data[0] != focus) continue;
+        const float dx = g.x - e.x, dy = g.y - e.y, dz = g.z - e.z;
+        const float dist = (float)it->second.data[1];
+        if (dx * dx + dy * dy + dz * dz <= dist * dist) return true;
+    }
+    return false;
+}
+
 bool World::hasInArc(const Entity& from, const Entity& to, float arc) {
     float a = std::atan2(to.y - from.y, to.x - from.x) - from.o;
     while (a > 3.14159265f) a -= 6.2831853f;

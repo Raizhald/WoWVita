@@ -338,6 +338,8 @@ private:
     // 7.16: "Use" on an item that goes on another one (a lure, a weapon oil): the picker of the items it fits
     bool useOnPick_ = false;
     w3n::InvItem useOnFrom_;
+    uint32_t spellOnPick_ = 0;   // WoWVita: a spell cast on an item of the bags (Feed Pet: the food)
+    std::vector<w3n::InvItem> pickTargets(w3n::GameSession& g) const;
     int shownSet_ = 0;                // the hotbar set on the bars (PadOut::set of both schemes)
     uint64_t aim_ = 0, lastHostile_ = 0;
     // vendor (stage 5.13): mode 0 buy, 1 sell, 2 buyback; the selected row (absolute) and page

@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -650,7 +650,7 @@ def full_spell(s, info):
     return b.b
 
 
-def class_spell_sections(tables, templates, used, item_needed, sec, report, info, extra_spells=()):
+def class_spell_sections(tables, templates, used, item_needed, sec, report, info, extra_spells=(), families=({}, {})):
     """'SPX2' (every spell the classes can have, with what they trigger), 'TRNR' (the class trainers on the map:
     npc_trainer / npc_trainer_template - the teaching spell, the spell it teaches, cost, level, the rank before it),
     'CRSP' (playercreateinfo_spell: what each race and class starts knowing)."""
@@ -731,7 +731,47 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
     names = {}
     for r in tables.get("pet_name_generation", []):
         names.setdefault(int(num(g(r, "entry"))), ([], []))[1 if int(num(g(r, "half"))) else 0].append(str(g(r, "word")))
+    # ---- WoWVita "FAMI" / "TAME" / "FOOD": hunter pets (CMaNGOS Pet::InitStatsForLevel HUNTER_PET with pet_levelstats
+    # entry 1, CreatureFamily.dbc scale / diet, the family's passives: SkillLineAbility spells that are
+    # IS_ABILITY | PASSIVE | DO_NOT_DISPLAY | DO_NOT_LOG - DBCStores sPetFamilySpellsStore), the creatures a hunter can
+    # tame here (CreatureTypeFlags & 1 TAMEABLE, Family), the food items' FoodType
+    fams, abil = families
+    items_db_all = newest_patch(tables.get("item_template", []), ("entry",))
+    fb = Bin()
+    fb.u32(len(fams))
+    for fid, f in sorted(fams.items()):
+        passives = []
+        for sk in f["skills"]:
+            for (sp, _learn, _tp) in abil.get(sk, []):
+                r = spells.get(sp)
+                if r and (int(num(g(r, "Attributes"))) & 0x1D0) == 0x1D0:
+                    passives.append(sp)
+                    want.add(sp)
+        fb.u32(fid); fb.s(f["name"][:60]); fb.f32(f["min_scale"]); fb.u8(min(255, f["min_lvl"])); fb.f32(f["max_scale"])
+        fb.u8(min(255, f["max_lvl"])); fb.u32(f["food"]); fb.u8(min(255, len(passives)))
+        for sp in passives[:255]:
+            fb.u32(sp)
+    sec["FAMI"] = fb.b
+    tb = Bin()
+    tame = [(e, int(num(g(all_templates[e], "Family")))) for e in sorted(used)
+            if e in all_templates and int(num(g(all_templates[e], "CreatureTypeFlags"))) & 1 and int(num(g(all_templates[e], "Family")))]
+    tb.u32(len(tame))
+    for e, fam in tame:
+        tb.u32(e); tb.u32(fam)
+    sec["TAME"] = tb.b
+    fo = Bin()
+    foods = [(i, int(num(g(items_db_all[i], "FoodType"))), int(num(g(items_db_all[i], "ItemLevel")))) for i in sorted(item_needed)
+             if i in items_db_all and int(num(g(items_db_all[i], "FoodType")))]
+    fo.u32(len(foods))
+    for i, ft, il in foods:
+        fo.u32(i); fo.u8(ft); fo.u8(min(255, il))
+    sec["FOOD"] = fo.b
+    report["counts_hunter_pets"] = dict(families=len(fams), tameable=len(tame), foods=len(foods))
     pb = Bin()
+    if 1 in pls:   # (the hunter pets' level stats: a template of their own, entry 1)
+        pet_entries.add(1)
+        all_templates = dict(all_templates)
+        all_templates.setdefault(1, {"Name": "Hunter pet", "MeleeBaseAttackTime": 2000})
     pets = [e for e in sorted(pet_entries) if e in all_templates and e in pls]
     pb.u32(len(pets))
     for e in pets:
@@ -787,6 +827,10 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
             if not more:
                 break
             want |= more
+        # what the core's spell scripts cast (Hunter.cpp TameBeastDummy: 13535 -> 13481)
+        for src, dst in ((13535, 13481),):
+            if src in want and dst in spells:
+                want.add(dst)
         # the judgement each seal holds in its third effect's base points (CMaNGOS spell_judgement)
         for sp in list(want):
             r = spells.get(sp)
@@ -887,7 +931,23 @@ def start_outfits(path, items_db, report):
     return out
 
 
-def build(tables, factions, map_id, report, player_faction=1, spell_info=None, glue_path=None):
+def load_families(path):
+    """skills.txt F / A lines (CreatureFamily.dbc, SkillLineAbility.dbc of the families' skill lines)."""
+    fams, abil = {}, {}
+    if not path:
+        return fams, abil
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            c = line.rstrip("\n").split("\t")
+            if c[0] == "F" and len(c) >= 10:
+                fams[int(c[1])] = dict(min_scale=float(c[2]), min_lvl=int(c[3]), max_scale=float(c[4]), max_lvl=int(c[5]),
+                                       skills=(int(c[6]), int(c[7])), food=int(c[8]), name=c[9])
+            elif c[0] == "A" and len(c) >= 5:
+                abil.setdefault(int(c[1]), []).append((int(c[2]), int(c[3]), int(c[4])))
+    return fams, abil
+
+
+def build(tables, factions, map_id, report, player_faction=1, spell_info=None, glue_path=None, skills_path=None):
     sample = build_sample()
     templates = newest_patch(tables.get("creature_template", []), ("Entry", "entry"))
     items_db = newest_patch(tables.get("item_template", []), ("entry",))
@@ -1291,8 +1351,9 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
     sec_extra["IUSE"] = ub.b
     for it_ in item_use:
         item_needed.add(it_)
+    families = load_families(skills_path)
     class_spell_sections(tables, templates, used, item_needed, sec_extra, report, spell_info or load_spell_info(None),
-                         extra_spells=[v[0] for v in item_use.values()])
+                         extra_spells=[v[0] for v in item_use.values()], families=families)
     # ---- WoWVita "PLST": base health / mana (player_classlevelstats) and stats (player_levelstats) by race, class, level
     cls_stats = {(int(num(g(r, "class"))), int(num(g(r, "level")))): (int(num(g(r, "basehp"))), int(num(g(r, "basemana"))))
                  for r in tables.get("player_classlevelstats", [])}
@@ -1628,6 +1689,7 @@ def main():
     ap.add_argument("--factions", required=True, help="factions.txt written by the converter (w3dconv --texts-only)")
     ap.add_argument("--spells", help="spells.txt written by the converter (cast times, ranges, durations of creature spells)")
     ap.add_argument("--glue", help="glue.txt written by the converter (the start outfits of new characters)")
+    ap.add_argument("--skills", help="skills.txt written by the converter (WoWVita: the hunter pets' families, F / A lines)")
     ap.add_argument("--map", type=int, default=0, help="0 Eastern Kingdoms (default), 1 Kalimdor")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-compress", action="store_true")
@@ -1643,7 +1705,8 @@ def main():
     if report["errors"]:
         print("\n".join(report["errors"]))
         return 1
-    sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells), glue_path=args.glue)
+    sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells), glue_path=args.glue,
+                skills_path=args.skills)
     write_pack(args.out, sec, compress=not args.no_compress)
     _, back = read_pack(args.out)
     mine = dict(report["counts"])

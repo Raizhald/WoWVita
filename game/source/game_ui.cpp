@@ -53,6 +53,7 @@ void GameUi::reset() {
     selTapped_ = false;
     bindArmed_ = false;
     useOnPick_ = false;
+    spellOnPick_ = 0;
     aim_ = lastHostile_ = 0;
     vendorMode_ = 0; vendorSel_ = -1; vendorPage_ = 0; vendorNpc_ = 0;
     trainerSel_ = -1;
@@ -110,7 +111,7 @@ void GameUi::setTab(Tab t) {
         phrases_ = false;
         socialSel_ = -1;
         bindArmed_ = false;   // 6.57g: a "Bind" begun in the bags must not stay over the next tab (its item's name on the crafting window)
-        useOnPick_ = false;
+        if (t != Tab::Bags) { useOnPick_ = false; spellOnPick_ = 0; }
         drag_ = Drag();
     }
     if (t == Tab::Gear) { tab_ = Tab::Bags; subBags_ = 1; }
@@ -274,6 +275,19 @@ void GameUi::faceTarget(const w3n::GameSession& g, const Input& in, Output& out)
 // ------------------------------------------------------------------ actions
 void GameUi::pressSpell(w3n::GameSession& g, uint32_t spell, const Input& in, Output& out) {
     if (g.life() != w3n::Life::Alive) { refuse(g, "You are dead", in.nowMs); return; }
+    // WoWVita: a spell cast on any item (its Targets has TARGET_FLAG_ITEM, no item class: Feed Pet) - the original client
+    // turns the cursor into a hand to click an item of the bags; here the Bags page lists the consumables to pick from
+    if (const w3n::SpellNames::ItemTarget* it = g.spellNames.itemTarget(spell); it && it->itemClass < 0 && !it->mainHand) {
+        spellOnPick_ = spell;
+        useOnFrom_ = w3n::InvItem();
+        setTab(Tab::Bags);
+        subBags_ = 0;
+        useOnPick_ = true;
+        page_ = 0;
+        dirty_ = true;
+        (void)out;
+        return;
+    }
     if (g.spellNames.ground(spell)) { beginPlace(g, in, spell, 0, out); return; }   // UI stage 10
     const w3n::WorldObject* t = g.objects.find(g.target());
     bool toggleOff = spell == w3n::kSpellAttack && g.attackWanted();
@@ -989,6 +1003,7 @@ void GameUi::doAction(w3n::GameSession& g, const Input& in, Act act, int arg, Ou
         case Act::SubView:
             bindArmed_ = false;
             useOnPick_ = false;
+            spellOnPick_ = 0;
             if (tab_ == Tab::Bags && arg == 10) cycleBagFilter(g);   // 6.95: the bag chip
             else if (tab_ == Tab::Bags) { subBags_ = arg; selected_ = page_ = 0; }
             else if (tab_ == Tab::Spells) { subSpells_ = arg; page_ = 0; talentSel_ = -1; skillSel_ = 0; craftPick_ = false; }
@@ -1385,12 +1400,16 @@ void GameUi::doAction(w3n::GameSession& g, const Input& in, Act act, int arg, Ou
         }
         // 7.16: the item chosen for a use-on-item spell (a lure on the fishing pole, a weapon oil on a weapon)
         case Act::UseOnItem: {
-            std::vector<w3n::InvItem> targets = g.itemOnItemTargets(useOnFrom_);
-            if (arg >= 0 && arg < (int)targets.size()) g.useItemOnItem(useOnFrom_, targets[arg].guid, now);
+            std::vector<w3n::InvItem> targets = pickTargets(g);
+            if (arg >= 0 && arg < (int)targets.size()) {
+                if (spellOnPick_) g.castSpellOnItem(spellOnPick_, targets[arg].guid, now);
+                else g.useItemOnItem(useOnFrom_, targets[arg].guid, now);
+            }
             useOnPick_ = false;
+            spellOnPick_ = 0;
             break;
         }
-        case Act::UseOnBack: useOnPick_ = false; break;
+        case Act::UseOnBack: useOnPick_ = false; spellOnPick_ = 0; break;
         // ---- chat (UI stage 3)
         case Act::ChatChannel: {
             chatChannel_ = arg;
@@ -1787,4 +1806,16 @@ void GameUi::doAction(w3n::GameSession& g, const Input& in, Act act, int arg, Ou
         case Act::TradeCancel: g.cancelTrade(now); break;
         default: break;
     }
+}
+
+// WoWVita: what the pick page offers: the items an item goes on, or for a spell on any item the consumables of the bags
+std::vector<w3n::InvItem> GameUi::pickTargets(w3n::GameSession& g) const {
+    if (!spellOnPick_) return g.itemOnItemTargets(useOnFrom_);
+    std::vector<w3n::InvItem> out;
+    for (const w3n::InvItem& it : g.inventory()) {
+        if (it.equipped()) continue;
+        const w3n::ItemInfo* info = g.itemInfo(it.entry);
+        if (info && info->cls == 0) out.push_back(it);
+    }
+    return out;
 }

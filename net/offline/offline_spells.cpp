@@ -356,9 +356,21 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
 }
 
 void World::endChannel(Entity& e, uint32_t now) {
-    (void)now;
     if (!e.channeling) return;
     const uint32_t id = e.castSpell;
+    // WoWVita: a channel that ran its full time fires its once-at-the-end periodic trigger (Tame Beast: the 20 s tick of
+    // its SPELL_AURA_PERIODIC_TRIGGER_SPELL - 13535 - lands as the channel ends)
+    if (now >= e.castEndMs && data_)
+        if (const SpellX* cs = data_->sx(id))
+            for (const SpellEffectX& x : cs->eff)
+                if (x.effect == E_APPLY_AURA && x.aura == A_PERIODIC_TRIGGER && x.trigger && x.amplitude >= (int32_t)durationX(e, *cs) &&
+                    durationX(e, *cs) > 0) {
+                    const uint64_t tg = e.castTarget;
+                    e.channeling = false;
+                    castX(e, x.trigger, tg, now, true);
+                    e.channeling = true;
+                    e.castTarget = tg;
+                }
     e.channeling = false;
     for (AreaFx& a : areas_) if (a.used && a.caster == e.guid && a.spell == id) a.used = false;
     for (Entity& o : pool_) {
@@ -594,8 +606,18 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
                         summonCreature(es.entry, es.x, es.y, es.z, es.o, es.despawnMs, c.guid, now);
             }
             break;
-        case 56:   // SPELL_EFFECT_SUMMON_PET (Summon Imp, Voidwalker...): offline_pet.cpp
+        case 56:   // SPELL_EFFECT_SUMMON_PET (Summon Imp, Voidwalker...; without an entry: Call Pet): offline_pet.cpp
             if (c.self && e.misc > 0) summonPet(c, (uint32_t)e.misc, s.id, now);
+            else if (c.self) callHunterPet(c, now);
+            break;
+        case 55:   // SPELL_EFFECT_TAME_CREATURE (13481 at the end of Tame Beast's channel)
+            if (c.self && t && t != &c) tameCreature(c, *t, s.id, now);
+            break;
+        case 102:   // SPELL_EFFECT_DISMISS_PET: the hunter's pet goes, kept for Call Pet
+            if (c.self && pet()) { dismissPet(false); profiles_[0].petOut = false; }
+            break;
+        case 109:   // SPELL_EFFECT_RESURRECT_PET (Revive Pet): its health share
+            if (c.self) callHunterPet(c, now, std::max(1, effValue(c, s, k, 0)));
             break;
         case E_LEARN_SPELL:   // SPELL_EFFECT_LEARN_SPELL: the session puts it in the book (SMSG_LEARNED_SPELL)
             for (Entity* x : ts) if (x->self && e.trigger) emit(SimEvent::Message, x->guid, x->guid, e.trigger, 2);
@@ -757,6 +779,13 @@ bool World::scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t now) {
         }
         return true;
     }
+    // Tame Beast (CMaNGOS Hunter.cpp TameBeastDummy): 13535 casts 13481 at the channel's target
+    if (s.id == 13535) {
+        const uint64_t tg = c.channeling ? c.castTarget : (t && t != &c ? t->guid : 0);
+        const Entity* beast = tg ? entity(tg) : nullptr;
+        if (beast && beast->alive() && !beast->ownerGuid) castX(c, 13481, tg, now, true);   // (once: then it is ours)
+        return true;
+    }
     // Vanish (CMaNGOS VanishRogue::OnCast): the best Stealth known, its cooldown no matter; the effects still run
     if (s.family == 8 && (s.familyFlags & 0x800ull) && c.self) {
         uint32_t best = 0;
@@ -797,6 +826,13 @@ void World::tickAuraX(Entity& e, Aura& a, uint32_t now) {
                 const int32_t amount = std::max<int32_t>(1, a.amount);
                 applyDamage(*c, e, amount, spell, a.school, now);
                 if (a.type == A_PERIODIC_LEECH && c->alive()) applyHeal(*c, *c, amount, spell, now);
+            }
+            break;
+        case 24:   // SPELL_AURA_PERIODIC_ENERGIZE: misc the power (4: a hunter pet's happiness - Feed Pet)
+            if (e.alive() && a.misc == 4 && e.petHunter) e.petHappiness = std::min(1000000, e.petHappiness + a.amount);
+            else if (e.alive() && a.misc == e.powerType) {
+                e.power = std::min<int32_t>((int32_t)e.maxPower, e.power + a.amount);
+                emit(SimEvent::PowerChanged, e.guid, 0, 0, e.power);
             }
             break;
         case A_PERIODIC_HEAL:

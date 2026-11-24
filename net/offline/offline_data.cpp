@@ -549,6 +549,34 @@ bool readEventSummons(Bin& b, WorldData& w) {   // WoWVita "EVSC"
     return !b.bad;
 }
 
+bool readFamilies(Bin& b, WorldData& w) {   // WoWVita "FAMI"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 1000) return false;
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        PetFamily f;
+        f.id = b.u32(); f.name = b.str(); f.minScale = b.f32(); f.minScaleLevel = b.u8(); f.maxScale = b.f32();
+        f.maxScaleLevel = b.u8(); f.foodMask = b.u32();
+        const uint8_t k = b.u8();
+        for (uint8_t j = 0; j < k && !b.bad; ++j) f.passives.push_back(b.u32());
+        if (!b.bad) w.families[f.id] = std::move(f);
+    }
+    return !b.bad;
+}
+
+bool readTameable(Bin& b, WorldData& w) {   // WoWVita "TAME"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    for (uint32_t i = 0; i < n && !b.bad; ++i) { const uint32_t e = b.u32(); w.tameable[e] = b.u32(); }
+    return !b.bad;
+}
+
+bool readFoods(Bin& b, WorldData& w) {   // WoWVita "FOOD"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    for (uint32_t i = 0; i < n && !b.bad; ++i) { const uint32_t it = b.u32(); const uint8_t ft = b.u8(); w.foods[it] = {ft, b.u8()}; }
+    return !b.bad;
+}
+
 bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
     const uint32_t n = b.u32();
     if (b.bad || n > 100000) return false;
@@ -986,6 +1014,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("PETS"): ok = readPets(b, out); break;
             case fourcc("EVSC"): ok = readEventSummons(b, out); break;
             case fourcc("IUSE"): ok = readItemUse(b, out); break;
+            case fourcc("FAMI"): ok = readFamilies(b, out); break;
+            case fourcc("TAME"): ok = readTameable(b, out); break;
+            case fourcc("FOOD"): ok = readFoods(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

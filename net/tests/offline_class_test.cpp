@@ -726,7 +726,107 @@ int main(int argc, char** argv) {
             run(1500);
             CHECK(!p->autoRepeatSpell && ammoLeft() == left, "too close for a gun");
         }
+        // Tame Beast (1515): a 20 s channel at a tameable beast no higher than the hunter; at its end (13535 -> 13481,
+        // SPELL_EFFECT_TAME_CREATURE) the beast is the pet: its level, half content, rebellious, a family name
+        p->level = 10; p->maxHp = p->hp = 50000;
+        p->power = (int32_t)p->maxPower; p->gcdEndMs = 0;
+        off::Entity* beast = nullptr;
+        for (int i = 0; i < off::kMaxEntities && !beast; ++i) {
+            off::Entity* e = w.byIndex(i);
+            if (e && e->used && e->objType == 3 && e->alive() && !e->ownerGuid && data.tameable.count(e->entry)) beast = e;
+        }
+        CHECK(beast != nullptr, "a tameable beast nearby (%zu tameable entries)", data.tameable.size());
+        if (beast) {
+            const uint32_t beastEntry = beast->entry;
+            hp.book.push_back(1515);
+            hp.book.push_back(883); hp.book.push_back(2641); hp.book.push_back(982);
+            beast->level = 12;
+            gs.mover.reset(beast->x + 8, beast->y, beast->z, 0, now);
+            w.setPosition(*p, beast->x + 8, beast->y, beast->z, 0);
+            run(200);
+            CHECK(!w.tryCast(*p, 1515, beast->guid, now) || !w.pet(), "not one above the hunter's level");
+            run(21000);
+            CHECK(!w.pet(), "no pet from a beast too high");
+            beast = nullptr;
+            for (int i = 0; i < off::kMaxEntities && !beast; ++i) {
+                off::Entity* e = w.byIndex(i);
+                if (e && e->used && e->objType == 3 && e->alive() && !e->ownerGuid && e->entry == beastEntry) beast = e;
+            }
+            if (beast) {
+                beast->level = 8;
+                beast->maxHp = beast->hp = 100000;   // (it fights back during the channel; it must live through it)
+                gs.mover.reset(beast->x + 8, beast->y, beast->z, 0, now);
+                w.setPosition(*p, beast->x + 8, beast->y, beast->z, 0);
+                run(200);
+                p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+                CHECK(w.tryCast(*p, 1515, beast->guid, now), "Tame Beast begins");
+                const uint32_t t0 = now;
+                while (now - t0 < 26000 && !w.pet()) run(200);
+            }
+            off::Entity* pet = w.pet();
+            CHECK(pet && pet->petHunter && pet->entry == beastEntry && pet->level == 8 && pet->powerType == 2,
+                  "tamed: entry %u level %u focus", pet ? pet->entry : 0, pet ? pet->level : 0);
+            if (pet) {
+                std::printf("pet: '%s' family %u hp %u dmg %u-%u happiness %d loyalty %u (%d)\n", pet->petName.c_str(), pet->family,
+                            pet->maxHp, pet->dmgMin, pet->dmgMax, pet->petHappiness, pet->petLoyaltyLevel, pet->petLoyaltyPoints);
+                CHECK(pet->petHappiness == 166500 && pet->petLoyaltyLevel == 1 && !pet->petName.empty(), "half content, rebellious, named");
+                CHECK(gs.petGuid() == pet->guid && gs.pet.active && gs.petCanRename() && gs.petCanAbandon(), "the client's pet bar, rename and abandon");
+                CHECK(gs.petHappiness() == 1 && gs.petLoyalty() == 1, "the client sees it unhappy (%d), rebellious (%d)", gs.petHappiness(), gs.petLoyalty());
+                // happiness: -(140 >> 1) x 125 every 7.5 s out of combat
+                const int32_t h0 = pet->petHappiness;
+                run(7600);
+                pet = w.pet();
+                CHECK(pet && pet->petHappiness == h0 - 8750, "happiness drains %d -> %d", h0, pet ? pet->petHappiness : 0);
+                // its name, once
+                CHECK(gs.petRename("Grumbles", now), "a rename");
+                run(300);
+                pet = w.pet();
+                CHECK(pet && pet->petName == "Grumbles" && w.playerProfile().petRenamed && !gs.petCanRename(), "renamed, not again");
+                CHECK(gs.petName() == "Grumbles", "the client asks its new name (%s)", gs.petName().c_str());
+                // experience: a quarter of a player's need a level, not past the hunter
+                const uint8_t pl0 = (uint8_t)pet->level;
+                w.givePetXp(*pet, 1000000, 10);
+                CHECK(pet->level == p->level && pet->petXp == 0 && pl0 < pet->level, "levels up to the hunter (%u)", pet->level);
+                // Dismiss Pet, Call Pet
+                p->gcdEndMs = 0;
+                CHECK(w.tryCast(*p, 2641, p->guid, now), "Dismiss Pet");
+                run(5300);
+                CHECK(!w.pet() && !gs.pet.active && hp.petEntry == beastEntry && !hp.petOut, "dismissed, kept");
+                p->gcdEndMs = 0;
+                CHECK(w.tryCast(*p, 883, p->guid, now), "Call Pet");
+                run(500);
+                pet = w.pet();
+                CHECK(pet && pet->petName == "Grumbles" && pet->level == p->level && gs.pet.active && hp.petOut, "back, as it was");
+                // it dies: Call Pet does not bring it, Revive Pet does (15 %)
+                if (pet) {
+                    w.applyDamage(*p, *pet, pet->hp * 100, 0, 0, now);
+                    run(300);
+                    CHECK(w.pet() == nullptr || !w.pet()->alive(), "it is dead");
+                    p->gcdEndMs = 0;
+                    w.tryCast(*p, 883, p->guid, now);
+                    run(500);
+                    CHECK(!w.pet() || !w.pet()->alive(), "Call Pet does not raise it");
+                    p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+                    CHECK(w.tryCast(*p, 982, p->guid, now), "Revive Pet");
+                    run(10600);
+                    pet = w.pet();
+                    CHECK(pet && pet->alive() && pet->hp < (int32_t)pet->maxHp / 2, "alive again at %d/%u", pet ? pet->hp : 0, pet ? pet->maxHp : 0);
+                }
+            }
+        }
     }
+    session.leaveWorld();
+    play(hunterGuid);
+    run(1000);
+    p = w.player();
+    CHECK(w.pet() && w.pet()->petHunter && w.pet()->petName == "Grumbles", "the current pet back at login");
+    w.player()->gcdEndMs = 0;
+    w.tryCast(*w.player(), 2641, w.player()->guid, now);
+    run(5300);
+    session.leaveWorld();
+    play(hunterGuid);
+    run(1000);
+    CHECK(!w.pet(), "a dismissed one stays away at login");
     session.leaveWorld();
     off::OfflineSaveData sd;
     std::string serr;

@@ -242,7 +242,18 @@ void addCreatureCreate(UpdateBuilder& u, const Entity& ent) {
         f.set(UF::UNIT_FIELD_PETNUMBER, e->petNumber);
         f.set(140, 1u);                                   // UNIT_FIELD_PET_NAME_TIMESTAMP
         f.set(146, e->createdBySpell);                    // UNIT_CREATED_BY_SPELL
-        f.set(UF::UNIT_BYTES_0, 1u | (1u << 8) | (0u << 16) | ((uint32_t)e->powerType << 24));
+        f.set(UF::UNIT_BYTES_0, 1u | (1u << 8) | ((e->petHunter ? 2u : 0u) << 16) | ((uint32_t)e->powerType << 24));
+        if (e->petHunter) {   // a beast (Pet::CreateBaseAtCreature): focus, happiness, loyalty, experience, rename / abandon
+            f.set((uint16_t)(UF::UNIT_POWER1 + 2), (uint32_t)std::max(0, e->power));
+            f.set((uint16_t)(UF::UNIT_POWER1 + 4), (uint32_t)std::max(0, e->petHappiness));
+            f.set((uint16_t)(UF::UNIT_MAXPOWER1 + 2), 100u);
+            f.set((uint16_t)(UF::UNIT_MAXPOWER1 + 4), 1000000u);
+            f.set(UF::UNIT_BYTES_1, (uint32_t)e->petLoyaltyLevel << 8);
+            f.set(46, 0x8u | 0x20u | (e->petRenamed ? 0u : 0x10u));   // UNIT_FIELD_FLAGS
+            f.set(140, e->petRenamed ? 2u : 1u);   // the name's timestamp: asked again after a rename
+            f.set(141, e->petXp);                                   // UNIT_FIELD_PETEXPERIENCE
+            f.set(142, e->level < 60 ? OfflineSession::petNextXp(e->level) : 1000u);   // UNIT_FIELD_PETNEXTLEVELEXP
+        }
     }
     addCreate(u, e->guid, 3, kUfHighGuid, e->x, e->y, e->z, e->o, f);
 }
@@ -537,8 +548,10 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     loginPackets(nowMs);
     mailAtLogin();   // WoWVita: "You have new mail."
     if (!world_.playerProfile().ammoId) world_.pickAmmo();   // WoWVita: (a character of an older save: its ammo slot)
-    if (Entity* p = world_.player(); p && save_.player.petEntry)   // WoWVita: the pet comes back (CMaNGOS LoadPetFromDB)
-        world_.summonPet(*p, save_.player.petEntry, save_.player.petSpell, nowMs, save_.player.petName);
+    if (Entity* p = world_.player(); p && save_.player.petEntry) {   // WoWVita: the pet comes back (CMaNGOS LoadPetFromDB)
+        if (!save_.player.petHunter) world_.summonPet(*p, save_.player.petEntry, save_.player.petSpell, nowMs, save_.player.petName);
+        else if (save_.player.petOut && save_.player.petHp) world_.callHunterPet(*p, nowMs);   // (only the current one, alive)
+    }
     return true;
 }
 
@@ -1512,7 +1525,8 @@ void OfflineSession::handleCast(const Bytes& data, uint32_t nowMs) {
     uint64_t target = 0;
     // WoWVita: SpellCastTargets::read (1.12): a unit / corpse guid, an item guid, the source and the destination point
     if (!r.bad && (mask & (0x0002 | 0x0800 | 0x8000))) target = r.packedGuid();
-    if (!r.bad && (mask & (0x0010 | 0x0100))) r.packedGuid();
+    uint64_t itemGuid = 0;
+    if (!r.bad && (mask & (0x0010 | 0x0100))) itemGuid = r.packedGuid();
     if (!r.bad && (mask & 0x0020)) { r.f32(); r.f32(); r.f32(); }
     p->castHasDest = false;
     if (!r.bad && (mask & 0x0040)) {
@@ -1525,6 +1539,19 @@ void OfflineSession::handleCast(const Bytes& data, uint32_t nowMs) {
     // ours sends the cast again, so that press ends the shooting here
     if (p->autoRepeatSpell && spell == p->autoRepeatSpell) { world_.stopAutoRepeat(*p); return; }
     if (target && target != p->guid) world_.setSelection(target);
+    // WoWVita: Feed Pet (SPELL_EFFECT_FEED_PET on the item picked from the bags)
+    if (const SpellX* sx = data_ ? data_->sx(spell) : nullptr; sx && sx->eff[0].effect == 101) {
+        const uint32_t low = (uint32_t)itemGuid;
+        const int idx = (low & 0xFFFFF000u) == (0x40000000u | 0x2000u) ? (int)(low & 0xFFFu) : -1;
+        const CharacterProfile& pr = world_.playerProfile();
+        if (idx < 0 || idx >= pr.bagCount) { sendCastFailed(*p, spell, 10); return; }
+        const uint8_t before = pr.bagCount;
+        if (world_.feedPet(*p, pr.bag[idx].entry, nowMs)) {
+            if (world_.playerProfile().bagCount != before) bankChanged({}, idx, before);
+            else sendInventory();
+        }
+        return;
+    }
     // No unit target in the packet means: self / no explicit target. Ground-target spells are not
     // supported yet, so resolving to self is the correct, safe default.
     if (!target) target = p->guid;
@@ -1976,6 +2003,8 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                     else sendInventory();
                 }
                 else if (e.value == 5 && a && a->self) send(0x29C, Bytes{});   // SMSG_CANCEL_AUTO_REPEAT
+                else if (e.value == 6 && a && a->self) { Writer w; w.u8((uint8_t)e.spell); send(0x173, w.b); }   // SMSG_PET_TAME_FAILURE
+                else if (e.value == 7 && a && a->self) send(0x2AF, Bytes{});   // SMSG_PET_BROKEN: it ran away
                 else if (e.value == 3 && a) {   // WoWVita: a creature's faction changed (EventAI ACTION_T_SET_FACTION)
                     FieldSet f;
                     f.set(UF::UNIT_FACTIONTEMPLATE, a->faction);
@@ -2054,6 +2083,24 @@ void OfflineSession::syncControl(uint32_t nowMs) {   // WoWVita
         netForm_ = p->form;
         netPowerType_ = p->powerType;
         sendSelfFields();
+    }
+    // WoWVita: the hunter's pet: focus, happiness, loyalty, experience, level as they change
+    if (const Entity* hp = world_.pet(); hp && hp->petHunter) {
+        const uint32_t sig[6] = {(uint32_t)hp->power, (uint32_t)hp->petHappiness / 1000, hp->petLoyaltyLevel, hp->petXp, hp->level, (uint32_t)hp->maxHp};
+        if (std::memcmp(sig, netPet_, sizeof sig) != 0) {
+            std::memcpy(netPet_, sig, sizeof sig);
+            FieldSet f;
+            f.set((uint16_t)(UF::UNIT_POWER1 + 2), (uint32_t)std::max(0, hp->power));
+            f.set((uint16_t)(UF::UNIT_POWER1 + 4), (uint32_t)std::max(0, hp->petHappiness));
+            f.set(UF::UNIT_BYTES_1, (uint32_t)hp->petLoyaltyLevel << 8);
+            f.set(141, hp->petXp);
+            f.set(142, hp->level < 60 ? petNextXp(hp->level) : 1000u);
+            f.set(UF::UNIT_LEVEL, hp->level);
+            f.set(UF::UNIT_MAXHEALTH, hp->maxHp);
+            UpdateBuilder u;
+            addValues(u, hp->guid, f);
+            sendUpdateObject(u.finish());
+        }
     }
     // WoWVita: combo points (rogue, druid in cat form) on the target frame
     if (p->comboPoints != netCombo_ || p->comboTarget != netComboTarget_) {
@@ -2549,6 +2596,16 @@ bool OfflineSession::handleGoLoot(uint16_t op, const Bytes& data, uint32_t nowMs
         return true;
     }
     return false;
+}
+
+// WoWVita: WorldSession::HandlePetRename - UNIT_FLAG_RENAME off, a new UNIT_FIELD_PET_NAME_TIMESTAMP (the client asks again)
+void OfflineSession::sendPetRenamed(uint64_t guid) {
+    FieldSet f;
+    f.set(UF::UNIT_FLAGS, 0x8u | 0x20u);
+    f.set(140, 2u);
+    UpdateBuilder u;
+    addValues(u, guid, f);
+    sendUpdateObject(u.finish());
 }
 
 }  // namespace offline

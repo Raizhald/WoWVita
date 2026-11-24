@@ -30,6 +30,7 @@ namespace offline {
 
 class OfflineSession {
 public:
+    static uint32_t petNextXp(uint32_t level);     // ObjectMgr::GetXPForPetLevel
     using PacketSink = std::function<void(uint16_t opcode, const Bytes& data)>;
 
     void setup(const WorldData* data, const char* savePath);
@@ -119,6 +120,7 @@ private:
     void learn(uint32_t spell, uint32_t nowMs);
     bool handleClassSpells(uint16_t op, const Bytes& data, uint32_t nowMs);
     bool handlePet(uint16_t op, const Bytes& data, uint32_t nowMs);   // WoWVita: offline_class.cpp - the pet bar
+    void sendPetRenamed(uint64_t guid);
     void sendPetSpells();                                           // SMSG_PET_SPELLS (guid 0 when there is none)
     void sendPetSummonField();                                      // the player's UNIT_FIELD_SUMMON
     void sendCharge(const Entity& p, uint32_t nowMs);
@@ -291,6 +293,7 @@ private:
     uint8_t netCombo_ = 0;       // WoWVita: the combo points the client was last told
     uint32_t itemCastSpell_ = 0, itemCastEntry_ = 0;   // WoWVita: an item's use spell under way (used up when it goes off)
     uint8_t netForm_ = 0, netPowerType_ = 0xFF;   // ... the form and power type
+    uint32_t netPet_[6] = {};                      // ... the hunter pet's focus, happiness, loyalty, experience, level
     uint64_t netComboTarget_ = 0;
     float ccSpeed_ = 7.0f;
     uint32_t ccCounter_ = 0;

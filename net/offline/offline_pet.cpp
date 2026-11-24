@@ -111,11 +111,31 @@ void World::applyPetLevel(Entity& e) {
     e.dmgMin += bonus; e.dmgMax += bonus;
 }
 
+void World::storePet() {
+    const Entity* e = pet();
+    if (!e || !e->petHunter) return;
+    CharacterProfile& p = profiles_[0];
+    p.petHunter = true;
+    p.petLevel = (uint8_t)e->level;
+    p.petXp = e->petXp;
+    p.petHp = e->alive() ? (uint32_t)std::max(1, e->hp) : 0;
+    p.petHappiness = e->petHappiness;
+    p.petLoyaltyLevel = e->petLoyaltyLevel;
+    p.petLoyaltyPoints = e->petLoyaltyPoints;
+    p.petLoyaltyXpNeed = e->petLoyaltyXpNeed;
+    p.petAutocastOff = e->petAutocastOff;
+    p.petName = e->petName;
+}
+
 void World::dismissPet(bool forget) {
+    storePet();
     Entity* e = pet();
     const uint64_t guid = petGuid_;
     petGuid_ = 0;
-    if (forget) { profiles_[0].petEntry = 0; profiles_[0].petSpell = 0; profiles_[0].petName.clear(); }
+    if (forget) {
+        CharacterProfile& p = profiles_[0];
+        p.petEntry = 0; p.petSpell = 0; p.petName.clear(); p.petHunter = false; p.petHp = 0;
+    }
     if (!e) return;
     for (Entity& o : pool_)   // nobody keeps fighting it
         if (o.used && o.objType == 3) {
@@ -190,7 +210,9 @@ void World::tickPet(Entity& e, uint32_t now) {
     }
     if (!owner || owner->guid != e.ownerGuid) { dismissPet(false); return; }
     if (!owner->alive()) { e.victim = e.target = 0; }
-    if (e.level != owner->level) {   // Pet::SynchronizeLevelWithOwner
+    if (e.petHunter) tickHunterPet(e, *owner, now);
+    if (!e.used || !e.alive()) return;
+    if (!e.petHunter && e.level != owner->level) {   // Pet::SynchronizeLevelWithOwner (a demon; a beast earns its levels)
         e.level = owner->level;
         const uint32_t oldMax = e.maxHp;
         applyPetLevel(e);
@@ -253,6 +275,329 @@ void World::tickPet(Entity& e, uint32_t now) {
     const float d = pdist(e.x, e.y, fx, fy);
     e.speed = d > 12.0f ? std::max(owner->speed, 7.0f) * 1.15f : std::max(owner->speed, 7.0f);
     if (d > 2.0f) moveToward(e, fx, fy, now, 0.3f);
+}
+
+// ================================================================ the hunter's pet (HUNTER_PET)
+namespace {
+constexpr int32_t kHappinessLevel = 333000, kHappinessMax = 1000000;   // HAPPINESS_LEVEL_SIZE, POWER_HAPPINESS_DEFAULT
+constexpr int32_t kLevelUpLoyalty[6] = {5500, 11500, 17000, 23500, 31000, 39500};
+constexpr int32_t kLevelStartLoyalty[6] = {2000, 4500, 7000, 10000, 13500, 17500};
+const char* const kFamilyNames[] = {"", "Wolf", "Cat", "Spider", "Bear", "Boar", "Crocolisk", "Carrion Bird", "Crab", "Gorilla", "",
+                                    "Raptor", "Tallstrider"};
+uint32_t xpForLevel(uint32_t l) {   // (World::xpForNextLevel's table)
+    static const uint32_t t[] = {0, 400, 900, 1400, 2100, 2800, 3600, 4500, 5400, 6500, 7600, 8800, 10100, 11400, 12900, 14400, 16000,
+                                 17700, 19400, 21300, 23200, 25200, 27300, 29400, 31700, 34000, 36400, 38900, 41400, 44300, 47400,
+                                 50800, 54500, 58600, 62800, 67100, 71600, 76100, 80800, 85700, 90700, 95800, 101000, 106300,
+                                 111800, 117500, 123200, 129100, 135100, 141200, 147500, 153900, 160400, 167100, 173900, 180800,
+                                 187900, 195000, 202300, 209800};
+    return l < 60 ? t[l] : 209800;
+}
+}  // namespace
+
+// MaNGOS::XP::Gain (Formulas.h): BaseGain by the level difference (+5 % a level above, to 4; below, down to the zero
+// difference; nothing past the trivial difference), x2.5 for an elite of the open world, x ExperienceMultiplier
+uint32_t World::xpGain(uint8_t unitLevel, const Entity& v) const {
+    const CreatureTemplate* t = data_ ? data_->creature(v.entry) : nullptr;
+    if (!t || !t->xp || v.ownerGuid || v.creatureType == 8) return 0;
+    const uint32_t ul = unitLevel, ml = v.level;
+    const float base = (float)(ul * 5 + 45);
+    float gain = 0;
+    if (ml >= ul) gain = base * (1.0f + 0.05f * (float)std::min<uint32_t>(4, ml - ul));
+    else {
+        const uint32_t diff = ul - ml;
+        static const uint32_t triv[] = {4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10, 11};
+        const uint32_t tr = ul / 5 < 12 ? triv[ul / 5] : 12;
+        if (diff > tr) return 0;
+        const uint32_t zd = ul < 8 ? 5 : ul < 10 ? 6 : ul < 12 ? 7 : ul < 16 ? 8 : ul < 20 ? 9 : ul < 30 ? 11 : ul < 40 ? 12 :
+                            ul < 45 ? 13 : ul < 50 ? 14 : ul < 55 ? 15 : ul < 60 ? 16 : 17;
+        gain = base * (1.0f - (float)diff / (float)zd);
+    }
+    if (gain <= 0) return 0;
+    const bool elite = t->rank != 0 && t->rank != 4;
+    // (the pack keeps the template's experience for its own level; its ExperienceMultiplier is what is left of that)
+    const float own = (float)(t->minLevel * 5 + 45) * (elite ? 2.0f : 1.0f);
+    const float mult = own > 0 ? (float)t->xp / own : 1.0f;
+    if (elite) gain *= 2.5f;
+    return (uint32_t)std::lround(gain * mult);
+}
+
+// Pet::InitStatsForLevel (HUNTER_PET): pet_levelstats entry 1, melee damage by speed and level, the family's scale and
+// passives; happiness / loyalty / experience as Pet::CreateBaseAtCreature sets them for a new one
+static void hunterPetStats(Entity& e, const WorldData& d) {
+    auto pit = d.pets.find(1);
+    const PetLevel* l = nullptr;
+    if (pit != d.pets.end())
+        for (int L = e.level; L >= 1 && !l; --L) { auto li = pit->second.levels.find((uint8_t)L); if (li != pit->second.levels.end()) l = &li->second; }
+    const uint32_t oldMax = e.maxHp;
+    e.maxHp = l ? std::max<uint32_t>(1, l->hp) : 1;
+    e.armor = l ? l->armor : 0;
+    if (l) { e.statStr = l->str; e.statAgi = l->agi; e.statSta = l->sta; e.statInt = l->inte; e.statSpi = l->spi; }
+    const uint32_t mDmg = e.attackMs * e.level / 2000;
+    e.dmgMin = (uint32_t)std::max(1.0f, (float)mDmg - (float)mDmg / 4.0f);
+    e.dmgMax = (uint32_t)std::max((float)e.dmgMin, ((float)mDmg - (float)mDmg / 4.0f) * 1.5f);
+    // Pet::UpdateAttackPowerAndDamage: AP = str x 2 - 20, its bonus to a swing
+    e.attackPower = std::max(0, 2 * e.statStr - 20);
+    const uint32_t bonus = (uint32_t)(e.attackPower * (int32_t)e.attackMs / 14000);
+    e.dmgMin += bonus; e.dmgMax += bonus;
+    if (auto f = d.families.find(e.family); f != d.families.end() && f->second.minScale > 0) {
+        const PetFamily& fa = f->second;
+        float sc;
+        if (e.level >= fa.maxScaleLevel) sc = fa.maxScale;
+        else if (e.level <= fa.minScaleLevel) sc = fa.minScale;
+        else sc = fa.minScale + (float)(e.level - fa.minScaleLevel) / (float)std::max<uint8_t>(1, fa.maxScaleLevel) * (fa.maxScale - fa.minScale);
+        e.scale = sc;
+    }
+    if (oldMax && e.hp > 0) e.hp = std::min<int32_t>((int32_t)e.maxHp, e.hp + (int32_t)e.maxHp - (int32_t)oldMax);
+}
+
+void World::applyHunterPassives(Entity& e, uint32_t now) {
+    if (!data_) return;
+    auto f = data_->families.find(e.family);
+    if (f == data_->families.end()) return;
+    for (uint32_t sp : f->second.passives)
+        if (const SpellX* s = data_->sx(sp); s && !hasAura(e, sp))
+            for (int k = 0; k < 3; ++k)
+                if (s->eff[k].effect == 6) applyAuraX(e, e, *s, k, now, 0);   // (SPELL_EFFECT_APPLY_AURA)
+    // (their modifiers: SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT 133, armour % 142; damage % 79 counts at each hit)
+    const int32_t hpPct = auraSum(e, 133), arPct = auraSum(e, 142, 1);
+    if (hpPct) { const uint32_t m = (uint32_t)std::max<int64_t>(1, (int64_t)e.maxHp * (100 + hpPct) / 100); e.hp = std::min<int32_t>((int32_t)m, e.hp + (int32_t)m - (int32_t)e.maxHp); e.maxHp = m; }
+    if (arPct) e.armor = (uint32_t)std::max<int64_t>(0, (int64_t)e.armor * (100 + arPct) / 100);
+}
+
+Entity* World::spawnHunterPet(Entity& owner, uint32_t entry, uint32_t display, uint32_t family, uint8_t level, uint32_t now) {
+    const CreatureTemplate* t = data_ ? data_->creature(entry) : nullptr;
+    dismissPet(false);
+    const uint32_t number = ++petCounter_;
+    const uint64_t guid = 0xF140000000000000ull | ((uint64_t)(entry & 0xFFFFFF) << 24) | (uint64_t)number;
+    Entity& e = allocate(guid);
+    if (!e.used) return nullptr;
+    e.objType = 3;
+    e.entry = entry;
+    e.ownerGuid = owner.guid;
+    e.petNumber = number;
+    e.petHunter = true;
+    e.family = family;
+    e.petCommand = 1;
+    e.petReact = 1;
+    e.petMelee = true;
+    e.level = level;
+    e.faction = owner.faction;
+    e.displayId = display ? display : (t ? t->displayId : 0);
+    e.scale = t ? t->scale : 1.0f;
+    e.speed = t ? t->speed : 8.0f;
+    e.attackMs = t && t->attackMs >= 500 ? t->attackMs : 2000;
+    e.combatReach = t ? t->combatReach : 1.5f;
+    e.boundingRadius = t ? t->boundingRadius : 0.5f;
+    e.creatureType = 1;   // a beast
+    e.powerType = 2;      // POWER_FOCUS
+    e.maxPower = 100;
+    e.power = 100;
+    e.spellCount = 0;
+    hunterPetStats(e, *data_);
+    e.hp = (int32_t)e.maxHp;
+    const float a = owner.o + kPetFollowAngle;
+    e.x = owner.x + std::cos(a) * kPetFollowDist;
+    e.y = owner.y + std::sin(a) * kPetFollowDist;
+    e.z = owner.z;
+    e.o = owner.o;
+    e.homeX = e.x; e.homeY = e.y; e.homeZ = e.z;
+    applyGround(e);
+    e.petHappyTickMs = now + 7500;
+    e.petLoyaltyTickMs = now + 12000;
+    e.petFocusTickMs = now + 4000;
+    petGuid_ = guid;
+    return &e;
+}
+
+// Spell::EffectTameCreature / Pet::CreateBaseAtCreature: the beast becomes the hunter's pet at its level, with its
+// health share, half content (166500), rebellious with 1000 loyalty points, named after its family
+bool World::tameCreature(Entity& owner, Entity& beast, uint32_t spell, uint32_t now) {
+    auto fail = [&](uint8_t why) { emit(SimEvent::Message, owner.guid, owner.guid, why, 6); return false; };   // SMSG_PET_TAME_FAILURE
+    if (!owner.self || !data_ || beast.objType != 3 || !beast.alive()) return fail(1);
+    if (profiles_[0].cls != 3) return fail(6);                       // PETTAME_UNITSCANTTAME
+    if (beast.ownerGuid || beast.summonerGuid) return fail(3);        // PETTAME_CREATUREALREADYOWNED
+    if (beast.level > owner.level) return fail(9);                    // PETTAME_TOOHIGHLEVEL
+    auto tm = data_->tameable.find(beast.entry);
+    if (tm == data_->tameable.end()) return fail(4);                  // PETTAME_NOTTAMEABLE
+    if (pet() || (profiles_[0].petEntry && profiles_[0].petHunter)) return fail(5);   // PETTAME_ANOTHERSUMMONACTIVE
+    const uint32_t hpPct = beast.maxHp ? (uint32_t)std::max(1, beast.hp * 100 / (int32_t)beast.maxHp) : 100;
+    const uint32_t entry = beast.entry, display = beast.displayId, family = tm->second;
+    const uint8_t level = (uint8_t)beast.level;
+    const float bx = beast.x, by = beast.y, bz = beast.z, bo = beast.o;
+    // the creature goes (ForcedDespawn): its spawn comes back as usual
+    for (Entity& o : pool_)
+        if (o.used && o.objType == 3 && o.victim == beast.guid) o.victim = o.target = 0;
+    beast.hp = 0;
+    beast.dead = true;
+    beast.respawnAtMs = now + 1000;   // (the grid brings it back after its respawn time; first it is gone)
+    emit(SimEvent::Vanish, beast.guid, 0, 0, 0);
+    releaseCreature(beast, now);
+    Entity* e = spawnHunterPet(owner, entry, display, family, level, now);
+    if (!e) return fail(8);
+    e->x = bx; e->y = by; e->z = bz; e->o = bo;
+    e->createdBySpell = spell;
+    e->hp = std::max<int32_t>(1, (int32_t)e->maxHp * (int32_t)hpPct / 100);
+    e->petHappiness = 166500;
+    e->petLoyaltyLevel = 1;    // REBELLIOUS
+    e->petLoyaltyPoints = 1000;
+    e->petXp = 0;
+    e->petLoyaltyXpNeed = xpForLevel(owner.level) * 5 / 100;   // SetRequiredXpForNextLoyaltyLevel
+    auto f = data_->families.find(family);
+    const CreatureTemplate* t = data_->creature(entry);
+    e->petName = f != data_->families.end() && !f->second.name.empty() ? f->second.name
+                 : family < sizeof(kFamilyNames) / sizeof(kFamilyNames[0]) && kFamilyNames[family][0] ? kFamilyNames[family]
+                 : t ? t->name : std::string("Pet");
+    e->petAutocastOff = 0;
+    applyHunterPassives(*e, now);
+    CharacterProfile& p = profiles_[0];
+    p.petEntry = entry; p.petSpell = spell; p.petHunter = true; p.petDisplay = display; p.petFamily = family; p.petRenamed = false;
+    p.petOut = true;
+    storePet();
+    emit(SimEvent::Appear, e->guid, 0, 0, 0);
+    emit(SimEvent::PetChanged, e->guid, owner.guid, spell, 1);
+    return true;
+}
+
+// Call Pet (SPELL_EFFECT_SUMMON_PET with no entry: Pet::LoadPetFromDB) / Revive Pet (SPELL_EFFECT_RESURRECT_PET)
+bool World::callHunterPet(Entity& owner, uint32_t now, int32_t revivePct) {
+    CharacterProfile& p = profiles_[0];
+    if (!p.petHunter || !p.petEntry) { emit(SimEvent::CastFailed, owner.guid, 0, 883, 0x4C, 0, 0); return false; }   // NO_PET
+    if (Entity* cur = pet()) {
+        if (revivePct && !cur->alive()) {   // resurrected where it lies
+            cur->dead = false;
+            cur->hp = std::max<int32_t>(1, (int32_t)cur->maxHp * revivePct / 100);
+            cur->respawnAtMs = 0;
+            emit(SimEvent::Appear, cur->guid, 0, 0, 0);
+            return true;
+        }
+        return false;
+    }
+    if (!p.petHp && !revivePct) { emit(SimEvent::Message, owner.guid, owner.guid, 10, 6); return false; }   // PETTAME_DEAD
+    if (p.petHp && revivePct) return false;   // (it lives: nothing to revive)
+    Entity* e = spawnHunterPet(owner, p.petEntry, p.petDisplay, p.petFamily, std::max<uint8_t>(1, p.petLevel), now);
+    if (!e) return false;
+    e->createdBySpell = p.petSpell;
+    e->petXp = p.petXp;
+    e->petHappiness = p.petHappiness;
+    e->petLoyaltyLevel = std::max<uint8_t>(1, p.petLoyaltyLevel);
+    e->petLoyaltyPoints = p.petLoyaltyPoints;
+    e->petLoyaltyXpNeed = p.petLoyaltyXpNeed;
+    e->petName = p.petName;
+    e->petRenamed = p.petRenamed;
+    e->petAutocastOff = p.petAutocastOff;
+    applyHunterPassives(*e, now);
+    e->hp = revivePct ? std::max<int32_t>(1, (int32_t)e->maxHp * revivePct / 100) : std::min<int32_t>((int32_t)e->maxHp, (int32_t)p.petHp);
+    p.petOut = true;
+    storePet();
+    emit(SimEvent::Appear, e->guid, 0, 0, 0);
+    emit(SimEvent::PetChanged, e->guid, owner.guid, p.petSpell, 1);
+    return true;
+}
+
+// Pet::GivePetXP: not past the owner's level; the loyalty's experience need shrinks, a kill's loyalty bonus
+void World::givePetXp(Entity& e, uint32_t xp, uint8_t victimLevel) {
+    if (!e.petHunter || !e.alive() || !xp || !player_) return;
+    const uint32_t maxLevel = std::min<uint32_t>(60, player_->level);
+    uint32_t level = e.level;
+    if (level < maxLevel) {
+        uint32_t next = xpForLevel(level) / 4;   // ObjectMgr::GetXPForPetLevel
+        uint32_t cur = e.petXp + xp;
+        while (cur >= next && level < maxLevel) {
+            cur -= next;
+            ++level;
+            e.level = (uint8_t)level;
+            hunterPetStats(e, *data_);
+            applyHunterPassives(e, now_);
+            e.hp = (int32_t)e.maxHp;
+            emit(SimEvent::LevelUp, e.guid, 0, 0, (int32_t)level);
+            next = xpForLevel(level) / 4;
+        }
+        e.petXp = level < maxLevel ? cur : 0;
+    }
+    e.petLoyaltyXpNeed = xp > e.petLoyaltyXpNeed ? 0 : e.petLoyaltyXpNeed - xp;   // UpdateRequireXpForNextLoyaltyLevel
+    if (victimLevel <= 100) modifyLoyalty(e, (int32_t)((100 - victimLevel) / 10 + (6 - e.petLoyaltyLevel)));   // KillLoyaltyBonus
+    storePet();
+}
+
+// Pet::ModifyLoyalty: under 0 a level down (rebellious: it leaves, turns aggressive or stays passive), past the level's
+// points and the experience needed a level up (training points left aside: no beast training here yet)
+void World::modifyLoyalty(Entity& e, int32_t add) {
+    const uint8_t lv = e.petLoyaltyLevel;
+    auto maxPts = [](uint8_t l) { return kLevelUpLoyalty[std::min<int>(5, std::max(0, l - 1))]; };
+    if (lv >= 6 && add + e.petLoyaltyPoints > maxPts(lv)) return;
+    e.petLoyaltyPoints += add;
+    if (e.petLoyaltyPoints < 0) {
+        if (lv > 1) {
+            e.petLoyaltyLevel = lv - 1;
+            e.petLoyaltyPoints = kLevelStartLoyalty[e.petLoyaltyLevel - 1];
+            e.petLoyaltyXpNeed = player_ ? xpForLevel(player_->level) * 5 / 100 : 0;
+        } else {
+            switch (rng_.below(3)) {
+                case 0:   // it abandons its owner (SMSG_PET_BROKEN)
+                    emit(SimEvent::Message, e.ownerGuid, e.ownerGuid, 0, 7);
+                    e.petLoyaltyPoints = 0;
+                    dismissPet(true);
+                    return;
+                case 1: e.petReact = 2; e.petLoyaltyPoints = 500; break;   // aggressive
+                default: e.petCommand = 0; e.petReact = 0; e.victim = e.target = 0; e.petLoyaltyPoints = 500; break;   // stay, passive
+            }
+            emit(SimEvent::PetChanged, e.guid, e.ownerGuid, 0, 2);
+        }
+    } else if (e.petLoyaltyPoints > maxPts(lv) && e.petLoyaltyXpNeed == 0 && lv < 6) {
+        e.petLoyaltyLevel = lv + 1;
+        e.petLoyaltyPoints = kLevelStartLoyalty[e.petLoyaltyLevel - 1];
+        e.petLoyaltyXpNeed = e.petLoyaltyLevel >= 6 ? 0 : player_ ? xpForLevel(player_->level) * 5 / 100 : 0;
+        emit(SimEvent::PetChanged, e.guid, e.ownerGuid, 0, 2);
+    }
+}
+
+// Pet::RegenerateAll: focus +24 every 4 s; happiness -(140 >> loyalty level) x 125 every 7.5 s (x 1.5 in combat);
+// loyalty every 12 s by happiness (+20 happy, +10 content, -20 unhappy)
+void World::tickHunterPet(Entity& e, Entity& owner, uint32_t now) {
+    (void)owner;
+    if (!e.alive()) return;
+    if (now >= e.petFocusTickMs) {
+        e.petFocusTickMs = now + 4000;
+        if (e.power < (int32_t)e.maxPower) { e.power = std::min<int32_t>((int32_t)e.maxPower, e.power + 24); emit(SimEvent::PowerChanged, e.guid, 0, 0, e.power); }
+    }
+    if (now >= e.petHappyTickMs) {
+        e.petHappyTickMs = now + 7500;
+        if (e.petHappiness > 0) {
+            int32_t loss = (140 >> e.petLoyaltyLevel) * 125;
+            if (e.victim || e.target) loss = loss * 3 / 2;
+            e.petHappiness = std::max(0, e.petHappiness - loss);
+        }
+    }
+    if (now >= e.petLoyaltyTickMs) {
+        e.petLoyaltyTickMs = now + 12000;
+        modifyLoyalty(e, e.petHappiness >= 2 * kHappinessLevel ? 20 : e.petHappiness >= kHappinessLevel ? 10 : -20);
+    }
+}
+
+// SPELL_EFFECT_FEED_PET (Spell::CheckCast + EffectFeedPet): the family's diet (petFoodMask & 1 << FoodType - 1), the
+// food's level (Pet::GetCurrentFoodBenefitLevel: 35000 / 17000 / 8000 a tick by how far under the pet's), not in combat;
+// the item is used up and Feed Pet Effect (1539) gives that happiness over its time
+bool World::feedPet(Entity& owner, uint32_t item, uint32_t now) {
+    Entity* e = pet();
+    auto fail = [&](uint8_t why) { emit(SimEvent::CastFailed, owner.guid, 0, 6991, why, 0, 0); return false; };
+    if (!e || !e->petHunter || !e->alive()) return fail(0x4C);   // SPELL_FAILED_NO_PET
+    auto fd = data_ ? data_->foods.find(item) : data_->foods.end();
+    auto fam = data_->families.find(e->family);
+    if (fd == data_->foods.end() || fam == data_->families.end() || !(fam->second.foodMask & (1u << (fd->second.first - 1)))) return fail(0x7D);
+    const uint32_t il = fd->second.second;
+    const int32_t benefit = e->level <= il + 5 ? 35000 : e->level <= il + 10 ? 17000 : e->level <= il + 14 ? 8000 : 0;
+    if (!benefit) return fail(0x1F);                                // SPELL_FAILED_FOOD_LOWLEVEL
+    if (e->victim || e->target) return fail(0);                     // SPELL_FAILED_AFFECTING_COMBAT
+    if (!removePlayerItem(item, 1)) return fail(0x0C);
+    const SpellX* fx = data_->sx(1539);
+    Aura a;
+    a.spell = 1539; a.caster = owner.guid; a.type = 24; a.effIndex = 0; a.misc = 4; a.amount = benefit; a.positive = true;
+    a.amplitudeMs = fx && fx->eff[0].amplitude > 0 ? (uint32_t)fx->eff[0].amplitude : 1000;
+    a.nextTickMs = now + a.amplitudeMs;
+    a.endMs = now + (fx ? durationX(owner, *fx) : 10000);
+    addAura(*e, a);
+    emit(SimEvent::CastFinished, owner.guid, e->guid, 6991, 0, 0);
+    return true;
 }
 
 }  // namespace offline

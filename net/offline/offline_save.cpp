@@ -186,6 +186,14 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         payload.cstr(c.petName);
         payload.u8(c.petAutocastOff);
     }
+    payload.u32(0x31545048u);   // "HPT1": the hunter's pet
+    for (const CharacterProfile& c : d.roster) {
+        payload.u8(c.petHunter ? 1 : 0);
+        payload.u32(c.petDisplay); payload.u32(c.petFamily); payload.u32(c.petXp); payload.u32(c.petHp);
+        payload.u32(c.petLoyaltyXpNeed); payload.u8(c.petLevel); payload.u8(c.petLoyaltyLevel);
+        payload.u32((uint32_t)c.petHappiness); payload.u32((uint32_t)c.petLoyaltyPoints);
+        payload.u8((c.petRenamed ? 1 : 0) | (c.petOut ? 2 : 0));
+    }
     payload.u32(0x314F4D41u);   // "AMO1": the ammo slot
     for (const CharacterProfile& c : d.roster) payload.u32(c.ammoId);
     Writer file;
@@ -419,6 +427,23 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                 c.petSpell = p.u32();
                 c.petName = p.cstr();
                 c.petAutocastOff = p.u8();
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the hunters' pets
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31545048u) {
+            for (CharacterProfile& c : d.roster) {
+                c.petHunter = p.u8() != 0;
+                c.petDisplay = p.u32(); c.petFamily = p.u32(); c.petXp = p.u32(); c.petHp = p.u32();
+                c.petLoyaltyXpNeed = p.u32(); c.petLevel = p.u8(); c.petLoyaltyLevel = p.u8();
+                c.petHappiness = (int32_t)p.u32(); c.petLoyaltyPoints = (int32_t)p.u32();
+                const uint8_t fl = p.u8();
+                c.petRenamed = (fl & 1) != 0;
+                c.petOut = (fl & 2) != 0;
             }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {

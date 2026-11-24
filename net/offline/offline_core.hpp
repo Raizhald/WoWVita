@@ -291,6 +291,14 @@ struct PlayerLevelStats { uint16_t hp = 0, mana = 0, str = 0, agi = 0, sta = 0, 
 struct EventSummon { uint32_t entry = 0, despawnMs = 0, delayMs = 0; float x = 0, y = 0, z = 0, o = 0; };
 // WoWVita "IUSE": an item whose use casts a spell (spelltrigger 0): charges < 0 are used up with the item
 struct ItemUse { uint32_t spell = 0; int32_t charges = 0; uint32_t cooldownMs = 0; };
+// WoWVita "FAMI": a hunter pet family (CreatureFamily.dbc via the converter's skills.txt)
+struct PetFamily {
+    uint32_t id = 0, foodMask = 0;
+    std::string name;
+    float minScale = 0, maxScale = 0;
+    uint8_t minScaleLevel = 0, maxScaleLevel = 0;
+    std::vector<uint32_t> passives;   // "Tamed Pet Passive (DND)": its stat modifiers
+};
 // WoWVita "PETS": a summoned pet (CMaNGOS Pet::InitStatsForLevel for SUMMON_PET)
 struct PetLevel { uint16_t hp = 0, mana = 0, armor = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; float dmgMin = 1, dmgMax = 2; };
 struct PetTemplate {
@@ -365,6 +373,9 @@ struct WorldData {
     std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
     std::unordered_map<uint32_t, std::vector<EventSummon>> eventSummons;   // "EVSC": event id -> what it summons
     std::unordered_map<uint32_t, ItemUse> itemUse;                    // "IUSE": item entry -> its use spell
+    std::unordered_map<uint32_t, PetFamily> families;                 // "FAMI"
+    std::unordered_map<uint32_t, uint32_t> tameable;                  // "TAME": creature entry -> its family
+    std::unordered_map<uint32_t, std::pair<uint8_t, uint8_t>> foods;  // "FOOD": item -> FoodType, ItemLevel
     std::unordered_map<uint32_t, std::vector<std::pair<uint8_t, int32_t>>> itemStats;   // "ISTA": item -> (stat type, value)
     std::unordered_map<uint32_t, Trainer> trainers;                   // "TRNR": creature entry -> its class spells
     std::unordered_map<uint32_t, std::vector<uint32_t>> createSpells; // "CRSP": race | class << 8 -> spells
@@ -548,6 +559,11 @@ struct Entity {
     uint8_t petCommand = 1, petReact = 1;      // CommandStates (0 stay, 1 follow) / ReactStates (0 passive, 1 defensive, 2 aggressive)
     uint8_t petAutocastOff = 0;                // its spells (bit = index) that it does not cast by itself
     bool petMelee = true;                      // (the Imp does not melee: PetAI m_meleeEnabled)
+    bool petHunter = false;                    // WoWVita: a tamed beast (HUNTER_PET): focus, happiness, loyalty, experience
+    bool petRenamed = false;
+    uint32_t family = 0, petXp = 0, petLoyaltyXpNeed = 0, petHappyTickMs = 0, petLoyaltyTickMs = 0, petFocusTickMs = 0;
+    int32_t petHappiness = 0, petLoyaltyPoints = 0;
+    uint8_t petLoyaltyLevel = 1;
     std::string petName;
     uint32_t formDisplay = 0;                  // WoWVita: the form's model (0: one's own)
     bool formPower = false;                    // energy / rage of a form; the class's own power kept aside
@@ -640,6 +656,13 @@ struct CharacterProfile {
     std::array<uint32_t, 120> actionBar{};// WoWVita: the action buttons as the client set them ("SPB1" too)
     bool actionBarSet = false;
     uint32_t ammoId = 0;                  // WoWVita: PLAYER_AMMO_ID, the arrows / bullets in the ammo slot ("AMO1")
+    // WoWVita: the hunter's pet ("HPT1"; CMaNGOS character_pet): what it was tamed from, its level, experience,
+    // happiness, loyalty and health (0: dead)
+    bool petHunter = false, petRenamed = false;
+    bool petOut = false;   // (PET_SAVE_AS_CURRENT: back at login; Dismiss Pet or its death: PET_SAVE_NOT_IN_SLOT)
+    uint32_t petDisplay = 0, petFamily = 0, petXp = 0, petHp = 0, petLoyaltyXpNeed = 0;
+    uint8_t petLevel = 0, petLoyaltyLevel = 1;
+    int32_t petHappiness = 0, petLoyaltyPoints = 0;
     uint32_t petEntry = 0, petSpell = 0;  // WoWVita: the summoned pet ("PET1"), its name and the spells it does not autocast
     std::string petName;
     uint8_t petAutocastOff = 0;
@@ -856,6 +879,13 @@ public:
     void setPetReact(uint8_t react) { if (Entity* e = pet()) e->petReact = react > 2 ? 1 : react; }
     void setPetAutocast(uint32_t spell, bool on);
     bool petCast(uint32_t spell, uint64_t target, uint32_t nowMs);
+    // WoWVita: hunter pets
+    bool tameCreature(Entity& owner, Entity& beast, uint32_t spell, uint32_t nowMs);
+    bool callHunterPet(Entity& owner, uint32_t nowMs, int32_t revivePct = 0);
+    void givePetXp(Entity& pet, uint32_t xp, uint8_t victimLevel);
+    uint32_t xpGain(uint8_t unitLevel, const Entity& victim) const;   // MaNGOS::XP::Gain
+    void storePet();                                                 // the pet's state into the profile (character_pet)
+    bool feedPet(Entity& owner, uint32_t itemEntry, uint32_t nowMs);   // SPELL_EFFECT_FEED_PET
     void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);
     Entity* summonCreature(uint32_t entry, float x, float y, float z, float o, uint32_t despawnMs, uint64_t summoner, uint32_t nowMs);
     bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach
@@ -925,6 +955,10 @@ private:
     void takeAmmo(Entity& e);
     void tickPet(Entity& e, uint32_t nowMs);
     void applyPetLevel(Entity& e);
+    void tickHunterPet(Entity& e, Entity& owner, uint32_t nowMs);
+    void modifyLoyalty(Entity& e, int32_t add);
+    void applyHunterPassives(Entity& e, uint32_t nowMs);
+    Entity* spawnHunterPet(Entity& owner, uint32_t entry, uint32_t display, uint32_t family, uint8_t level, uint32_t nowMs);
     CharacterProfile profiles_[kMaxParty + 1];
     std::vector<QuestLogEntry> questLog_;
     PartyCommandState commands_;

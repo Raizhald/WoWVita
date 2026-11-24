@@ -305,14 +305,31 @@ bool OfflineSession::handlePet(uint16_t op, const Bytes& data, uint32_t nowMs) {
             if (!r.bad && world_.pet() && world_.pet()->guid == g) world_.petCommand(1, 0, nowMs);
             return true;
         }
-        case CMSG_PET_ABANDON_: {   // a demon is dismissed (Pet::Unsummon PET_SAVE_AS_DELETED for a hunter's)
+        case CMSG_PET_ABANDON_: {   // a demon is dismissed; a hunter's beast is let go for good (PET_SAVE_AS_DELETED)
             const uint64_t g = r.u64();
             if (!r.bad && world_.pet() && world_.pet()->guid == g) world_.dismissPet(true);
             saveSoon_ = true;
             return true;
         }
-        case CMSG_PET_RENAME_:
-            return true;   // (a demon cannot be renamed)
+        case CMSG_PET_RENAME_: {   // a tamed beast, once (UNIT_FLAG_PET_RENAME); a demon cannot be renamed
+            const uint64_t g = r.u64();
+            std::string name = r.cstr();
+            Entity* pet = world_.pet();
+            CharacterProfile& pr = world_.playerProfile();
+            if (r.bad || !pet || pet->guid != g || !pet->petHunter || pr.petRenamed || name.size() < 2 || name.size() > 12) return true;
+            for (char& ch : name) if (!((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z'))) return true;
+            pet->petName = name;
+            pr.petName = name;
+            pr.petRenamed = true;
+            pet->petRenamed = true;
+            Writer w;   // the new name, and the fields that make the client ask again
+            w.u32(pet->petNumber); w.cstr(name); w.u32(2);
+            send(SMSG_PET_NAME_QUERY_RESPONSE_, w.b);
+            sendPetRenamed(pet->guid);   // (WorldSession::HandlePetRename: UNIT_FLAG_RENAME off, a new name timestamp)
+            sendPetSpells();
+            saveSoon_ = true;
+            return true;
+        }
         case CMSG_PET_NAME_QUERY_: {
             const uint32_t number = r.u32();
             r.u64();
@@ -321,7 +338,7 @@ bool OfflineSession::handlePet(uint16_t op, const Bytes& data, uint32_t nowMs) {
             Writer w;
             w.u32(number);
             w.cstr(pet->petName);
-            w.u32(1);   // the name's timestamp
+            w.u32(world_.playerProfile().petRenamed ? 2u : 1u);   // the name's timestamp
             send(SMSG_PET_NAME_QUERY_RESPONSE_, w.b);
             return true;
         }
@@ -330,5 +347,18 @@ bool OfflineSession::handlePet(uint16_t op, const Bytes& data, uint32_t nowMs) {
     }
 }
 
+}  // namespace offline
+}  // namespace w3n
+
+namespace w3n {
+namespace offline {
+uint32_t OfflineSession::petNextXp(uint32_t level) {   // ObjectMgr::GetXPForPetLevel: a quarter of a player's
+    static const uint32_t t[] = {0, 400, 900, 1400, 2100, 2800, 3600, 4500, 5400, 6500, 7600, 8800, 10100, 11400, 12900, 14400, 16000,
+                                 17700, 19400, 21300, 23200, 25200, 27300, 29400, 31700, 34000, 36400, 38900, 41400, 44300, 47400,
+                                 50800, 54500, 58600, 62800, 67100, 71600, 76100, 80800, 85700, 90700, 95800, 101000, 106300,
+                                 111800, 117500, 123200, 129100, 135100, 141200, 147500, 153900, 160400, 167100, 173900, 180800,
+                                 187900, 195000, 202300, 209800};
+    return (level < 60 ? t[level] : 209800) / 4;
+}
 }  // namespace offline
 }  // namespace w3n

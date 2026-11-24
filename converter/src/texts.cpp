@@ -78,8 +78,36 @@ bool exportSkills(const DataDir& data, const std::string& path, bool verbose) {
                firstLocale(t, r, 12, 20) + "\n";
         ++n;
     }
+    // WoWVita: the hunter pets' families for the offline server (CMaNGOS DBCStores: sPetFamilySpellsStore) -
+    // "F id minScale minScaleLevel maxScale maxScaleLevel skillLine0 skillLine1 petFoodMask name" per CreatureFamily.dbc row
+    // (1.12: ID 0, minScale 1 (float), minScaleLevel 2, maxScale 3 (float), maxScaleLevel 4, skillLine[2] 5-6,
+    // petFoodMask 7, Name[8] 8-15) and "A skill spell learnOnGetSkill reqTrainPoints" per SkillLineAbility.dbc row of
+    // those skill lines (ID 0, SkillLine 1, Spell 2, ..., AcquireMethod 9, ..., reqtrainpoints 14)
+    DbcTable fam, sla;
+    std::set<uint32_t> famLines;
+    size_t nf = 0, na = 0;
+    if (fam.load(data, "CreatureFamily.dbc") && fam.fields >= 9) {
+        for (uint32_t r = 0; r < fam.records; ++r) {
+            if (!fam.u32(r, 0)) continue;
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "F\t%u\t%g\t%u\t%g\t%u\t%u\t%u\t%u\t", fam.u32(r, 0), fam.f32(r, 1), fam.u32(r, 2),
+                          fam.f32(r, 3), fam.u32(r, 4), fam.u32(r, 5), fam.u32(r, 6), fam.u32(r, 7));
+            out += buf + firstLocale(fam, r, 8, 16) + "\n";
+            if (fam.u32(r, 5)) famLines.insert(fam.u32(r, 5));
+            if (fam.u32(r, 6)) famLines.insert(fam.u32(r, 6));
+            ++nf;
+        }
+    }
+    if (!famLines.empty() && sla.load(data, "SkillLineAbility.dbc") && sla.fields >= 10) {
+        for (uint32_t r = 0; r < sla.records; ++r) {
+            if (!famLines.count(sla.u32(r, 1))) continue;
+            out += "A\t" + std::to_string(sla.u32(r, 1)) + "\t" + std::to_string(sla.u32(r, 2)) + "\t" + std::to_string(sla.u32(r, 9)) +
+                   "\t" + std::to_string(sla.fields > 14 ? sla.u32(r, 14) : 0) + "\n";
+            ++na;
+        }
+    }
     if (!writeText(path, out)) return false;
-    std::printf("  skills: %zu skill lines written to %s\n", n, path.c_str());
+    std::printf("  skills: %zu skill lines, %zu pet families, %zu family abilities written to %s\n", n, nf, na, path.c_str());
     (void)verbose;
     return true;
 }

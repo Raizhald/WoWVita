@@ -889,6 +889,10 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
     int32_t dmg = rng_.range((int32_t)a.dmgMin, (int32_t)a.dmgMax);
     if (const int32_t ap = auraSum(a, 99)) dmg += ap * (int32_t)a.attackMs / 14000;   // WoWVita: attack power auras
     if (hasAuraType(a, 67)) dmg = std::max(1, dmg / 2);                              // WoWVita: disarmed
+    if (a.petHunter) {   // WoWVita: Pet::GetConditionalTotalPhysicalDamageModifier - happy 125 %, unhappy 75 %
+        if (a.petHappiness >= 666000) dmg = dmg * 5 / 4;
+        else if (a.petHappiness < 333000) dmg = dmg * 3 / 4;
+    }
     if (const int32_t block = auraSum(b, 51); block > 0 && (int32_t)rng_.below(100) < block) {   // Shield Block
         // (the pack has no shield block values: the strength part of CMaNGOS GetShieldBlockValue and a level-sized shield)
         dmg = std::max(0, dmg - ((int32_t)b.statStr / 20 + 5 + (int32_t)b.level));
@@ -945,9 +949,11 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
     if (killer.objType == 3 && (e.self || e.bot)) aiEvent(killer, 5, nowMs, e.guid);  // and kill
     if (e.objType == 3) {
         rollLoot(e);
-        if (const CreatureTemplate* t = data_ ? data_->creature(e.entry) : nullptr) {
+        if (data_ && data_->creature(e.entry)) {
             if (killer.self || killer.bot || (killer.ownerGuid && player_ && killer.ownerGuid == player_->guid)) {   // (our pet's kill too)
-                addXp(*player_, t->xp, nowMs, e.guid);
+                // WoWVita: MaNGOS::XP::Gain - by the level difference, not the template's own-level value
+                addXp(*player_, xpGain((uint8_t)player_->level, e), nowMs, e.guid);
+                if (Entity* pp = pet(); pp && pp->petHunter && pp->alive()) givePetXp(*pp, xpGain((uint8_t)pp->level, e), (uint8_t)e.level);
                 if (onKillCredit) onKillCredit(e.entry, e.guid);   // WoWVita: the quests of the server layer
                 // Quest progress for every accepted kill quest.
                 for (QuestLogEntry& q : questLog_) {

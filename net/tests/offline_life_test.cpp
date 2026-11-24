@@ -207,11 +207,11 @@ int main(int argc, char** argv) {
         off::Entity* victim = nullptr;
         for (int i = 0; i < off::kMaxEntities && !victim; ++i) {
             off::Entity* e = w.byIndex(i);
-            if (e && e->used && e->objType == 3 && e->alive() && !e->npcFlags) if (const off::CreatureTemplate* t = data.creature(e->entry); t && t->xp) victim = e;
+            if (e && e->used && e->objType == 3 && e->alive() && !e->npcFlags) if (w.xpGain((uint8_t)p->level, *e) > 0) victim = e;
         }
         CHECK(victim != nullptr, "a creature to kill");
         if (victim) {
-            const uint32_t base = data.creature(victim->entry)->xp;
+            const uint32_t base = w.xpGain((uint8_t)p->level, *victim);   // (MaNGOS::XP::Gain)
             const uint32_t xpBefore = p->levelXp, lvBefore = p->level;
             w.applyDamage(*p, *victim, 1000000, 0, 0, now);
             run(500);

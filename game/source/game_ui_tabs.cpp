@@ -730,9 +730,9 @@ void GameUi::drawItems(w3n::GameSession& g, const Input& in) {
     if (useOnPick_) {
         btn(2, kTop + 2, 72, 18, tr("Bags", "Сумки"), Act::SubView, 0, Style::ToggleOn, Font::Small);
         btn(76, kTop + 2, 84, 18, tr("Equipment", "Экипировка"), Act::SubView, 1, Style::Toggle, Font::Small);
-        list_.textFit(6, kTop + 26, g.itemName(useOnFrom_.entry) + " - " + tr("pick an item", "выберите вещь"), kTouchW - 12, kGold,
-                      true, Font::Small);
-        std::vector<w3n::InvItem> items = g.itemOnItemTargets(useOnFrom_);
+        list_.textFit(6, kTop + 26, (spellOnPick_ ? g.spellNames.name(spellOnPick_) : g.itemName(useOnFrom_.entry)) + " - " +
+                      tr("pick an item", "выберите вещь"), kTouchW - 12, kGold, true, Font::Small);
+        std::vector<w3n::InvItem> items = pickTargets(g);
         const int cols = 7, per = cols * 2, cell = 42;
         const int pages = std::max(1, ((int)items.size() + per - 1) / per);
         page_ = std::min(page_, pages - 1);

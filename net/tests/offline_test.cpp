@@ -405,6 +405,12 @@ int main(int argc, char** argv) {
         }
         for (int i = 0; i < kMaxParty; ++i) w.setPartyCommand(i, 1, m.now);
         m.run(1200);
+        // (the grid wakes the cells around the player in the first ticks: those creatures go too)
+        for (int i = 0; i < kMaxEntities; ++i) {
+            Entity* e = w.byIndex(i);
+            if (e && e->used && e->objType == 3) { e->dead = true; e->respawnAtMs = 0; e->moving = false; e->victim = 0; e->legActive = false; }
+        }
+        m.run(1500);   // (a creature stopped mid-step sends its last stop)
         const uint32_t idleMonster = m.monsterMoves, idlePlayer = m.playerMoves;
         m.run(1500);
         CHECK(m.monsterMoves == idleMonster, "no creature spline churn while idle (%u -> %u)", idleMonster, m.monsterMoves);

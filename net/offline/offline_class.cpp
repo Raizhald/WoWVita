@@ -213,5 +213,122 @@ void OfflineSession::sendCharge(const Entity& p, uint32_t nowMs) {   // the clie
     (void)p;
 }
 
+// ---------------------------------------------------------------- WoWVita: the pet bar (vMaNGOS 1.12 formats, see
+// net/game_pet.cpp): SMSG_PET_SPELLS (CharmInfo::BuildActionBar: attack / follow / stay, four spells, aggressive /
+// defensive / passive), CMSG_PET_ACTION (u64 pet, u32 action | type << 24, u64 target), CMSG_PET_SPELL_AUTOCAST,
+// CMSG_PET_STOP_ATTACK, CMSG_PET_ABANDON, CMSG_PET_NAME_QUERY -> SMSG_PET_NAME_QUERY_RESPONSE
+namespace {
+enum : uint16_t {
+    CMSG_PET_NAME_QUERY_ = 0x052, SMSG_PET_NAME_QUERY_RESPONSE_ = 0x053, CMSG_PET_ACTION_ = 0x175, CMSG_PET_ABANDON_ = 0x176,
+    CMSG_PET_RENAME_ = 0x177, SMSG_PET_SPELLS_ = 0x179, SMSG_PET_MODE_ = 0x17A, CMSG_PET_STOP_ATTACK_ = 0x2EA,
+    CMSG_PET_SPELL_AUTOCAST_ = 0x2F3,
+};
+constexpr uint8_t kActPassive = 0x01, kActReaction = 0x06, kActCommand = 0x07, kActDisabled = 0x81, kActEnabled = 0xC1;
+uint32_t button(uint32_t action, uint8_t type) { return action | ((uint32_t)type << 24); }
+}  // namespace
+
+void OfflineSession::sendPetSpells() {
+    const Entity* pet = world_.pet();
+    Writer w;
+    if (!pet) { w.u64(0); send(SMSG_PET_SPELLS_, w.b); return; }
+    w.u64(pet->guid);
+    w.u32(0);                  // duration
+    w.u8(pet->petReact);
+    w.u8(pet->petCommand);
+    w.u8(0);
+    w.u8(0);                   // flags (0x8: actions disabled)
+    w.u32(button(2, kActCommand));   // attack
+    w.u32(button(1, kActCommand));   // follow
+    w.u32(button(0, kActCommand));   // stay
+    for (int i = 0; i < 4; ++i) {
+        if (i < pet->spellCount) {
+            const SpellX* s = data_ ? data_->sx(pet->spells[i]) : nullptr;
+            const bool passive = s && s->passive();
+            w.u32(button(pet->spells[i], passive ? kActPassive : (pet->petAutocastOff & (1u << i)) ? kActDisabled : kActEnabled));
+        } else {
+            w.u32(0);
+        }
+    }
+    w.u32(button(2, kActReaction));  // aggressive
+    w.u32(button(1, kActReaction));  // defensive
+    w.u32(button(0, kActReaction));  // passive
+    w.u8(pet->spellCount);
+    for (uint8_t i = 0; i < pet->spellCount; ++i) {
+        const SpellX* s = data_ ? data_->sx(pet->spells[i]) : nullptr;
+        const bool passive = s && s->passive();
+        w.u32(button(pet->spells[i], passive ? kActPassive : (pet->petAutocastOff & (1u << i)) ? kActDisabled : kActEnabled));
+    }
+    w.u16(0);                  // cooldowns
+    send(SMSG_PET_SPELLS_, w.b);
+}
+
+bool OfflineSession::handlePet(uint16_t op, const Bytes& data, uint32_t nowMs) {
+    Reader r(data);
+    switch (op) {
+        case CMSG_PET_ACTION_: {
+            const uint64_t g = r.u64();
+            const uint32_t act = r.u32();
+            const uint64_t target = r.u64();
+            const Entity* pet = world_.pet();
+            if (r.bad || !pet || pet->guid != g) return true;
+            const uint8_t type = (uint8_t)(act >> 24);
+            const uint32_t action = act & 0xFFFFFF;
+            if (type == kActCommand) {
+                world_.petCommand((uint8_t)action, target, nowMs);
+                if (world_.pet()) {
+                    Writer m;
+                    m.u64(g); m.u8(world_.pet()->petReact); m.u8(world_.pet()->petCommand); m.u8(0); m.u8(0);
+                    send(SMSG_PET_MODE_, m.b);
+                }
+            } else if (type == kActReaction) {
+                world_.setPetReact((uint8_t)action);
+                Writer m;
+                m.u64(g); m.u8(world_.pet()->petReact); m.u8(world_.pet()->petCommand); m.u8(0); m.u8(0);
+                send(SMSG_PET_MODE_, m.b);
+            } else {   // a spell of its bar, at the target the owner has
+                world_.petCast(action, target, nowMs);
+            }
+            saveSoon_ = true;
+            return true;
+        }
+        case CMSG_PET_SPELL_AUTOCAST_: {
+            const uint64_t g = r.u64();
+            const uint32_t spell = r.u32();
+            const uint8_t on = r.u8();
+            if (r.bad || !world_.pet() || world_.pet()->guid != g) return true;
+            world_.setPetAutocast(spell, on != 0);
+            saveSoon_ = true;
+            return true;
+        }
+        case CMSG_PET_STOP_ATTACK_: {
+            const uint64_t g = r.u64();
+            if (!r.bad && world_.pet() && world_.pet()->guid == g) world_.petCommand(1, 0, nowMs);
+            return true;
+        }
+        case CMSG_PET_ABANDON_: {   // a demon is dismissed (Pet::Unsummon PET_SAVE_AS_DELETED for a hunter's)
+            const uint64_t g = r.u64();
+            if (!r.bad && world_.pet() && world_.pet()->guid == g) world_.dismissPet(true);
+            saveSoon_ = true;
+            return true;
+        }
+        case CMSG_PET_RENAME_:
+            return true;   // (a demon cannot be renamed)
+        case CMSG_PET_NAME_QUERY_: {
+            const uint32_t number = r.u32();
+            r.u64();
+            const Entity* pet = world_.pet();
+            if (r.bad || !pet || pet->petNumber != number) return true;
+            Writer w;
+            w.u32(number);
+            w.cstr(pet->petName);
+            w.u32(1);   // the name's timestamp
+            send(SMSG_PET_NAME_QUERY_RESPONSE_, w.b);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 }  // namespace offline
 }  // namespace w3n

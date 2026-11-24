@@ -75,6 +75,7 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
     eventCount_ = 0;
     questLog_.clear();
     player_ = nullptr;
+    petGuid_ = 0;   // WoWVita
     for (Entity*& b : bots_) b = nullptr;
     botsEnabled_ = botsEnabled;
     seed_ = seed ? seed : 1;
@@ -798,7 +799,7 @@ void World::applyDamage(Entity& src, Entity& dst, int32_t amount, uint32_t spell
     }
     // A unit that is hit by a spell interrupts its own creature filler cast.
     // WoWVita: one with EventAI casts as in the original: a hit only pushes the cast back (500 ms, twice at most)
-    if (dst.objType == 3 && dst.castSpell && behaviourData() && data_->ai(dst.entry)) {
+    if (dst.objType == 3 && dst.castSpell && (dst.ownerGuid || (behaviourData() && data_->ai(dst.entry)))) {   // (a pet as well)
         if (dst.castPushes < 2) { dst.castEndMs += 500; ++dst.castPushes; }
     } else if (dst.objType == 3 && dst.castSpell && dst.castInterruptible) cancelCast(dst, 35, nowMs);
 }
@@ -897,12 +898,13 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
     e.moving = false;
     if (e.netMoveState == 1) e.netMoveState = 2;   // the client gets one stop at the death spot
     emit(SimEvent::Death, e.guid, killer.guid, 0, 0);
+    if (e.ownerGuid) { e.respawnAtMs = nowMs + 15000; return; }   // WoWVita: a dead pet: its corpse, then gone
     if (e.objType == 3) aiEvent(e, 6, nowMs, killer.guid);                          // WoWVita: EventAI death
     if (killer.objType == 3 && (e.self || e.bot)) aiEvent(killer, 5, nowMs, e.guid);  // and kill
     if (e.objType == 3) {
         rollLoot(e);
         if (const CreatureTemplate* t = data_ ? data_->creature(e.entry) : nullptr) {
-            if (killer.self || killer.bot) {
+            if (killer.self || killer.bot || (killer.ownerGuid && player_ && killer.ownerGuid == player_->guid)) {   // (our pet's kill too)
                 addXp(*player_, t->xp, nowMs, e.guid);
                 if (onKillCredit) onKillCredit(e.entry, e.guid);   // WoWVita: the quests of the server layer
                 // Quest progress for every accepted kill quest.
@@ -1472,6 +1474,7 @@ void World::selectCreatureTarget(Entity& e, uint32_t nowMs) {
     };
     consider(player_);
     for (Entity* b : bots_) consider(b);
+    consider(pet());   // WoWVita: our pet is in the way too
     if (best) {
         e.victim = best->guid;
         e.target = best->guid;
@@ -1481,6 +1484,7 @@ void World::selectCreatureTarget(Entity& e, uint32_t nowMs) {
 }
 
 void World::tickCreature(Entity& e, uint32_t nowMs) {
+    if (e.ownerGuid) { tickPet(e, nowMs); return; }   // WoWVita: a pet (offline_pet.cpp)
     if (e.dead) {
         if (e.respawnAtMs && nowMs >= e.respawnAtMs) {
             // WoWVita: a pooled spawn (a rare, Hogger) comes back at one of its pool's places, maybe another one
@@ -1643,7 +1647,7 @@ void World::updateActivation(uint32_t nowMs, bool initial) {
     for (Entity& e : pool_) {
         if (!e.used) continue;
         ++used;
-        if (e.objType != 3) continue;
+        if (e.objType != 3 || e.ownerGuid) continue;   // (WoWVita: a pet stays with its owner)
         const float d = std::min(dist2d(e.x, e.y, px, py), dist2d(e.homeX, e.homeY, px, py));
         if (d <= kVanishDist) continue;
         if (!e.dead && e.victim) continue;

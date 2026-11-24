@@ -131,7 +131,11 @@ travel 632, aquatic 2428, ghost wolf 4613), energy or rage from 0 with the class
 bear 2.5 s paws of level x 0.85..1.25 x speed, druid attack power level x 3 + str x 2 - 20 (+ agility in cat), the
 boosts (1178, 21178, 3025...), roots and snares shaken off; a stance change keeps no rage; a form button while
 shifted cancels the form as the 1.12 client does. Quest reward spells ("QSPL": RewSpell shown, RewSpellCast or
-RewSpell cast; SPELL_EFFECT_LEARN_SPELL teaches). Mana cost percentages of the base mana.
+RewSpell cast; SPELL_EFFECT_LEARN_SPELL teaches). Mana cost percentages of the base mana. Warlock demons (offline_pet.cpp,
+"PETS": pet_levelstats, creature_template_classlevelstats damage, petcreateinfo_spell, pet_name_generation): summoned
+by SPELL_EFFECT_SUMMON_PET, they follow at the owner's side, assist and defend (passive / defensive / aggressive,
+stay / follow / attack), the Imp keeps 25 yd and casts Firebolt (PetAI), autocast, kills count as the owner's, the pet
+bar (SMSG_PET_SPELLS, CMSG_PET_ACTION...), back at login ("PET1" in the save).
 Not yet: pets, totems, talents, poisons (weapon enchantments), pick pocketing, Distract, more single-spell scripts,
 spell power.
 

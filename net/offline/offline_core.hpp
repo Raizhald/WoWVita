@@ -287,6 +287,18 @@ struct SpellX {
     bool channeled() const { return (attrEx & 0x44) != 0; }
 };
 struct PlayerLevelStats { uint16_t hp = 0, mana = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; };   // WoWVita "PLST"
+// WoWVita "PETS": a summoned pet (CMaNGOS Pet::InitStatsForLevel for SUMMON_PET)
+struct PetLevel { uint16_t hp = 0, mana = 0, armor = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; float dmgMin = 1, dmgMax = 2; };
+struct PetTemplate {
+    uint32_t entry = 0, displayId = 0;
+    std::string name;
+    uint16_t attackMs = 2000;
+    uint8_t school = 0;
+    float scale = 1, speed = 8;
+    std::vector<uint32_t> spells;                   // petcreateinfo_spell
+    std::unordered_map<uint8_t, PetLevel> levels;   // pet_levelstats
+    std::vector<std::string> nameHalves[2];         // pet_name_generation
+};
 struct TrainerSpell { uint32_t teach = 0, learn = 0, cost = 0; uint8_t level = 0; uint16_t skill = 0, skillValue = 0; uint32_t reqSpell = 0; };
 struct Trainer { uint8_t cls = 0; std::vector<TrainerSpell> spells; };
 
@@ -346,6 +358,7 @@ struct WorldData {
     std::vector<SpawnPool> pools;                                     // "POOL"
     std::unordered_map<uint32_t, SpellX> spellx;                      // "SPX2"
     std::unordered_map<uint32_t, PlayerLevelStats> playerStats;       // "PLST": race | class << 8 | level << 16
+    std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
     std::unordered_map<uint32_t, std::vector<std::pair<uint8_t, int32_t>>> itemStats;   // "ISTA": item -> (stat type, value)
     std::unordered_map<uint32_t, Trainer> trainers;                   // "TRNR": creature entry -> its class spells
     std::unordered_map<uint32_t, std::vector<uint32_t>> createSpells; // "CRSP": race | class << 8 -> spells
@@ -516,6 +529,12 @@ struct Entity {
     }
     // WoWVita: the class spell engine (offline_spells.cpp)
     uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
+    uint64_t ownerGuid = 0;                    // WoWVita: a pet's owner (offline_pet.cpp)
+    uint32_t petNumber = 0, createdBySpell = 0;
+    uint8_t petCommand = 1, petReact = 1;      // CommandStates (0 stay, 1 follow) / ReactStates (0 passive, 1 defensive, 2 aggressive)
+    uint8_t petAutocastOff = 0;                // its spells (bit = index) that it does not cast by itself
+    bool petMelee = true;                      // (the Imp does not melee: PetAI m_meleeEnabled)
+    std::string petName;
     uint32_t formDisplay = 0;                  // WoWVita: the form's model (0: one's own)
     bool formPower = false;                    // energy / rage of a form; the class's own power kept aside
     uint32_t baseMana = 0;                     // a player's create mana at its level (player_classlevelstats)
@@ -554,6 +573,7 @@ struct SimEvent {
         Durability = 24,               // WoWVita: an equipped item lost durability (value = the equipment slot)
         CreatureText = 25,             // WoWVita: EventAI says / yells / emotes AITX text 'value' (b = its target)
         CreatureEmote = 26,            // WoWVita: an animation (value = the emote id)
+        PetChanged = 27,               // WoWVita: our pet a (owner b) summoned by 'spell' (value 1) or gone (value 0)
     };
     uint8_t type = 0;
     uint64_t a = 0, b = 0;             // actor / target (or victim / attacker)
@@ -605,6 +625,9 @@ struct CharacterProfile {
     std::vector<uint32_t> book;           // WoWVita: the spell book - every spell learned (the "SPB1" block)
     std::array<uint32_t, 120> actionBar{};// WoWVita: the action buttons as the client set them ("SPB1" too)
     bool actionBarSet = false;
+    uint32_t petEntry = 0, petSpell = 0;  // WoWVita: the summoned pet ("PET1"), its name and the spells it does not autocast
+    std::string petName;
+    uint8_t petAutocastOff = 0;
     uint8_t bankBagSlots = 0;             // WoWVita: bank bag slots bought (0..6; the "BKB1" block)
     std::array<uint32_t, 6> bankBags{};   // the bags in the bank's bag slots 63..68
     std::array<BagItem, 6 * 36> bankBagItems{};   // what is in them: [bag * 36 + slot]
@@ -809,6 +832,15 @@ private:
     bool scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t nowMs);
 public:
     void interruptAuras(Entity& e, uint32_t flags);
+    // WoWVita: the summoned pet (offline_pet.cpp)
+    Entity* pet();
+    const Entity* pet() const;
+    bool summonPet(Entity& owner, uint32_t entry, uint32_t spell, uint32_t nowMs, const std::string& name = std::string());
+    void dismissPet(bool forget);              // forget: not back at the next login either (abandon, a new pet)
+    void petCommand(uint8_t command, uint64_t target, uint32_t nowMs);   // CMSG_PET_ACTION ACT_COMMAND
+    void setPetReact(uint8_t react) { if (Entity* e = pet()) e->petReact = react > 2 ? 1 : react; }
+    void setPetAutocast(uint32_t spell, bool on);
+    bool petCast(uint32_t spell, uint64_t target, uint32_t nowMs);
     void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);   // a quest's reward spell (a learning one teaches)   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
 private:
     int32_t absorb(Entity& dst, int32_t dmg, uint8_t school);
@@ -824,7 +856,7 @@ public:
     bool positiveX(const SpellX& s) const;
     uint32_t powerCostX(const Entity& e, const SpellX& s) const;
     void gainRage(Entity& e, int32_t damage, bool dealt);
-    bool spellEngine(const Entity& e, uint32_t spell) const { return e.self && data_ && data_->sx(spell); }
+    bool spellEngine(const Entity& e, uint32_t spell) const { return (e.self || e.ownerGuid) && data_ && data_->sx(spell); }   // (our pet too)
     void cancelAuraX(Entity& e, uint32_t spell);
 private:
     Entity* spawnEntity(uint32_t spawnIndex);
@@ -864,6 +896,10 @@ private:
     Entity pool_[kMaxEntities];
     Entity* player_ = nullptr;
     Entity* bots_[kMaxParty] = {nullptr, nullptr, nullptr, nullptr};
+    uint64_t petGuid_ = 0;     // WoWVita: our pet
+    uint32_t petCounter_ = 0;
+    void tickPet(Entity& e, uint32_t nowMs);
+    void applyPetLevel(Entity& e);
     CharacterProfile profiles_[kMaxParty + 1];
     std::vector<QuestLogEntry> questLog_;
     PartyCommandState commands_;

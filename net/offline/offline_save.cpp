@@ -178,6 +178,14 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         payload.u8(c.actionBarSet ? 1 : 0);
         if (c.actionBarSet) for (uint32_t a : c.actionBar) payload.u32(a);
     }
+    // WoWVita: the summoned pet (Imp, Voidwalker): it comes back at login, as the original's current pet does
+    payload.u32(0x31544550u);   // "PET1"
+    for (const CharacterProfile& c : d.roster) {
+        payload.u32(c.petEntry);
+        payload.u32(c.petSpell);
+        payload.cstr(c.petName);
+        payload.u8(c.petAutocastOff);
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -395,6 +403,20 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                 for (uint32_t& s : c.book) s = p.u32();
                 c.actionBarSet = p.u8() != 0;
                 if (c.actionBarSet) for (uint32_t& a : c.actionBar) a = p.u32();
+            }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the pets
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31544550u) {
+            for (CharacterProfile& c : d.roster) {
+                c.petEntry = p.u32();
+                c.petSpell = p.u32();
+                c.petName = p.cstr();
+                c.petAutocastOff = p.u8();
             }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {

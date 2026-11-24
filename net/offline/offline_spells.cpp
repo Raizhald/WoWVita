@@ -552,6 +552,9 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
         case E_INTERRUPT:
             for (Entity* x : ts) if (x->castSpell && x != &c) cancelCast(*x, 35, now);
             break;
+        case 56:   // SPELL_EFFECT_SUMMON_PET (Summon Imp, Voidwalker...): offline_pet.cpp
+            if (c.self && e.misc > 0) summonPet(c, (uint32_t)e.misc, s.id, now);
+            break;
         case E_LEARN_SPELL:   // SPELL_EFFECT_LEARN_SPELL: the session puts it in the book (SMSG_LEARNED_SPELL)
             for (Entity* x : ts) if (x->self && e.trigger) emit(SimEvent::Message, x->guid, x->guid, e.trigger, 2);
             break;

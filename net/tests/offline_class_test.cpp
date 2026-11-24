@@ -12,6 +12,8 @@
 //   - a Human Paladin: Seal of Righteousness + Judgement, Divine Protection + Forbearance (no Blessing of Protection then)
 //   - a Night Elf Druid: Bear Form / Cat Form (model, power, swing, armour; on the client too), Maul, no Moonfire as a bear,
 //     the mana back after; a learning reward spell
+//   - a Human Warlock: Summon Imp (pet_levelstats, name, the pet bar), follow, Firebolt at our target and our kill,
+//     stay, the Imp back at login, dismissed
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -555,6 +557,90 @@ int main(int argc, char** argv) {
         w.rewardSpell(*p, teach, now);
         run(200);
         CHECK(teach && std::find(dp.book.begin(), dp.book.end(), learn) != dp.book.end(), "a learning spell taught %u", learn);
+    }
+    session.leaveWorld();
+
+    // ---- the warlock: Summon Imp (pet_levelstats, a generated name, the pet bar on the client), it follows, it
+    // fights the owner's target with Firebolt from afar, its kill is ours, stay, back at login, dismissed
+    CHECK(session.deleteCharacter(priestGuid) == w3n::CHAR_DELETE_SUCCESS, "the priest leaves room");
+    w3n::CharCreateInfo wl; wl.name = "Gulbash"; wl.race = 1; wl.cls = 9;
+    CHECK(session.createCharacter(wl) == w3n::CHAR_CREATE_SUCCESS, "a human warlock");
+    uint64_t warlockGuid = 0;
+    for (const auto& c : session.characters()) if (c.name == "Gulbash") warlockGuid = c.guid;
+    play(warlockGuid);
+    run(800);
+    p = w.player();
+    {
+        off::CharacterProfile& lk = w.playerProfile();
+        lk.book.push_back(688);
+        p->power = (int32_t)p->maxPower;
+        w.tryCast(*p, 688, p->guid, now);
+        run(10600);   // a 10 s cast
+        off::Entity* imp = w.pet();
+        CHECK(imp && imp->entry == 416 && imp->ownerGuid == p->guid, "the Imp is here");
+        if (imp) {
+            std::printf("imp: '%s' hp %u mana %u dmg %u-%u spells %u (%u) level %u\n", imp->petName.c_str(), imp->maxHp, imp->maxPower,
+                        imp->dmgMin, imp->dmgMax, imp->spellCount, imp->spellCount ? imp->spells[0] : 0, imp->level);
+            CHECK(!imp->petName.empty() && imp->maxHp > 20 && imp->maxPower > 0 && imp->spellCount && imp->spells[0] == 3110,
+                  "pet_levelstats, a name, Firebolt");
+            CHECK(gs.petGuid() == imp->guid && gs.pet.active && (gs.pet.bar[3] & 0xFFFFFF) == 3110 && (gs.pet.bar[3] >> 24) == 0xC1,
+                  "the client has the pet and its bar (Firebolt on autocast)");
+            const w3n::WorldObject* io = gs.objects.find(imp->guid);
+            CHECK(io != nullptr, "the client sees the Imp");
+            // it follows
+            const float ox = p->x, oy = p->y;
+            gs.mover.reset(ox + 20, oy, p->z, 0, now);
+            w.setPosition(*p, ox + 20, oy, p->z, 0);
+            run(5000);
+            imp = w.pet();
+            CHECK(imp && std::hypot(imp->x - p->x, imp->y - p->y) < 4.0f, "it follows (%.1f yd)", imp ? std::hypot(imp->x - p->x, imp->y - p->y) : -1.0f);
+            // it fights what we fight: Firebolt from afar, the kill is ours
+            off::Entity* foe = nullptr;   // (one worth experience: no critter)
+            for (int i = 0; i < off::kMaxEntities && !foe; ++i) {
+                off::Entity* e = w.byIndex(i);
+                if (e && e->used && e->objType == 3 && e->alive() && !e->ownerGuid && w.canAttack(*p, *e) && !e->npcFlags &&
+                    data.creature(e->entry) && data.creature(e->entry)->xp > 0) foe = e;
+            }
+            CHECK(foe != nullptr, "something worth experience");
+            if (foe && imp) {
+                foe->level = 1;
+                foe->maxHp = foe->hp = 60;
+                foe->victim = 0; foe->threatCount = 0;
+                stand(foe, 15.0f);
+                imp->x = p->x; imp->y = p->y + 1;
+                gs.setTarget(foe->guid, now);
+                gs.petCommand(w3n::kPetAttack, now);
+                const uint32_t xp0 = p->levelXp;
+                uint32_t t0 = now;
+                bool firebolt = false;
+                while (now - t0 < 30000 && foe->alive()) {
+                    run(200);
+                    firebolt = firebolt || (w.pet() && w.pet()->castSpell == 3110);
+                }
+                std::printf("imp fight: firebolt %d, foe hp %d, imp at %.1f yd, xp %u -> %u\n", firebolt, foe->hp,
+                            w.pet() ? std::hypot(w.pet()->x - foe->x, w.pet()->y - foe->y) : -1.0f, xp0, p->levelXp);
+                CHECK(firebolt && !foe->alive() && p->levelXp > xp0, "the Imp burns it down with Firebolt, the experience is ours");
+            }
+            // stay
+            gs.petCommand(w3n::kPetStay, now);
+            run(300);
+            imp = w.pet();
+            const float sx = imp ? imp->x : 0, sy = imp ? imp->y : 0;
+            gs.mover.reset(p->x + 15, p->y, p->z, 0, now);
+            w.setPosition(*p, p->x + 15, p->y, p->z, 0);
+            run(3000);
+            CHECK(imp && std::hypot(imp->x - sx, imp->y - sy) < 1.5f && gs.pet.command == w3n::kPetStay, "it stays");
+        }
+        // back at login
+        const std::string name = w.pet() ? w.pet()->petName : "";
+        session.leaveWorld();
+        play(warlockGuid);
+        run(1000);
+        p = w.player();
+        CHECK(w.pet() && w.pet()->petName == name && gs.pet.active, "the Imp '%s' comes back at login", name.c_str());
+        gs.petDismiss(now);
+        run(300);
+        CHECK(!w.pet() && !gs.pet.active && gs.petGuid() == 0, "dismissed");
     }
     session.leaveWorld();
     off::OfflineSaveData sd;

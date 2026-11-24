@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -39,7 +39,8 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "spawn_group", "spawn_group_spawn", "spawn_group_entry", "pool_creature", "pool_creature_template", "pool_template",
           "creature_linking", "creature_linking_template",
           "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain",
-          "player_classlevelstats", "player_levelstats"}
+          "player_classlevelstats", "player_levelstats",
+          "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -705,6 +706,68 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
                 want.add(sp)
                 if teaches(sp) in spells:
                     want.add(teaches(sp))
+    # ---- WoWVita "PETS": the pets the class spells summon (SPELL_EFFECT_SUMMON_PET 56: Imp, Voidwalker...) with
+    # CMaNGOS Pet::InitStatsForLevel's numbers: pet_levelstats per level, melee damage from
+    # creature_template_classlevelstats (BaseDamage x DamageVariance + BaseMeleeAttackPower / 14 x speed) x multiplier,
+    # max = min x 1.5; petcreateinfo_spell; pet_name_generation halves
+    create_spells = {}
+    for r in tables.get("petcreateinfo_spell", []):
+        create_spells[int(num(g(r, "entry")))] = [int(num(g(r, f"Spell{i}"))) for i in (1, 2, 3, 4) if int(num(g(r, f"Spell{i}")))]
+    pet_entries = set()
+    for sp in list(want):
+        r = spells.get(sp)
+        if not r:
+            continue
+        for k in (1, 2, 3):
+            if int(num(g(r, f"Effect{k}"))) == 56 and int(num(g(r, f"EffectMiscValue{k}"))):
+                pet_entries.add(int(num(g(r, f"EffectMiscValue{k}"))))
+    all_templates = newest_patch(tables.get("creature_template", []), ("Entry", "entry"))
+    pls = {}
+    for r in tables.get("pet_levelstats", []):
+        pls.setdefault(int(num(g(r, "creature_entry"))), {})[int(num(g(r, "level")))] = r
+    cls_stats = {(int(num(g(r, "Class"))), int(num(g(r, "Level")))): r for r in tables.get("creature_template_classlevelstats", [])}
+    names = {}
+    for r in tables.get("pet_name_generation", []):
+        names.setdefault(int(num(g(r, "entry"))), ([], []))[1 if int(num(g(r, "half"))) else 0].append(str(g(r, "word")))
+    pb = Bin()
+    pets = [e for e in sorted(pet_entries) if e in all_templates and e in pls]
+    pb.u32(len(pets))
+    for e in pets:
+        t = all_templates[e]
+        display = next((int(num(g(t, f"ModelId{i}"))) for i in (1, 2, 3, 4) if int(num(g(t, f"ModelId{i}")))), 0)
+        atk = max(500, int(num(g(t, "MeleeBaseAttackTime", default=2000))))
+        ucls = int(num(g(t, "UnitClass"))) or 1
+        var = num(g(t, "DamageVariance", default=1.0)) or 1.0
+        mult = num(g(t, "DamageMultiplier", default=1.0)) or 1.0
+        pb.u32(e); pb.s(str(g(t, "Name"))[:60]); pb.u32(display); pb.u16(atk); pb.u8(int(num(g(t, "DamageSchool"))))
+        pb.f32((num(g(t, "Scale", default=1.0)) or 1.0)); pb.f32((num(g(t, "SpeedRun", default=1.14286)) or 1.14286) * 7.0)
+        cs = [x for x in create_spells.get(e, []) if x in spells][:4]
+        want.update(cs)
+        pb.u8(len(cs))
+        for x in cs:
+            pb.u32(x)
+        lv = pls[e]
+        pb.u8(len(lv))
+        for L in sorted(lv):
+            r = lv[L]
+            c = cls_stats.get((ucls, L))
+            if c is not None:
+                mn = (num(g(c, "BaseDamageExp0")) * var + num(g(c, "BaseMeleeAttackPower")) / 14.0 * atk / 1000.0) * mult
+            else:
+                mn = max(1.0, L - L / 4.0)
+            pb.u8(L); pb.u16(int(num(g(r, "hp")))); pb.u16(int(num(g(r, "mana")))); pb.u16(int(num(g(r, "armor"))))
+            for k in ("str", "agi", "sta", "inte", "spi"):
+                pb.u16(int(num(g(r, k))))
+            pb.f32(mn); pb.f32(mn * 1.5)
+        h0, h1 = names.get(e, ([], []))
+        pb.u8(min(255, len(h0)))
+        for w in h0[:255]:
+            pb.s(w)
+        pb.u8(min(255, len(h1)))
+        for w in h1[:255]:
+            pb.s(w)
+    sec["PETS"] = pb.b
+    report["counts_pets"] = dict(pets=len(pets), entries=pets)
     # the passive boosts a form brings (CMaNGOS Aura::HandleShapeshiftBoosts)
     want.update(x for x in (3025, 5420, 5419, 5421, 1178, 9635, 21178, 21156, 7376, 7381, 24905) if x in spells)
     for _pass in range(2):   # (twice: a judgement found in a seal triggers spells too)

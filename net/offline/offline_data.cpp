@@ -531,6 +531,34 @@ bool readPlayerStats(Bin& b, WorldData& w) {   // WoWVita "PLST"
     return !b.bad;
 }
 
+bool readPets(Bin& b, WorldData& w) {   // WoWVita "PETS"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 1000) return false;
+    w.pets.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        PetTemplate p;
+        p.entry = b.u32(); p.name = b.str(); p.displayId = b.u32(); p.attackMs = b.u16(); p.school = b.u8();
+        p.scale = b.f32(); p.speed = b.f32();
+        const uint8_t ns = b.u8();
+        for (uint8_t k = 0; k < ns && !b.bad; ++k) p.spells.push_back(b.u32());
+        const uint8_t nl = b.u8();
+        for (uint8_t k = 0; k < nl && !b.bad; ++k) {
+            const uint8_t L = b.u8();
+            PetLevel l;
+            l.hp = b.u16(); l.mana = b.u16(); l.armor = b.u16();
+            l.str = b.u16(); l.agi = b.u16(); l.sta = b.u16(); l.inte = b.u16(); l.spi = b.u16();
+            l.dmgMin = b.f32(); l.dmgMax = b.f32();
+            p.levels[L] = l;
+        }
+        for (int h = 0; h < 2; ++h) {
+            const uint8_t nw = b.u8();
+            for (uint8_t k = 0; k < nw && !b.bad; ++k) p.nameHalves[h].push_back(b.str());
+        }
+        if (!b.bad) w.pets[p.entry] = std::move(p);
+    }
+    return !b.bad;
+}
+
 bool readItemStats(Bin& b, WorldData& w) {   // WoWVita "ISTA"
     const uint32_t n = b.u32();
     if (b.bad || n > 100000) return false;
@@ -925,6 +953,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("PLST"): ok = readPlayerStats(b, out); break;
             case fourcc("ISTA"): ok = readItemStats(b, out); break;
             case fourcc("QSPL"): ok = readQuestSpells(b, out); break;
+            case fourcc("PETS"): ok = readPets(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

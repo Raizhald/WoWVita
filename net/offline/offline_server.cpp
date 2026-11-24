@@ -236,6 +236,14 @@ void addCreatureCreate(UpdateBuilder& u, const Entity& ent) {
     f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
     f.set(UF::UNIT_COMBATREACH, 0x3FC00000u);
     if (e->dead) f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
+    if (e->ownerGuid) {   // WoWVita: a pet (CMaNGOS Pet::CreateBaseAtCreature / InitStatsForLevel fields)
+        f.set(12, (uint32_t)e->ownerGuid); f.set(13, (uint32_t)(e->ownerGuid >> 32));   // UNIT_FIELD_SUMMONEDBY
+        f.set(14, (uint32_t)e->ownerGuid); f.set(15, (uint32_t)(e->ownerGuid >> 32));   // UNIT_FIELD_CREATEDBY
+        f.set(UF::UNIT_FIELD_PETNUMBER, e->petNumber);
+        f.set(140, 1u);                                   // UNIT_FIELD_PET_NAME_TIMESTAMP
+        f.set(146, e->createdBySpell);                    // UNIT_CREATED_BY_SPELL
+        f.set(UF::UNIT_BYTES_0, 1u | (1u << 8) | (0u << 16) | ((uint32_t)e->powerType << 24));
+    }
     addCreate(u, e->guid, 3, kUfHighGuid, e->x, e->y, e->z, e->o, f);
 }
 
@@ -527,6 +535,8 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     }
     loginPackets(nowMs);
     mailAtLogin();   // WoWVita: "You have new mail."
+    if (Entity* p = world_.player(); p && save_.player.petEntry)   // WoWVita: the pet comes back (CMaNGOS LoadPetFromDB)
+        world_.summonPet(*p, save_.player.petEntry, save_.player.petSpell, nowMs, save_.player.petName);
     return true;
 }
 
@@ -624,6 +634,19 @@ void OfflineSession::sendEmote(uint64_t guid, uint32_t emote) {   // WoWVita: SM
 }
 
 void OfflineSession::errorLine(const std::string& text, uint32_t nowMs) { (void)nowMs; sendChat(0x0A, 0, text); }
+
+void OfflineSession::sendPetSummonField() {   // WoWVita: our pet in UNIT_FIELD_SUMMON
+    Entity* p = world_.player();
+    if (!p) return;
+    const Entity* pet = world_.pet();
+    const uint64_t g = pet ? pet->guid : 0;
+    FieldSet f;
+    f.set(UF::UNIT_FIELD_SUMMON, (uint32_t)g);
+    f.set((uint16_t)(UF::UNIT_FIELD_SUMMON + 1), (uint32_t)(g >> 32));
+    UpdateBuilder u;
+    addValues(u, p->guid, f);
+    sendUpdateObject(u.finish());
+}
 
 void OfflineSession::sendSelfFields() {
     Entity* p = world_.player();
@@ -1113,6 +1136,13 @@ void OfflineSession::sendPartyStats() {
 void OfflineSession::sendCreatureQuery(uint32_t entry) {
     const CreatureTemplate* t = data_ ? data_->creature(entry) : nullptr;
     Writer w;
+    if (!t && data_ && data_->pets.count(entry)) {   // WoWVita: a pet's template ("PETS"): a demon
+        const PetTemplate& pt = data_->pets.at(entry);
+        w.u32(entry); w.cstr(pt.name); w.cstr(""); w.cstr(""); w.cstr(""); w.cstr("");
+        w.u32(0); w.u32(3); w.u32(0); w.u32(0); w.u32(0); w.u32(0); w.u32(pt.displayId); w.u8(0); w.u8(0);
+        send(SMSG_CREATURE_QUERY_RESPONSE, w.b);
+        return;
+    }
     if (!t) { w.u32(entry | 0x80000000u); send(SMSG_CREATURE_QUERY_RESPONSE, w.b); return; }
     w.u32(entry);
     w.cstr(t->name);
@@ -1813,8 +1843,13 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 if (a->self && e.spell == kHearthstoneSpell) hearthHome(nowMs);   // WoWVita
                 break;
             }
+            case SimEvent::PetChanged:   // WoWVita: our pet came or went
+                sendPetSummonField();
+                sendPetSpells();
+                saveSoon_ = true;
+                break;
             case SimEvent::CastFailed: {
-                if (!a) break;
+                if (!a || a->ownerGuid) break;   // (WoWVita: our pet's autocast tries are not ours)
                 sendCastFailed(*a, e.spell, (uint8_t)e.value);
                 break;
             }
@@ -2125,6 +2160,7 @@ void OfflineSession::update(uint32_t nowMs) {
                 if (handleBank(op, p.second, nowMs)) break;   // WoWVita: the bank
                 if (handleInventory(op, p.second, nowMs)) break;   // WoWVita: unequip, bags, destroy
                 if (handleClassSpells(op, p.second, nowMs)) break;   // WoWVita: trainers, action buttons, auras
+                if (handlePet(op, p.second, nowMs)) break;           // WoWVita: the pet bar
                 if (handleRepair(op, p.second, nowMs)) break;   // WoWVita: repairs
                 if (handleMail(op, p.second, nowMs)) break;   // WoWVita: mailboxes
                 if (handleLife(op, p.second, nowMs)) break;   // WoWVita: graveyards, inns, the Hearthstone

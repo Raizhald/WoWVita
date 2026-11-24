@@ -118,6 +118,9 @@ private:
     bool trainerHello(uint64_t npc, uint32_t nowMs);
     void learn(uint32_t spell, uint32_t nowMs);
     bool handleClassSpells(uint16_t op, const Bytes& data, uint32_t nowMs);
+    bool handlePet(uint16_t op, const Bytes& data, uint32_t nowMs);   // WoWVita: offline_class.cpp - the pet bar
+    void sendPetSpells();                                           // SMSG_PET_SPELLS (guid 0 when there is none)
+    void sendPetSummonField();                                      // the player's UNIT_FIELD_SUMMON
     void sendCharge(const Entity& p, uint32_t nowMs);
     static constexpr uint32_t kGossipTrain = 4;   // "I would like to train."
     void sendCreatureQuery(uint32_t entry);

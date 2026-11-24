@@ -186,6 +186,8 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
         payload.cstr(c.petName);
         payload.u8(c.petAutocastOff);
     }
+    payload.u32(0x314F4D41u);   // "AMO1": the ammo slot
+    for (const CharacterProfile& c : d.roster) payload.u32(c.ammoId);
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -418,6 +420,15 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
                 c.petName = p.cstr();
                 c.petAutocastOff = p.u8();
             }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the ammo slots
+        const size_t mark = p.pos;
+        if (p.u32() == 0x314F4D41u) {
+            for (CharacterProfile& c : d.roster) c.ammoId = p.u32();
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {
             p.pos = mark;

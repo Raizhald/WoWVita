@@ -274,6 +274,11 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
             }
             if (!ok) return fail(25);                                       // SPELL_FAILED_EQUIPPED_ITEM_CLASS
         }
+        if (s.dmgClass == 3 && e.self) {   // a ranged attack: the weapon and its ammo (CMaNGOS Spell::CheckItems)
+            bool weaponEffect58 = false;
+            for (const SpellEffectX& x : s.eff) if (x.effect == 58 || x.effect == 121 || x.effect == 31 || x.effect == 17) weaponEffect58 = true;
+            if (weaponEffect58) if (const uint8_t why = ammoCheck(e)) return fail(why);
+        }
         bool usesCombo = false;
         usesCombo = (s.attrEx & 0x00500000) != 0;   // CMaNGOS NeedsComboPoints: SPELL_ATTR_EX_REQ_(TARGET_)COMBO_POINTS
         // (a finisher on oneself - Slice and Dice - needs only the points)
@@ -310,6 +315,18 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
     if ((s.attr & 0x4) && !triggered) {
         e.nextSwingSpell = id;
         if (!e.victim && t && t != &e) startAttack(e, t->guid, now);
+        return true;
+    }
+    if ((s.attrEx2 & 0x20) && !triggered && e.self) {
+        // SPELL_ATTR_EX2_AUTOREPEAT_FLAG (Auto Shot, Shoot): it becomes the current auto repeat spell; the shots come from
+        // Unit::_UpdateAutoRepeatSpell, the first after a 0.5 s wind-up
+        if (e.autoRepeatSpell == s.id) return true;   // (already shooting)
+        if (ammoCheck(e) == 0x43) pickAmmo();
+        e.autoRepeatSpell = s.id;
+        e.autoRepeatWindup = true;
+        e.autoRepeatReadyMs = now;
+        e.autoRepeatX = e.x; e.autoRepeatY = e.y;
+        if (t && t != &e) selection_ = t->guid;
         return true;
     }
     if (s.gcdMs && !triggered) e.gcdEndMs = now + s.gcdMs;
@@ -395,6 +412,22 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
         }
         applyEffectX(e, s, k, t, now, combo, &weaponBonus, &weaponPct, &weapon);
         if (!e.used) return true;
+    }
+    if (s.dmgClass == 3 && e.self) takeAmmo(e);   // Spell::TakeAmmo: a ranged attack spends an arrow / a bullet
+    if (weapon && s.dmgClass == 3 && t != &e && t->alive() && e.rangedMs) {
+        // a ranged shot (CMaNGOS CalculateMinMaxDamage(RANGED_ATTACK)): weapon + ammo, + ranged AP / 14 x speed
+        // (+ SPELL_AURA_RANGED_ATTACK_POWER_ATTACKER_BONUS on the target: Hunter's Mark)
+        const int32_t rap = e.rangedAP + auraSum(*t, 127);
+        int32_t dmg = rng_.range((int32_t)e.rangedMin, std::max((int32_t)e.rangedMin, (int32_t)e.rangedMax)) + weaponBonus;
+        dmg += rap * (int32_t)e.rangedMs / 14000;
+        dmg = dmg * weaponPct / 100;
+        if ((int32_t)rng_.below(100) < 5) {   // (the melee swing's 5 % miss)
+            emit(SimEvent::Damage, e.guid, t->guid, s.id, 0, 0, 1);   // a miss
+        } else {
+            if ((int32_t)rng_.below(100) < 5) dmg *= 2;   // a crit
+            applyDamage(e, *t, std::max(1, dmg), s.id, s.school, now);
+        }
+        weapon = false;
     }
     if (weapon && t != &e && t->alive()) {
         int32_t dmg = rng_.range((int32_t)e.dmgMin, (int32_t)e.dmgMax) + weaponBonus;
@@ -888,6 +921,107 @@ void World::leaveForm(Entity& t, uint8_t form) {
         emit(SimEvent::PowerChanged, t.guid, 0, 0, t.power);
     }
     if (t.self) recomputeGear();
+}
+
+// ---------------------------------------------------------------- ranged: ammo and Auto Shot
+// CMaNGOS Spell::CheckItems for SPELL_EFFECT_WEAPON_DAMAGE with RANGED_ATTACK: a ranged weapon; a thrown one is its own
+// ammo; a bow / crossbow wants arrows and a gun bullets in PLAYER_AMMO_ID, and one of them in the bags; a wand none
+uint8_t World::ammoCheck(const Entity& e) const {
+    if (!e.self || !data_) return 0;
+    const CharacterProfile& p = profiles_[0];
+    const ItemTemplate* rw = p.equipment[17] ? data_->item(p.equipment[17]) : nullptr;
+    if (!rw) return 29;   // SPELL_FAILED_EQUIPPED_ITEM
+    auto inBags = [&](uint32_t entry) {
+        for (uint8_t i = 0; i < p.bagCount; ++i) if (p.bag[i].entry == entry && p.bag[i].count) return true;
+        return false;
+    };
+    switch (rw->subclass) {
+        case 16: return inBags(rw->entry) || true ? 0 : 0x43;   // thrown (the worn one)
+        case 2: case 3: case 18: {
+            const ItemTemplate* am = p.ammoId ? data_->item(p.ammoId) : nullptr;
+            if (!am || am->cls != 6) return 0x43;   // SPELL_FAILED_NO_AMMO
+            if ((rw->subclass == 3) != (am->subclass == 3) || (rw->subclass != 3 && am->subclass != 2)) return 0x43;
+            if (!inBags(p.ammoId)) return 0x43;
+            return 0;
+        }
+        default: return 0;   // a wand
+    }
+}
+
+void World::takeAmmo(Entity& e) {
+    if (!e.self || !data_) return;
+    CharacterProfile& p = profiles_[0];
+    const ItemTemplate* rw = p.equipment[17] ? data_->item(p.equipment[17]) : nullptr;
+    if (!rw || rw->subclass == 19 || rw->subclass == 16 || !p.ammoId) return;   // a wand: none; thrown: (not stackable here)
+    for (int i = 0; i < p.bagCount; ++i)
+        if (p.bag[i].entry == p.ammoId && p.bag[i].count) {
+            const uint8_t before = p.bagCount;
+            takeFromBag(i, 1);
+            emit(SimEvent::Message, e.guid, e.guid, p.ammoId, 4, (uint8_t)i, before);   // (the session sends the bag again)
+            return;
+        }
+}
+
+// WoWVita: our client has no paper-doll ammo slot to drop arrows into, so a character without fitting ammo in it gets
+// the first fitting stack of its bags (what the original's player would do by hand)
+bool World::pickAmmo() {
+    if (!data_ || !player_) return false;
+    CharacterProfile& p = profiles_[0];
+    const ItemTemplate* rw = p.equipment[17] ? data_->item(p.equipment[17]) : nullptr;
+    if (!rw || (rw->subclass != 2 && rw->subclass != 3 && rw->subclass != 18)) return false;
+    if (!ammoCheck(*player_)) return false;
+    for (uint8_t i = 0; i < p.bagCount; ++i) {
+        const ItemTemplate* am = data_->item(p.bag[i].entry);
+        if (!am || am->cls != 6 || !p.bag[i].count) continue;
+        if ((rw->subclass == 3 && am->subclass == 3) || (rw->subclass != 3 && am->subclass == 2)) {
+            p.ammoId = am->entry;
+            recomputeGear();
+            return true;
+        }
+    }
+    return false;
+}
+
+void World::stopAutoRepeat(Entity& e) {
+    if (!e.autoRepeatSpell) return;
+    const uint32_t s = e.autoRepeatSpell;
+    e.autoRepeatSpell = 0;
+    e.autoRepeatWindup = false;
+    emit(SimEvent::Message, e.guid, e.guid, s, 5);   // SMSG_CANCEL_AUTO_REPEAT
+}
+
+// CMaNGOS Unit::_UpdateAutoRepeatSpell: moving pauses it (0.5 s wind-up again), a shot when the spell is ready at the
+// current target, the next after the ranged weapon's speed (Player::AddCooldown: RecoveryTime + UNIT_FIELD_RANGEDATTACKTIME)
+void World::tickAutoRepeat(Entity& e, uint32_t now) {
+    const SpellX* s = data_ ? data_->sx(e.autoRepeatSpell) : nullptr;
+    if (!s) { e.autoRepeatSpell = 0; return; }
+    const bool moved = std::hypot(e.x - e.autoRepeatX, e.y - e.autoRepeatY) > 0.05f;
+    e.autoRepeatX = e.x; e.autoRepeatY = e.y;
+    if (moved || e.castSpell) { e.autoRepeatWindup = true; return; }
+    if (e.autoRepeatWindup) {
+        e.autoRepeatReadyMs = std::max(e.autoRepeatReadyMs, now + 500);
+        e.autoRepeatWindup = false;
+        return;
+    }
+    if (now < e.autoRepeatReadyMs) return;
+    Entity* t = selection_ ? entity(selection_) : nullptr;
+    if (!t || !t->alive() || !canAttack(e, *t)) { stopAutoRepeat(e); return; }
+    const float d = std::hypot(t->x - e.x, t->y - e.y);
+    uint8_t why = 0;
+    if (s->rangeMax > 0 && d > s->rangeMax + t->combatReach) why = 0x56;   // SPELL_FAILED_OUT_OF_RANGE
+    else if (s->rangeMin > 0 && d < s->rangeMin) why = 0x76;              // SPELL_FAILED_TOO_CLOSE
+    else why = ammoCheck(e);
+    if (why) {
+        emit(SimEvent::CastFailed, e.guid, t->guid, s->id, why, 0, 0);
+        stopAutoRepeat(e);
+        return;
+    }
+    e.o = std::atan2(t->y - e.y, t->x - e.x);
+    const bool wasTriggered = e.castTriggered;
+    e.castTriggered = true;
+    finishX(e, *s, t->guid, now);   // the shot (TRIGGERED_AUTOREPEAT: no cast bar, no price, no GCD)
+    e.castTriggered = wasTriggered;
+    e.autoRepeatReadyMs = now + std::max<uint32_t>(500, e.rangedMs ? e.rangedMs : 2000) + (uint32_t)std::max<int32_t>(0, (int32_t)s->cooldownMs);
 }
 
 // ---------------------------------------------------------------- facing, combat, stealth

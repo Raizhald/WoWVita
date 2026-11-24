@@ -14,6 +14,7 @@
 //     the mana back after; a learning reward spell
 //   - a Human Warlock: Summon Imp (pet_levelstats, name, the pet bar), follow, Firebolt at our target and our kill,
 //     stay, the Imp back at login, dismissed; The Binding: the Summoning Circle's focus, the Summoned Voidwalker
+//   - a Dwarf Hunter: gun and bullets from the outfit, Auto Shot (wind-up, speed, ammo), too close, toggled off
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -673,6 +674,57 @@ int main(int argc, char** argv) {
                 CHECK(!vw->alive(), "it is beaten");
                 w.stopAttack(*p, now);
             }
+        }
+    }
+    session.leaveWorld();
+
+    // ---- the hunter: the outfit's gun and bullets in the ammo slot, Auto Shot (wind-up, the gun's speed, a bullet a
+    // shot, ranged AP), too close, the button again stops it
+    CHECK(session.deleteCharacter(druidGuid) == w3n::CHAR_DELETE_SUCCESS, "the druid leaves room");
+    w3n::CharCreateInfo hu; hu.name = "Hemet"; hu.race = 3; hu.cls = 3;
+    CHECK(session.createCharacter(hu) == w3n::CHAR_CREATE_SUCCESS, "a dwarf hunter");
+    uint64_t hunterGuid = 0;
+    for (const auto& c : session.characters()) if (c.name == "Hemet") hunterGuid = c.guid;
+    play(hunterGuid);
+    run(800);
+    p = w.player();
+    {
+        off::CharacterProfile& hp = w.playerProfile();
+        const off::ItemTemplate* gun = data.item(hp.equipment[17]);
+        const off::ItemTemplate* ammo = data.item(hp.ammoId);
+        std::printf("hunter: ranged %u (%s, %u ms) ammo %u (%s) rap %d dmg %.1f-%.1f\n", hp.equipment[17], gun ? gun->name.c_str() : "-",
+                    p->rangedMs, hp.ammoId, ammo ? ammo->name.c_str() : "-", p->rangedAP, p->rangedMin, p->rangedMax);
+        CHECK(gun && gun->subclass == 3 && ammo && ammo->cls == 6 && ammo->subclass == 3, "a gun, bullets in the ammo slot");
+        auto ammoLeft = [&]() { int n = 0; for (uint8_t i = 0; i < hp.bagCount; ++i) if (hp.bag[i].entry == hp.ammoId) n += hp.bag[i].count; return n; };
+        const int ammo0 = ammoLeft();
+        off::Entity* m = nearestHostile(p->x, p->y, 300);
+        CHECK(m != nullptr, "something to shoot");
+        if (m && gun) {
+            m->maxHp = m->hp = 5000;
+            m->victim = 0; m->threatCount = 0;
+            stand(m, 20.0f);
+            m->speed = 0.01f;   // (it stays where it is)
+            gs.setTarget(m->guid, now);
+            run(100);
+            hp.book.push_back(75);
+            w.tryCast(*p, 75, m->guid, now);
+            run(400);
+            CHECK(m->hp == 5000, "no shot in the first 0.5 s");
+            run(p->rangedMs * 3 + 700);
+            const int shots = ammo0 - ammoLeft();
+            std::printf("auto shot: %d shots, %d damage\n", shots, 5000 - m->hp);
+            CHECK(shots >= 3 && shots <= 4 && m->hp < 5000, "a shot a gun's swing, a bullet a shot (%d)", shots);
+            // the button again: it stops
+            gs.castSpell(75, now);   // (at the current target)
+            run(200);
+            const int left = ammoLeft();
+            run(p->rangedMs * 2);
+            CHECK(!p->autoRepeatSpell && ammoLeft() == left, "the button again ends it");
+            // too close: it does not shoot
+            stand(m, 3.0f);
+            w.tryCast(*p, 75, m->guid, now);
+            run(1500);
+            CHECK(!p->autoRepeatSpell && ammoLeft() == left, "too close for a gun");
         }
     }
     session.leaveWorld();

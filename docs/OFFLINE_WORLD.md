@@ -138,7 +138,13 @@ stay / follow / attack), the Imp keeps 25 yd and casts Firebolt (PetAI), autocas
 bar (SMSG_PET_SPELLS, CMSG_PET_ACTION...), back at login ("PET1" in the save). Quest items that cast ("IUSE") and the
 creatures their SPELL_EFFECT_SEND_EVENT summons ("EVSC": dbscripts_on_event SCRIPT_COMMAND_TEMP_SUMMON_CREATURE) - the
 warlocks' "The Binding" at the Summoning Circle (RequiresSpellFocus: a GAMEOBJECT_TYPE_SPELL_FOCUS within its
-distance), EventAI EVENT_T_TIMER_GENERIC, ACTION_T_SET_FACTION, ACTION_T_ATTACK_START (TARGET_T_SPAWNER).
+distance), EventAI EVENT_T_TIMER_GENERIC, ACTION_T_SET_FACTION, ACTION_T_ATTACK_START (TARGET_T_SPAWNER). Ranged
+combat (CMaNGOS): ranged attack power by class, the ranged weapon's damage + the ammo's DPS x speed, PLAYER_AMMO_ID
+(set from the start outfit, CMSG_SET_AMMO; our client has no ammo slot, so a character without fitting ammo gets the
+first fitting stack of its bags), Spell::CheckItems (NO_AMMO), TakeAmmo, Auto Shot as Unit::_UpdateAutoRepeatSpell
+(0.5 s wind-up, moving pauses, a shot every weapon swing, TOO_CLOSE / OUT_OF_RANGE end it, SMSG_CANCEL_AUTO_REPEAT;
+the button again or a melee attack ends it, as the 1.12 client does), Hunter's Mark (aura 127), Aspect of the Hawk
+(124), tracking (PLAYER_TRACK_CREATURES).
 Not yet: pets, totems, talents, poisons (weapon enchantments), pick pocketing, Distract, more single-spell scripts,
 spell power.
 

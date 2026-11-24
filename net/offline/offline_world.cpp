@@ -1302,6 +1302,27 @@ void World::recomputeGear() {
             case 11: e.attackPower = L * 3 + e.statStr * 2 - 20 + (e.form == 1 ? e.statAgi : 0); break;   // druid (cat: + agility)
             default: e.attackPower = e.statStr - 10; break;                              // mage, priest, warlock
         }
+        // WoWVita: ranged attack power (CMaNGOS UpdateAttackPowerAndDamage(true)) and the ranged weapon's damage with the
+        // ammo's DPS x speed (CalculateMinMaxDamage(RANGED_ATTACK), Player::_ApplyAmmoBonuses)
+        switch (p.cls) {
+            case 3: e.rangedAP = L * 2 + e.statAgi * 2 - 10; break;              // hunter
+            case 1: case 4: e.rangedAP = L + e.statAgi - 10; break;              // warrior, rogue
+            case 11: e.rangedAP = (e.form == 1 || e.form == 5 || e.form == 8) ? 0 : e.statAgi - 10; break;
+            default: e.rangedAP = e.statAgi - 10; break;
+        }
+        e.rangedAP = std::max(0, e.rangedAP + auraSum(e, 124));   // (SPELL_AURA_MOD_RANGED_ATTACK_POWER: Aspect of the Hawk)
+        e.rangedMs = 0; e.rangedMin = e.rangedMax = 0;
+        if (const ItemTemplate* rw = !broken(p.equipment[17], p.equipLost[17]) ? data_->item(p.equipment[17]) : nullptr) {
+            e.rangedMs = rw->delayMs >= 500 ? rw->delayMs : 2000;
+            e.rangedMin = rw->dmgMin; e.rangedMax = rw->dmgMax;
+            const ItemTemplate* am = p.ammoId ? data_->item(p.ammoId) : nullptr;
+            const bool fits = am && am->cls == 6 && ((rw->subclass == 3 && am->subclass == 3) || ((rw->subclass == 2 || rw->subclass == 18) && am->subclass == 2));
+            if (fits) {
+                const float sp = (float)e.rangedMs / 1000.0f;
+                e.rangedMin += am->dmgMin * sp;
+                e.rangedMax += am->dmgMax * sp;
+            }
+        }
         // Player::InitDataForForm / UpdateDamagePhysical: cat 1.0 s, bear 2.5 s, the paw's damage by level
         if (e.form == 1 || e.form == 5 || e.form == 8) {
             e.attackMs = e.form == 1 ? 1000 : 2500;
@@ -1608,6 +1629,7 @@ void World::tickEntity(Entity& e, uint32_t nowMs, bool isPlayer) {
         return;
     }
     tickRegen(e, nowMs);
+    if (isPlayer && e.autoRepeatSpell) tickAutoRepeat(e, nowMs);   // WoWVita: Auto Shot
     if (e.castSpell && nowMs >= e.castEndMs) {
         if (e.channeling) { endChannel(e, nowMs); e.castSpell = 0; e.castEndMs = e.castStartMs = 0; }   // WoWVita
         else if (spellEngine(e, e.castSpell)) {

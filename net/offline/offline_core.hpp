@@ -537,6 +537,12 @@ struct Entity {
     uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
     uint64_t ownerGuid = 0;                    // WoWVita: a pet's owner (offline_pet.cpp)
     uint64_t summonerGuid = 0;                 // WoWVita: who summoned it (a script summon: TARGET_T_SPAWNER)
+    uint32_t autoRepeatSpell = 0, autoRepeatReadyMs = 0;   // WoWVita: Auto Shot / Shoot (CURRENT_AUTOREPEAT_SPELL)
+    bool autoRepeatWindup = false;             // (m_AutoRepeatFirstCast: 0.5 s before the first shot / after moving)
+    float autoRepeatX = 0, autoRepeatY = 0;    // (where it stood: a step pauses the shooting)
+    uint32_t rangedMs = 0;                     // the ranged weapon: its speed, damage with the ammo's, ranged attack power
+    float rangedMin = 0, rangedMax = 0;
+    int32_t rangedAP = 0;
     uint32_t despawnAtMs = 0;                  // ... and when it goes (TEMPSUMMON_TIMED_OR_DEAD_DESPAWN)
     uint32_t petNumber = 0, createdBySpell = 0;
     uint8_t petCommand = 1, petReact = 1;      // CommandStates (0 stay, 1 follow) / ReactStates (0 passive, 1 defensive, 2 aggressive)
@@ -633,6 +639,7 @@ struct CharacterProfile {
     std::vector<uint32_t> book;           // WoWVita: the spell book - every spell learned (the "SPB1" block)
     std::array<uint32_t, 120> actionBar{};// WoWVita: the action buttons as the client set them ("SPB1" too)
     bool actionBarSet = false;
+    uint32_t ammoId = 0;                  // WoWVita: PLAYER_AMMO_ID, the arrows / bullets in the ammo slot ("AMO1")
     uint32_t petEntry = 0, petSpell = 0;  // WoWVita: the summoned pet ("PET1"), its name and the spells it does not autocast
     std::string petName;
     uint8_t petAutocastOff = 0;
@@ -851,7 +858,11 @@ public:
     bool petCast(uint32_t spell, uint64_t target, uint32_t nowMs);
     void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);
     Entity* summonCreature(uint32_t entry, float x, float y, float z, float o, uint32_t despawnMs, uint64_t summoner, uint32_t nowMs);
-    bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach   // a quest's reward spell (a learning one teaches)   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
+    bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach
+    void setSelection(uint64_t g) { selection_ = g; }            // the player's target (CMSG_SET_SELECTION)
+    void stopAutoRepeat(Entity& e);                                // CMSG_CANCEL_AUTO_REPEAT_SPELL / SMSG_CANCEL_AUTO_REPEAT
+    uint8_t ammoCheck(const Entity& e) const;                      // 0, or SPELL_FAILED_NO_AMMO / EQUIPPED_ITEM
+    bool pickAmmo();                                               // the ammo slot: the first fitting stack in the bags   // a quest's reward spell (a learning one teaches)   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
 private:
     int32_t absorb(Entity& dst, int32_t dmg, uint8_t school);
     void endChannel(Entity& e, uint32_t nowMs);
@@ -909,6 +920,9 @@ private:
     uint64_t petGuid_ = 0;     // WoWVita: our pet
     uint32_t petCounter_ = 0;
     uint32_t summonCounter_ = 0;   // WoWVita: script summons' guids
+    uint64_t selection_ = 0;       // WoWVita: the player's target
+    void tickAutoRepeat(Entity& e, uint32_t nowMs);
+    void takeAmmo(Entity& e);
     void tickPet(Entity& e, uint32_t nowMs);
     void applyPetLevel(Entity& e);
     CharacterProfile profiles_[kMaxParty + 1];

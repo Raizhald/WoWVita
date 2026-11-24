@@ -420,6 +420,7 @@ void OfflineSession::giveStartOutfit(CharacterProfile& p) {
         if (const ItemExt* x = data_->ext(e)) { if (x->kind & 1) count = 4; else if (x->kind & 2) count = 2; }
         if (t->inventoryType == 24) count = 200;   // arrows / bullets: a stack
         count = (uint16_t)std::max<uint32_t>(1, std::min<uint32_t>(count, std::max<uint32_t>(1, t->maxStack)));
+        if (t->cls == 6 && !p.ammoId) p.ammoId = e;   // CMaNGOS Player::Create: the outfit's ammo goes in the ammo slot
         BagItem& b = p.bag[p.bagCount];
         b = BagItem();
         b.entry = e; b.count = count; b.slot = p.bagCount;
@@ -535,6 +536,7 @@ bool OfflineSession::enterWorld(uint64_t guid, uint32_t nowMs, float pos[3], flo
     }
     loginPackets(nowMs);
     mailAtLogin();   // WoWVita: "You have new mail."
+    if (!world_.playerProfile().ammoId) world_.pickAmmo();   // WoWVita: (a character of an older save: its ammo slot)
     if (Entity* p = world_.player(); p && save_.player.petEntry)   // WoWVita: the pet comes back (CMaNGOS LoadPetFromDB)
         world_.summonPet(*p, save_.player.petEntry, save_.player.petSpell, nowMs, save_.player.petName);
     return true;
@@ -664,6 +666,19 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::UNIT_FLAGS, (flight_.active ? 0x00100004u : 0u) | (ccStun_ ? 0x00040000u : 0u));   // WoWVita: TAXI_FLIGHT | DISABLE_MOVE, STUNNED
     f.set(UF::UNIT_MOUNTDISPLAYID, flight_.active ? flight_.mount : 0u);       // the gryphon
     f.set(UF::UNIT_BYTES_1, (eat_.active ? 1u : 0u) | ((uint32_t)p->form << 16));   // WoWVita: sitting while eating; the form
+    {   // WoWVita: the ranged weapon and the ammo slot, tracking (Track Beasts: SPELL_AURA_TRACK_CREATURES)
+        const CharacterProfile& pr = world_.playerProfile();
+        f.set(1223, pr.ammoId);                                            // PLAYER_AMMO_ID
+        f.set(128, p->rangedMs);                                           // UNIT_FIELD_RANGEDATTACKTIME
+        f.set(168, (uint32_t)std::max(0, p->rangedAP));                    // UNIT_FIELD_RANGED_ATTACK_POWER
+        auto fb = [](float v) { uint32_t u; std::memcpy(&u, &v, 4); return u; };
+        f.set(171, fb(p->rangedMin + (float)p->rangedAP * (float)p->rangedMs / 14000.0f));   // UNIT_FIELD_MINRANGEDDAMAGE
+        f.set(172, fb(p->rangedMax + (float)p->rangedAP * (float)p->rangedMs / 14000.0f));   // MAXRANGEDDAMAGE
+        uint32_t track = 0;
+        for (uint8_t i = 0; i < p->auraCount; ++i)
+            if (p->auras[i].type == 44 && p->auras[i].misc > 0 && p->auras[i].misc <= 32) track |= 1u << (p->auras[i].misc - 1);
+        f.set(1104, track);                                                // PLAYER_TRACK_CREATURES
+    }
     {   // WoWVita: a form's model and power (CMaNGOS SetDisplayId / SetPowerType)
         const CharacterProfile& pr = world_.playerProfile();
         f.set(UF::UNIT_BYTES_0, (uint32_t)pr.race | ((uint32_t)pr.cls << 8) | ((uint32_t)pr.gender << 16) | ((uint32_t)p->powerType << 24));
@@ -1472,6 +1487,7 @@ void OfflineSession::handleMovement(const Bytes& data, uint32_t nowMs) {
 void OfflineSession::handleAttack(const Bytes& data, uint32_t nowMs) {
     Entity* p = world_.player();
     if (!p) return;
+    world_.stopAutoRepeat(*p);   // WoWVita: (the 1.12 client stops Auto Shot itself when it starts a melee attack)
     Reader r(data);
     const uint64_t g = r.u64();
     if (r.bad) return;
@@ -1505,6 +1521,10 @@ void OfflineSession::handleCast(const Bytes& data, uint32_t nowMs) {
     }
     if (r.bad) return;
     if (spell == 6603) return;   // Attack is a toggle, never a cast (the client enforces this too)
+    // WoWVita: the original client's Auto Shot button is a toggle (a second press sends CMSG_CANCEL_AUTO_REPEAT_SPELL);
+    // ours sends the cast again, so that press ends the shooting here
+    if (p->autoRepeatSpell && spell == p->autoRepeatSpell) { world_.stopAutoRepeat(*p); return; }
+    if (target && target != p->guid) world_.setSelection(target);
     // No unit target in the packet means: self / no explicit target. Ground-target spells are not
     // supported yet, so resolving to self is the correct, safe default.
     if (!target) target = p->guid;
@@ -1661,7 +1681,19 @@ void OfflineSession::handleQuery(uint16_t op, const Bytes& data, uint32_t nowMs)
             }
             break;
         }
-        case CMSG_SET_SELECTION: target_ = r.u64(); break;
+        case CMSG_SET_SELECTION: target_ = r.u64(); world_.setSelection(target_); break;   // (WoWVita: Auto Shot's target)
+        case 0x26D: if (Entity* me = world_.player()) world_.stopAutoRepeat(*me); break;   // CMSG_CANCEL_AUTO_REPEAT_SPELL
+        case 0x268: {   // CMSG_SET_AMMO (Player::SetAmmo: a projectile the character has)
+            const uint32_t item = r.u32();
+            CharacterProfile& pr = world_.playerProfile();
+            const ItemTemplate* am = data_ && item ? data_->item(item) : nullptr;
+            if (!item) pr.ammoId = 0;
+            else if (am && am->cls == 6) pr.ammoId = item;
+            world_.recomputeGearPublic();
+            sendSelfFields();
+            saveSoon_ = true;
+            break;
+        }
         default: break;
     }
 }
@@ -1939,6 +1971,11 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
                 if (e.text[0]) sendChat(0x0A, 0, std::string((const char*)e.text));
                 else if (e.value == 1 && e.spell && a && a->self) sendCharge(*a, nowMs);   // WoWVita: Charge
                 else if (e.value == 2 && e.spell && a && a->self) learn(e.spell, nowMs);   // a learning spell
+                else if (e.value == 4 && a && a->self) {   // WoWVita: an arrow / a bullet shot
+                    if (world_.playerProfile().bagCount != e.flags) bankChanged({}, e.school, e.flags);
+                    else sendInventory();
+                }
+                else if (e.value == 5 && a && a->self) send(0x29C, Bytes{});   // SMSG_CANCEL_AUTO_REPEAT
                 else if (e.value == 3 && a) {   // WoWVita: a creature's faction changed (EventAI ACTION_T_SET_FACTION)
                     FieldSet f;
                     f.set(UF::UNIT_FACTIONTEMPLATE, a->faction);

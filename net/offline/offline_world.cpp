@@ -539,7 +539,7 @@ void World::removeAura(Entity& e, int index) {
     const Aura gone = e.auras[index];
     for (int i = index; i + 1 < e.auraCount; ++i) e.auras[i] = e.auras[i + 1];
     --e.auraCount;
-    if (gone.type == 36 && e.form == (uint8_t)gone.misc) e.form = 0;   // WoWVita: out of the stance / form
+    if (gone.type == 36 && e.form == (uint8_t)gone.misc) leaveForm(e, e.form);   // WoWVita: out of the stance / form
     // WoWVita: a control aura that ends early (broken by damage, dispelled) takes its effect along
     if (gone.type) {
         auto stillType = [&](std::initializer_list<uint8_t> ts) {
@@ -550,7 +550,7 @@ void World::removeAura(Entity& e, int index) {
         if (gone.type == 26 && !stillType({26})) e.rootUntilMs = 0;
         if ((gone.type == 5 || gone.type == 7) && !stillType({5, 7})) { e.fearUntilMs = 0; if (e.self) e.stunnedUntilMs = 0; }
         if ((gone.type == 27 || gone.type == 60) && !stillType({27, 60})) e.silenceUntilMs = 0;
-        if (e.self && gone.type == 29) recomputeGear();
+        if (e.self && (gone.type == 29 || gone.type == 34 || gone.type == 142)) recomputeGear();
     }
     bool still = false;   // WoWVita: the slot empties when the spell's last effect goes
     for (uint8_t i = 0; i < e.auraCount; ++i) still = still || (e.auras[i].slot == gone.slot && gone.slot >= 0);
@@ -1136,7 +1136,7 @@ bool World::takeFromBag(int index, uint16_t n) {
 
 void World::removeAuraSpell(Entity& e, uint32_t spell) {
     for (int i = 0; i < e.auraCount;) {   // (WoWVita: every effect of it)
-        if (e.auras[i].spell == spell) { removeAura(e, i); continue; }
+        if (e.auras[i].spell == spell) { removeAura(e, i); i = 0; continue; }   // (from the start: a form takes its boosts along)
         ++i;
     }
 }
@@ -1223,6 +1223,7 @@ void World::recomputeGear() {
         if (const ItemTemplate* it = data_ && !broken(p.equipment[(size_t)s], p.equipLost[(size_t)s]) ? data_->item(p.equipment[(size_t)s]) : nullptr)
             armor += it->armor;
     e.armor = armor;
+    if (const int32_t pct = auraSum(e, 142, 1)) e.armor = (uint32_t)std::max<int64_t>(0, (int64_t)armor * (100 + pct) / 100);   // bear: +180 %
     // WoWVita: the race and class's stats at its level (player_levelstats / player_classlevelstats) and the gear's;
     // health = base + stamina (the first 20 one each, then 10), mana = base + intellect (20 one each, then 15),
     // melee attack power by class (1.12), its bonus to a swing AP / 14 per second of the weapon's speed
@@ -1236,11 +1237,12 @@ void World::recomputeGear() {
             if (is == data_->itemStats.end()) continue;
             for (const auto& [type, v] : is->second) if (type < 8) st[type] += v;
         }
+        e.baseMana = (uint32_t)b.mana;
         e.statStr = b.str + st[4]; e.statAgi = b.agi + st[3]; e.statSta = b.sta + st[7];
         e.statInt = b.inte + st[5]; e.statSpi = b.spi + st[6];
         const int32_t hpSta = std::min(e.statSta, 20) + std::max(0, e.statSta - 20) * 10;
         const uint32_t oldMax = e.maxHp;
-        e.maxHp = (uint32_t)std::max(1, b.hp + hpSta + st[1]);
+        e.maxHp = (uint32_t)std::max(1, b.hp + hpSta + st[1] + auraSum(e, 34));   // (+ SPELL_AURA_MOD_INCREASE_HEALTH)
         if (oldMax && e.hp > 0) e.hp = std::min<int32_t>((int32_t)e.maxHp, e.hp + (int32_t)e.maxHp - (int32_t)oldMax);
         if (e.powerType == 0 && b.mana) {
             const int32_t mInt = std::min(e.statInt, 20) + std::max(0, e.statInt - 20) * 15;
@@ -1249,11 +1251,19 @@ void World::recomputeGear() {
             if (oldP) e.power = std::min<int32_t>((int32_t)e.maxPower, e.power + (int32_t)e.maxPower - (int32_t)oldP);
         }
         const int L = e.level;
-        switch (p.cls) {
-            case 1: case 2: case 7: e.attackPower = L * 3 + e.statStr * 2 - 20; break;   // warrior, paladin, shaman
+        switch (p.cls) {   // (CMaNGOS StatSystem UpdateAttackPowerAndDamage)
+            case 1: case 2: e.attackPower = L * 3 + e.statStr * 2 - 20; break;           // warrior, paladin
+            case 7: e.attackPower = L * 2 + e.statStr * 2 - 20; break;                   // shaman
             case 3: case 4: e.attackPower = L * 2 + e.statStr + e.statAgi - 20; break;   // hunter, rogue
-            case 11: e.attackPower = e.statStr * 2 - 20; break;                          // druid
+            case 11: e.attackPower = L * 3 + e.statStr * 2 - 20 + (e.form == 1 ? e.statAgi : 0); break;   // druid (cat: + agility)
             default: e.attackPower = e.statStr - 10; break;                              // mage, priest, warlock
+        }
+        // Player::InitDataForForm / UpdateDamagePhysical: cat 1.0 s, bear 2.5 s, the paw's damage by level
+        if (e.form == 1 || e.form == 5 || e.form == 8) {
+            e.attackMs = e.form == 1 ? 1000 : 2500;
+            const float sp = (float)e.attackMs / 1000.0f, lv = (float)std::min<int>(L, 60);
+            e.dmgMin = (uint32_t)std::max(1.0f, lv * 0.85f * sp);
+            e.dmgMax = (uint32_t)std::max(1.0f, lv * 1.25f * sp);
         }
         e.attackPower = std::max(0, e.attackPower);
         const uint32_t bonus = (uint32_t)(e.attackPower * (int32_t)e.attackMs / 14000);
@@ -1830,6 +1840,7 @@ void World::syncProfileFromEntity(int index) {
     p.power = e->power;
     p.maxPower = e->maxPower;
     p.powerType = e->powerType;
+    if (e->formPower) { p.powerType = e->savedPowerType; p.power = e->savedPower; p.maxPower = e->savedMaxPower; }   // (not a form's)
     p.x = e->x; p.y = e->y; p.z = e->z; p.o = e->o;
     p.money = e->money;
     p.used = true;

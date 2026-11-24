@@ -235,7 +235,7 @@ void OfflineSession::sendQuestDetails(uint64_t npc, const QuestFull& q) {
     for (int k = 0; k < 4; ++k)
         if (q.rewItem[k]) { w.u32(q.rewItem[k]); w.u32(q.rewCount[k]); w.u32(itemDisplay(data_, q.rewItem[k])); }
     w.u32(q.money > 0 ? (uint32_t)q.money : 0);
-    w.u32(0);   // reward spell
+    w.u32(q.rewSpell);   // reward spell (its icon)
     w.u32(0);   // emotes
     send(SMSG_QUESTGIVER_QUEST_DETAILS, w.b);
 }
@@ -278,7 +278,7 @@ void OfflineSession::sendQuestOfferReward(uint64_t npc, const QuestFull& q) {
         if (q.rewItem[k]) { w.u32(q.rewItem[k]); w.u32(q.rewCount[k]); w.u32(itemDisplay(data_, q.rewItem[k])); }
     w.u32(q.money > 0 ? (uint32_t)q.money : 0);
     w.u32(q.flags);
-    w.u32(0);   // reward spell
+    w.u32(q.rewSpell);   // reward spell
     send(SMSG_QUESTGIVER_OFFER_REWARD, w.b);
 }
 
@@ -295,7 +295,7 @@ void OfflineSession::sendQuestQuery(uint32_t id) {
     w.u32(q->nextInChain);
     w.u32(q->money > 0 ? (uint32_t)q->money : 0);
     w.u32(q->moneyMaxLevel);
-    w.u32(0);                 // reward spell
+    w.u32(q->rewSpell);       // reward spell
     w.u32(q->srcItem);
     w.u32(q->flags);
     for (int k = 0; k < 4; ++k) { w.u32(q->rewItem[k]); w.u32(q->rewCount[k]); }
@@ -578,6 +578,8 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             w.raw(items.b.data(), items.b.size());
             send(SMSG_QUESTGIVER_QUEST_COMPLETE, w.b);
             if (xp) world_.addXp(*p, xp, nowMs);
+            // CMaNGOS Player::RewardQuest: RewSpellCast, else RewSpell, cast on the player (a learning spell teaches)
+            if (const uint32_t rs = q->rewSpellCast ? q->rewSpellCast : q->rewSpell) world_.rewardSpell(*p, rs, nowMs);
             questFieldsDirty_ = true;
             saveSoon_ = true;
             sendInventory();

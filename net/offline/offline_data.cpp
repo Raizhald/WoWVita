@@ -616,6 +616,16 @@ bool readCreateSpells(Bin& b, WorldData& w) {   // WoWVita "CRSP"
     return !b.bad;
 }
 
+bool readQuestSpells(Bin& b, WorldData& w) {   // WoWVita "QSPL" (after QST2 in the pack)
+    const uint32_t n = b.u32();
+    if (b.bad || n > 16384) return false;
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t id = b.u32(), rs = b.u32(), rc = b.u32();
+        for (QuestFull& q : w.questsFull) if (q.id == id) { q.rewSpell = rs; q.rewSpellCast = rc; break; }
+    }
+    return !b.bad;
+}
+
 bool readOutfits(Bin& b, WorldData& w) {   // WoWVita "OUTF"
     const uint32_t n = b.u32();
     if (b.bad || n > 4096) return false;
@@ -914,6 +924,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("CRSP"): ok = readCreateSpells(b, out); break;
             case fourcc("PLST"): ok = readPlayerStats(b, out); break;
             case fourcc("ISTA"): ok = readItemStats(b, out); break;
+            case fourcc("QSPL"): ok = readQuestSpells(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

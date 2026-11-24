@@ -109,7 +109,8 @@ bool World::positiveX(const SpellX& s) const {
 
 uint32_t World::powerCostX(const Entity& e, const SpellX& s) const {
     uint32_t cost = s.manaCost + s.manaPerLevel * (uint32_t)std::max<int>(0, (int)e.level - (int)s.spellLevel);
-    if (s.manaPct) cost += e.maxPower * s.manaPct / 100;
+    // ManaCostPercentage: of the base (create) mana for a player (CMaNGOS Spell::CalculatePowerCost: GetCreateMana)
+    if (s.manaPct) cost += (e.self && e.baseMana ? e.baseMana : (e.formPower ? e.savedMaxPower : e.maxPower)) * s.manaPct / 100;
     if (s.powerType == 1) cost = (cost + 5) / 10;   // rage: the database keeps tenths (Heroic Strike 150 = 15 rage)
     return cost;
 }
@@ -135,6 +136,15 @@ bool World::hasAuraType(const Entity& e, uint8_t type, int32_t miscMask) const {
     for (uint8_t i = 0; i < e.auraCount; ++i)
         if (e.auras[i].type == type && (miscMask < 0 || (e.auras[i].misc & miscMask))) return true;
     return false;
+}
+
+void World::rewardSpell(Entity& p, uint32_t id, uint32_t now) {
+    const SpellX* s = data_ ? data_->sx(id) : nullptr;
+    if (!s) return;
+    bool learnt = false;
+    for (const SpellEffectX& x : s->eff)
+        if (x.effect == E_LEARN_SPELL && x.trigger) { emit(SimEvent::Message, p.guid, p.guid, x.trigger, 2); learnt = true; }
+    if (!learnt) castX(p, id, p.guid, now, true);
 }
 
 void World::interruptAuras(Entity& e, uint32_t flags) {
@@ -216,6 +226,18 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
     const SpellX& s = *sp;
     auto fail = [&](uint8_t why, uint64_t t = 0) { if (!triggered) emit(SimEvent::CastFailed, e.guid, t, id, why, 0, 0); return false; };
     // (the reasons are SPELL_FAILED_* of 1.12: net/result_text.cpp words them)
+    if (!triggered && e.form && e.self) {
+        // what the 1.12 client does with a form button while in a form (CastShapeshiftForm): the active one, or any while
+        // shifted, cancels the form (CMSG_CANCEL_AURA) - our client has no stance bar, so the server does it for it
+        int newForm = -1;
+        for (const SpellEffectX& x : s.eff) if (x.effect == E_APPLY_AURA && x.aura == A_SHAPESHIFT) newForm = x.misc;
+        const bool shifted = e.form != 17 && e.form != 18 && e.form != 19 && e.form != 28 && e.form != 30;
+        if (newForm >= 0 && (newForm == e.form || shifted)) {
+            for (int i = e.auraCount - 1; i >= 0; --i)
+                if (e.auras[i].type == A_SHAPESHIFT) { removeAuraSpell(e, e.auras[i].spell); break; }
+            return true;
+        }
+    }
     if (!triggered) {
         if (s.passive()) return fail(56);                                   // SPELL_FAILED_NOT_KNOWN (no casting a passive)
         if (e.castSpell) return fail(97);                                   // SPELL_FAILED_SPELL_IN_PROGRESS
@@ -530,6 +552,9 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
         case E_INTERRUPT:
             for (Entity* x : ts) if (x->castSpell && x != &c) cancelCast(*x, 35, now);
             break;
+        case E_LEARN_SPELL:   // SPELL_EFFECT_LEARN_SPELL: the session puts it in the book (SMSG_LEARNED_SPELL)
+            for (Entity* x : ts) if (x->self && e.trigger) emit(SimEvent::Message, x->guid, x->guid, e.trigger, 2);
+            break;
         case E_DISPEL:   // one magic aura: a harmful one from a friend, a helpful one from an enemy
             for (Entity* x : ts) {
                 const bool friendT = !canAttack(c, *x);
@@ -608,7 +633,7 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
         case A_SHAPESHIFT:   // a stance / form: the others go
             for (int i = t.auraCount - 1; i >= 0; --i)
                 if (t.auras[i].type == A_SHAPESHIFT && t.auras[i].spell != s.id) removeAura(t, i);
-            t.form = (uint8_t)e.misc;
+            enterForm(t, (uint8_t)e.misc, now);
             break;
         case 77:   // SPELL_AURA_MECHANIC_IMMUNITY: what has that mechanic goes
             for (int i = t.auraCount - 1; i >= 0; --i) {
@@ -650,7 +675,7 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
     }
     if (!positive && t.objType == 3 && !t.victim && canAttack(t, c)) { t.victim = t.target = c.guid; addThreat(t, c.guid, 1); }
     addAura(t, a);
-    if (t.self && e.aura == 29) recomputeGear();   // SPELL_AURA_MOD_STAT: health, mana, attack power again
+    if (t.self && (e.aura == 29 || e.aura == 34 || e.aura == 142)) recomputeGear();   // stats, health, armour %: again
 }
 
 // ---------------------------------------------------------------- the class scripts CMaNGOS has for these
@@ -765,6 +790,92 @@ void World::tickAreas(uint32_t now) {
             if (!c->used) return;
         }
     }
+}
+
+// ---------------------------------------------------------------- forms (CMaNGOS Aura::HandleAuraModShapeshift,
+// HandleShapeshiftBoosts, Player::InitDataForForm)
+namespace {
+bool allianceRace(uint8_t r) { return r == 1 || r == 3 || r == 4 || r == 7; }
+void formBoosts(uint8_t form, uint32_t out[2]) {
+    out[0] = out[1] = 0;
+    switch (form) {
+        case 1: out[0] = 3025; break;                    // cat
+        case 2: out[0] = 5420; break;                    // tree
+        case 3: out[0] = 5419; break;                    // travel
+        case 4: out[0] = 5421; break;                    // aquatic
+        case 5: out[0] = 1178; out[1] = 21178; break;    // bear
+        case 8: out[0] = 9635; out[1] = 21178; break;    // dire bear
+        case 17: out[0] = 21156; break;                  // battle stance
+        case 18: out[0] = 7376; break;                   // defensive stance
+        case 19: out[0] = 7381; break;                   // berserker stance
+        case 31: out[0] = 24905; break;                  // moonkin
+        default: break;
+    }
+}
+}  // namespace
+
+void World::enterForm(Entity& t, uint8_t form, uint32_t now) {
+    const uint8_t race = t.self ? profiles_[0].race : 1;
+    const bool ally = allianceRace(race);
+    uint32_t display = 0;
+    uint8_t power = 0xFF;   // the form's power (0xFF: the class's own)
+    switch (form) {
+        case 1: display = ally ? 892 : 8571; power = 3; break;
+        case 2: display = 864; break;
+        case 3: display = 632; break;
+        case 4: display = 2428; break;
+        case 5: case 8: display = ally ? 2281 : 2289; power = 1; break;
+        case 16: display = 4613; break;
+        case 31: display = ally ? 15374 : 15375; break;
+        case 17: case 18: case 19: power = 1; break;
+        default: break;
+    }
+    // a shifted form shakes off roots and snares (those with a mechanic)
+    if (form == 1 || form == 2 || form == 3 || form == 4 || form == 5 || form == 8 || form == 31 || form == 16) {
+        for (int i = t.auraCount - 1; i >= 0; --i) {
+            if (t.auras[i].type != A_ROOT && t.auras[i].type != A_DEC_SPEED) continue;
+            const SpellX* o = data_ ? data_->sx(t.auras[i].spell) : nullptr;
+            const uint32_t m = o ? (o->eff[t.auras[i].effIndex].mechanic ? o->eff[t.auras[i].effIndex].mechanic : o->mechanic) : 0;
+            if (form != 16 && m) removeAura(t, i);
+        }
+        if (form != 16) t.rootUntilMs = 0;
+    }
+    t.form = form;
+    t.formDisplay = display;
+    if (power != 0xFF && power != t.powerType) {   // energy / rage from nothing
+        if (!t.formPower) { t.savedPowerType = t.powerType; t.savedPower = t.power; t.savedMaxPower = t.maxPower; t.formPower = true; }
+        t.powerType = power;
+        t.maxPower = 100;
+        t.power = 0;
+    } else if (form == 17 || form == 18 || form == 19) {
+        t.power = 0;   // a stance change keeps no rage (no Tactical Mastery)
+    } else if (form == 1 || form == 5 || form == 8) {
+        t.power = 0;
+    }
+    emit(SimEvent::PowerChanged, t.guid, 0, 0, t.power);
+    uint32_t boost[2];
+    formBoosts(form, boost);
+    for (uint32_t b : boost)
+        if (const SpellX* bs = b && data_ ? data_->sx(b) : nullptr)
+            for (int k = 0; k < 3; ++k)
+                if (bs->eff[k].effect == E_APPLY_AURA) applyAuraX(t, t, *bs, k, now, 0);
+    if (t.self) recomputeGear();
+}
+
+void World::leaveForm(Entity& t, uint8_t form) {
+    uint32_t boost[2];
+    formBoosts(form, boost);
+    t.form = 0;
+    t.formDisplay = 0;
+    for (uint32_t b : boost) if (b) removeAuraSpell(t, b);
+    if (t.formPower) {
+        t.powerType = t.savedPowerType;
+        t.power = t.savedPower;
+        t.maxPower = t.savedMaxPower;
+        t.formPower = false;
+        emit(SimEvent::PowerChanged, t.guid, 0, 0, t.power);
+    }
+    if (t.self) recomputeGear();
 }
 
 // ---------------------------------------------------------------- facing, combat, stealth

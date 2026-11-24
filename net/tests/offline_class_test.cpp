@@ -10,6 +10,8 @@
 //     Slice and Dice longer with more points, Eviscerate, no Stealth in combat, Vanish
 //   - a Dwarf Priest: spells outside Shadowform, Power Word: Shield + Weakened Soul, Inner Fire's charges
 //   - a Human Paladin: Seal of Righteousness + Judgement, Divine Protection + Forbearance (no Blessing of Protection then)
+//   - a Night Elf Druid: Bear Form / Cat Form (model, power, swing, armour; on the client too), Maul, no Moonfire as a bear,
+//     the mana back after; a learning reward spell
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -475,6 +477,84 @@ int main(int argc, char** argv) {
         w.tryCast(*p, 1022, p->guid, now);
         run(200);
         CHECK(!w.hasAura(*p, 1022), "no Blessing of Protection under Forbearance");
+    }
+    session.leaveWorld();
+
+    // ---- the druid: Bear Form (model, rage, 2.5 s paws, armour), Maul only in it, Moonfire not; Cat Form (energy,
+    // 1.0 s), out of it the mana back; a quest's learning spell teaches
+    CHECK(session.deleteCharacter(rogueGuid) == w3n::CHAR_DELETE_SUCCESS, "the rogue leaves room");
+    w3n::CharCreateInfo dru; dru.name = "Malfurion"; dru.race = 4; dru.cls = 11;
+    CHECK(session.createCharacter(dru) == w3n::CHAR_CREATE_SUCCESS, "a night elf druid");
+    uint64_t druidGuid = 0;
+    for (const auto& c : session.characters()) if (c.name == "Malfurion") druidGuid = c.guid;
+    play(druidGuid);
+    run(800);
+    p = w.player();
+    p->level = 20;
+    w.recomputeGearPublic();
+    off::CharacterProfile& dp = w.playerProfile();
+    for (uint32_t s : {5487u, 6807u, 8921u, 768u})
+        if (std::find(dp.book.begin(), dp.book.end(), s) == dp.book.end()) dp.book.push_back(s);
+    const int32_t mana0 = p->power;
+    const uint32_t armor0 = p->armor, swing0 = p->attackMs;
+    p->power = (int32_t)p->maxPower;
+    const int32_t manaFull = p->power;
+    (void)mana0;
+    w.tryCast(*p, 5487, p->guid, now);
+    run(300);
+    const int32_t manaKept = p->savedPower;
+    std::printf("bear: form %u display %u power %u/%d swing %u armour %u -> %u, hp %u\n", p->form, p->formDisplay, p->powerType,
+                p->power, p->attackMs, armor0, p->armor, p->maxHp);
+    CHECK(p->form == 5 && p->formDisplay == 2281 && p->powerType == 1 && p->attackMs == 2500, "Bear Form: model 2281, rage, 2.5 s");
+    CHECK(p->armor > armor0 && p->dmgMax > 20, "a bear's armour and paws (%u, %u-%u)", p->armor, p->dmgMin, p->dmgMax);
+    {
+        const w3n::WorldObject* me = gs.selfObject();
+        CHECK(me && me->displayId() == 2281 && ((me->field(w3n::UF::UNIT_BYTES_0) >> 24) & 0xFF) == 1, "the client sees the bear and its rage");
+    }
+    off::Entity* dm = nearestHostile(p->x, p->y, 300);
+    CHECK(dm != nullptr, "something for the druid");
+    if (dm) {
+        dm->maxHp = dm->hp = 3000;
+        stand(dm, 2.0f);
+        p->power = 50; p->gcdEndMs = 0;
+        int32_t h = dm->hp;
+        w.tryCast(*p, 6807, dm->guid, now);   // Maul: on the next swing
+        w.startAttack(*p, dm->guid, now);
+        run(3000);
+        CHECK(dm->hp < h, "the bear mauls (%d)", h - dm->hp);
+        w.stopAttack(*p, now);
+        p->gcdEndMs = 0;
+        h = dm->hp;
+        w.tryCast(*p, 8921, dm->guid, now);
+        run(300);
+        CHECK(!w.hasAura(*dm, 8921), "no Moonfire as a bear");
+    }
+    p->gcdEndMs = 0;
+    w.tryCast(*p, 768, p->guid, now);   // (as the client's form button: the first press leaves the bear)
+    run(300);
+    CHECK(p->form == 0 && p->powerType == 0, "the cat button out of the bear: herself (form %u)", p->form);
+    p->gcdEndMs = 0;
+    w.tryCast(*p, 768, p->guid, now);
+    run(300);
+    CHECK(p->form == 1 && p->formDisplay == 892 && p->powerType == 3 && p->attackMs == 1000 && !w.hasAura(*p, 5487),
+          "Cat Form: model 892, energy, 1.0 s, the bear gone (form %u display %u power %u swing %u bear %d)", p->form, p->formDisplay, p->powerType, p->attackMs, w.hasAura(*p, 5487));
+    w.removeAuraSpell(*p, 768);
+    run(300);
+    CHECK(p->form == 0 && p->formDisplay == 0 && p->powerType == 0 && p->power >= manaKept - (manaFull - manaKept) - 1 &&
+          p->power < manaFull && p->attackMs == swing0, "herself again: mana %d (%d kept in the bear, %d full)", p->power, manaKept, manaFull);
+    {
+        const w3n::WorldObject* me = gs.selfObject();
+        CHECK(me && me->displayId() == me->field(w3n::UF::UNIT_NATIVEDISPLAYID), "the client sees the night elf again");
+    }
+    {   // a quest's reward spell that teaches (CMaNGOS RewardQuest -> SPELL_EFFECT_LEARN_SPELL)
+        uint32_t teach = 0, learn = 0;
+        for (const auto& [entry, t] : data.trainers)
+            for (const off::TrainerSpell& ts : t.spells)
+                if (!teach && ts.teach != ts.learn && t.cls == 11 &&
+                    std::find(dp.book.begin(), dp.book.end(), ts.learn) == dp.book.end()) { teach = ts.teach; learn = ts.learn; }
+        w.rewardSpell(*p, teach, now);
+        run(200);
+        CHECK(teach && std::find(dp.book.begin(), dp.book.end(), learn) != dp.book.end(), "a learning spell taught %u", learn);
     }
     session.leaveWorld();
     off::OfflineSaveData sd;

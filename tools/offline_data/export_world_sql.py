@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -697,6 +697,16 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
     # what CMaNGOS casts along with them (Spell::prepare "precast" spells): Weakened Soul after Power Word: Shield,
     # Forbearance after the paladin's invulnerabilities, Recently Bandaged
     want.update(x for x in (6788, 25771, 11196) if x in spells)
+    # what quests teach or cast (quest_template RewSpell / RewSpellCast: Bear Form, Aquatic Form, the totems...)
+    for q in newest_patch(tables.get("quest_template", []), ("entry",)).values():
+        for k in ("RewSpellCast", "RewSpell"):
+            sp = int(num(g(q, k)))
+            if sp in spells:
+                want.add(sp)
+                if teaches(sp) in spells:
+                    want.add(teaches(sp))
+    # the passive boosts a form brings (CMaNGOS Aura::HandleShapeshiftBoosts)
+    want.update(x for x in (3025, 5420, 5419, 5421, 1178, 9635, 21178, 21156, 7376, 7381, 24905) if x in spells)
     for _pass in range(2):   # (twice: a judgement found in a seal triggers spells too)
         # what they trigger (and what that triggers)
         for _ in range(3):
@@ -1360,6 +1370,14 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         for c in q["go_enders"]:
             qb.u32(c)
     sec["QST2"] = qb.b
+    qs = Bin()   # WoWVita "QSPL": the spell a quest shows (RewSpell) and casts (RewSpellCast, else RewSpell)
+    rows = [(q["id"], int(num(g(quests_db[q["id"]], "RewSpell"))), int(num(g(quests_db[q["id"]], "RewSpellCast"))))
+            for q in quests if q["id"] in quests_db]
+    rows = [r for r in rows if r[1] or r[2]]
+    qs.u32(len(rows))
+    for qid, rs, rc in rows:
+        qs.u32(qid); qs.u32(rs); qs.u32(rc)
+    sec["QSPL"] = qs.b
 
     lq = Bin()   # "QLOT": quest drops per loot table, rolled only while a quest wants the item
     lq.u32(len(qloot))

@@ -171,6 +171,8 @@ uint32_t wirePower(const Entity& e) {
     return (uint32_t)std::max<int32_t>(0, e.powerType == 1 ? e.power * 10 : e.power);
 }
 
+uint32_t wireMaxPower(const Entity& e) { return e.powerType == 1 ? e.maxPower * 10 : e.maxPower; }   // (rage in tenths too)
+
 uint32_t nativeDisplay(uint8_t race, uint8_t gender) {
     switch (race) {
         case 1: return 49u + gender;   // human
@@ -227,7 +229,7 @@ void addCreatureCreate(UpdateBuilder& u, const Entity& ent) {
     f.set(UF::UNIT_FACTIONTEMPLATE, e->faction);
     f.set(UF::UNIT_BYTES_0, 0u | (1u << 8) | (0u << 16) | ((uint32_t)e->powerType << 24));
     f.set(UF::UNIT_POWER1 + e->powerType, wirePower(*e));
-    f.set(UF::UNIT_MAXPOWER1 + e->powerType, e->maxPower);
+    f.set(UF::UNIT_MAXPOWER1 + e->powerType, wireMaxPower(*e));
     f.set(UF::UNIT_DISPLAYID, (uint32_t)e->displayId);
     f.set(UF::UNIT_NATIVEDISPLAYID, (uint32_t)e->displayId);
     f.set(UF::UNIT_NPC_FLAGS, e->npcFlags);
@@ -630,7 +632,7 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, p->hp));
     f.set(UF::UNIT_MAXHEALTH, p->maxHp);
     f.set(UF::UNIT_POWER1 + p->powerType, wirePower(*p));
-    f.set(UF::UNIT_MAXPOWER1 + p->powerType, p->maxPower);
+    f.set(UF::UNIT_MAXPOWER1 + p->powerType, wireMaxPower(*p));
     f.set(UF::UNIT_LEVEL, p->level);
     f.set(UF::PLAYER_XP, p->levelXp);
     f.set(UF::PLAYER_NEXT_LEVEL_XP, p->nextLevelXp);
@@ -638,7 +640,12 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_FLAGS, (ghost_ ? 0x10u : 0u) | (resting_ ? 0x20u : 0u));   // WoWVita: resting (an inn, a capital)
     f.set(UF::UNIT_FLAGS, (flight_.active ? 0x00100004u : 0u) | (ccStun_ ? 0x00040000u : 0u));   // WoWVita: TAXI_FLIGHT | DISABLE_MOVE, STUNNED
     f.set(UF::UNIT_MOUNTDISPLAYID, flight_.active ? flight_.mount : 0u);       // the gryphon
-    f.set(UF::UNIT_BYTES_1, eat_.active ? 1u : 0u);                            // WoWVita: sitting while eating (stand state 1)
+    f.set(UF::UNIT_BYTES_1, (eat_.active ? 1u : 0u) | ((uint32_t)p->form << 16));   // WoWVita: sitting while eating; the form
+    {   // WoWVita: a form's model and power (CMaNGOS SetDisplayId / SetPowerType)
+        const CharacterProfile& pr = world_.playerProfile();
+        f.set(UF::UNIT_BYTES_0, (uint32_t)pr.race | ((uint32_t)pr.cls << 8) | ((uint32_t)pr.gender << 16) | ((uint32_t)p->powerType << 24));
+        f.set(UF::UNIT_DISPLAYID, p->formDisplay ? p->formDisplay : nativeDisplay(pr.race, pr.gender));
+    }
     {   // WoWVita: rested experience
         const CharacterProfile& pr = world_.playerProfile();
         restSent_ = (uint32_t)pr.restBonus;
@@ -1306,7 +1313,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         f.set(UF::UNIT_BYTES_0, (uint32_t)pr.race | ((uint32_t)pr.cls << 8) | ((uint32_t)pr.gender << 16) |
                                       ((uint32_t)pr.powerType << 24));
         f.set(UF::UNIT_POWER1 + pr.powerType, wirePower(*p));
-        f.set(UF::UNIT_MAXPOWER1 + pr.powerType, p->maxPower);
+        f.set(UF::UNIT_MAXPOWER1 + pr.powerType, wireMaxPower(*p));
         f.set(UF::UNIT_DISPLAYID, nativeDisplay(pr.race, pr.gender));
         f.set(UF::UNIT_NATIVEDISPLAYID, nativeDisplay(pr.race, pr.gender));
         f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
@@ -1337,7 +1344,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         f.set(UF::UNIT_BYTES_0, (uint32_t)pr.race | ((uint32_t)pr.cls << 8) | ((uint32_t)pr.gender << 16) |
                                       ((uint32_t)pr.powerType << 24));
         f.set(UF::UNIT_POWER1 + pr.powerType, wirePower(*b));
-        f.set(UF::UNIT_MAXPOWER1 + pr.powerType, b->maxPower);
+        f.set(UF::UNIT_MAXPOWER1 + pr.powerType, wireMaxPower(*b));
         f.set(UF::UNIT_DISPLAYID, nativeDisplay(pr.race, pr.gender));
         f.set(UF::UNIT_NATIVEDISPLAYID, nativeDisplay(pr.race, pr.gender));
         f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
@@ -1874,6 +1881,7 @@ void OfflineSession::dispatchEvents(uint32_t nowMs) {
             case SimEvent::Message:
                 if (e.text[0]) sendChat(0x0A, 0, std::string((const char*)e.text));
                 else if (e.value == 1 && e.spell && a && a->self) sendCharge(*a, nowMs);   // WoWVita: Charge
+                else if (e.value == 2 && e.spell && a && a->self) learn(e.spell, nowMs);   // a learning spell
                 break;
             case SimEvent::CreatureText: {   // WoWVita: EventAI says, yells or emotes (broadcast_text)
                 const Entity* me = world_.player();
@@ -1940,6 +1948,12 @@ void OfflineSession::syncControl(uint32_t nowMs) {   // WoWVita
         send(0x0E2, w.b);                   // SMSG_FORCE_RUN_SPEED_CHANGE
     }
     if (stun != ccStun_) { ccStun_ = stun; sendSelfFields(); }
+    // WoWVita: a form taken or left (model, power bar)
+    if (p->form != netForm_ || p->powerType != netPowerType_) {
+        netForm_ = p->form;
+        netPowerType_ = p->powerType;
+        sendSelfFields();
+    }
     // WoWVita: combo points (rogue, druid in cat form) on the target frame
     if (p->comboPoints != netCombo_ || p->comboTarget != netComboTarget_) {
         netCombo_ = p->comboPoints;

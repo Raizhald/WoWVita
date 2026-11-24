@@ -189,6 +189,7 @@ struct QuestFull {
     uint32_t races = 0, classes = 0, zoneOrSort = 0, type = 0, flags = 0, special = 0;
     int32_t prev = 0;                  // PrevQuestId: > 0 must have been rewarded, < 0 must be in the log
     uint32_t nextInChain = 0, srcItem = 0;
+    uint32_t rewSpell = 0, rewSpellCast = 0;   // WoWVita "QSPL": the spell shown / cast at the reward (CMaNGOS RewardQuest)
     uint8_t srcCount = 1;
     int32_t money = 0;                 // RewOrReqMoney (< 0: the quest costs that much)
     uint32_t moneyMaxLevel = 0;        // RewMoneyMaxLevel: the experience is derived from it (Quest::XPValue)
@@ -515,6 +516,12 @@ struct Entity {
     }
     // WoWVita: the class spell engine (offline_spells.cpp)
     uint8_t form = 0;                          // shapeshift form / stance (SPELL_AURA_MOD_SHAPESHIFT misc)
+    uint32_t formDisplay = 0;                  // WoWVita: the form's model (0: one's own)
+    bool formPower = false;                    // energy / rage of a form; the class's own power kept aside
+    uint32_t baseMana = 0;                     // a player's create mana at its level (player_classlevelstats)
+    uint8_t savedPowerType = 0;
+    int32_t savedPower = 0;
+    uint32_t savedMaxPower = 0;
     int32_t statStr = 0, statAgi = 0, statSta = 0, statInt = 0, statSpi = 0, attackPower = 0;   // the player's (PLST + gear)
     uint32_t lastManaSpendMs = 0;              // the five-second rule
     uint8_t comboPoints = 0;
@@ -718,6 +725,8 @@ public:
     uint32_t removePlayerItem(uint32_t entry, uint32_t count);   // how many were removed
     void syncPlayerMoney() { if (player_) profiles_[0].money = player_->money; }
     void recomputeGear();   // weapon damage / speed and armour from what is worn
+    void enterForm(Entity& e, uint8_t form, uint32_t nowMs);   // CMaNGOS HandleAuraModShapeshift / ShapeshiftBoosts
+    void leaveForm(Entity& e, uint8_t form);
     void addMoneyToPlayer(uint32_t copper, uint32_t nowMs);
     void addXp(Entity& e, uint32_t xp, uint32_t nowMs, uint64_t victim = 0, bool silent = false);   // WoWVita: a kill (victim) uses the rested bonus
     // Player resurrection (corpse reclaim / spirit healer): clears combat and restores a share of HP.
@@ -799,7 +808,8 @@ private:
     void procAuras(Entity& owner, Entity& other, uint32_t procFlag, uint32_t nowMs);
     bool scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t nowMs);
 public:
-    void interruptAuras(Entity& e, uint32_t flags);   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
+    void interruptAuras(Entity& e, uint32_t flags);
+    void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);   // a quest's reward spell (a learning one teaches)   // AURA_INTERRUPT_FLAG_*: what an action ends (stealth, polymorph)
 private:
     int32_t absorb(Entity& dst, int32_t dmg, uint8_t school);
     void endChannel(Entity& e, uint32_t nowMs);

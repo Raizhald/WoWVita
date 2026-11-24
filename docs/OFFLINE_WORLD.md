@@ -125,7 +125,13 @@ sees it (30 + 5 a viewer level - the stealth's strength, x 0.3 yd, only in front
 checks, combo points by SPELL_ATTR_EX_REQ_COMBO_POINTS, stretching durations, shown on the target frame
 (PLAYER_FIELD_COMBO_TARGET / PLAYER_FIELD_BYTES). Forms as CMaNGOS GetErrorAtShapeshiftedCast has them (stances,
 Shadowform and Stealth count as no form). Precast spells (Weakened Soul, Forbearance: the pack carries them), Judgement
-casts the judgement its seal holds and ends the seal, charges of auras (Inner Fire).
+casts the judgement its seal holds and ends the seal, charges of auras (Inner Fire). Forms (CMaNGOS HandleAuraModShapeshift /
+HandleShapeshiftBoosts / InitDataForForm): the form's model (UNIT_FIELD_DISPLAYID; cat 892/8571, bear 2281/2289,
+travel 632, aquatic 2428, ghost wolf 4613), energy or rage from 0 with the class's mana kept aside, cat 1.0 s and
+bear 2.5 s paws of level x 0.85..1.25 x speed, druid attack power level x 3 + str x 2 - 20 (+ agility in cat), the
+boosts (1178, 21178, 3025...), roots and snares shaken off; a stance change keeps no rage; a form button while
+shifted cancels the form as the 1.12 client does. Quest reward spells ("QSPL": RewSpell shown, RewSpellCast or
+RewSpell cast; SPELL_EFFECT_LEARN_SPELL teaches). Mana cost percentages of the base mana.
 Not yet: pets, totems, talents, poisons (weapon enchantments), pick pocketing, Distract, more single-spell scripts,
 spell power.
 

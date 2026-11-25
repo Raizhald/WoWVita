@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -1538,6 +1538,38 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         cb.u8(t["ctype"]); cb.u32(t["npc"]); cb.f32(t["scale"]); cb.f32(t["speed"]); cb.f32(t["aggro"])
         cb.f32(t["reach"]); cb.f32(t["bound"]); cb.u32(t["loot"]); cb.u8(0)
     sec["CREA"] = cb.b
+
+    # ---- WoWVita "CLVL": a creature's health, mana and armor for each level it may have (CMaNGOS Creature::SelectLevel:
+    # a random level MinLevel..MaxLevel at every spawn; creature_template_classlevelstats by UnitClass and level x the
+    # multipliers when they are >= 0, else the old fields: health / mana between Min- and MaxLevel*, Armor)
+    ccls = {(int(num(g(r, "Class"))), int(num(g(r, "Level")))): r for r in tables.get("creature_template_classlevelstats", [])}
+    lb_ = Bin()
+    lvl_rows = []
+    for t in crea:
+        src = templates[t["entry"]]
+        mn, mx = t["mn"], max(t["mn"], t["mx"])
+        if mx - mn > 63:
+            mx = mn + 63
+        ucls = int(num(g(src, "UnitClass", default=1))) or 1
+        hm, pm, am = (num(g(src, k, default=1.0)) for k in ("HealthMultiplier", "PowerMultiplier", "ArmorMultiplier"))
+        h0, h1 = sorted((int(num(g(src, "MinLevelHealth"))), int(num(g(src, "MaxLevelHealth")))))
+        m0, m1 = sorted((int(num(g(src, "MinLevelMana"))), int(num(g(src, "MaxLevelMana")))))
+        levels = []
+        for lv in range(mn, mx + 1):
+            rel = 0.0 if mx == mn else (lv - mn) / (mx - mn)
+            c = ccls.get((ucls, lv))
+            hp = int(round(num(g(c, "BaseHealthExp0")) * (hm if hm > 0 else 1))) if c and hm >= 0 else int(h0 + rel * (h1 - h0))
+            mana = int(round(num(g(c, "BaseMana")) * (pm if pm > 0 else 1))) if c and pm >= 0 else int(m0 + rel * (m1 - m0))
+            armor = int(round(num(g(c, "BaseArmor")) * am)) if c and am >= 0 else int(num(g(src, "Armor")))
+            levels.append((max(1, hp), max(0, mana), max(0, armor)))
+        lvl_rows.append((t["entry"], mn, levels))
+    lb_.u32(len(lvl_rows))
+    for entry, mn, levels in lvl_rows:
+        lb_.u32(entry); lb_.u16(mn); lb_.u8(len(levels))
+        for hp, mana, armor in levels:
+            lb_.u32(hp); lb_.u32(mana); lb_.u32(armor)
+    sec["CLVL"] = lb_.b
+    report["counts_creature_levels"] = sum(len(l) for _, _, l in lvl_rows)
 
     sp = Bin()
     sp.u32(len(spawn_rows))

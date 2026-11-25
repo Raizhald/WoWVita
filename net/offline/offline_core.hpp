@@ -388,6 +388,9 @@ struct WorldData {
     std::unordered_map<uint32_t, TotemTemplate> totems;               // "TOTM": creature entry -> the totem
     struct StartPos { uint32_t zone = 0; float x = 0, y = 0, z = 0, o = 0; };
     std::unordered_map<uint32_t, StartPos> starts;                    // "STRT": race | class << 8 -> playercreateinfo
+    struct LevelStats { uint32_t hp = 1, mana = 0, armor = 0; };
+    struct CreatureLevels { uint16_t minLevel = 1; std::vector<LevelStats> levels; };
+    std::unordered_map<uint32_t, CreatureLevels> creatureLevels;      // "CLVL": entry -> stats per level (SelectLevel)
     std::unordered_map<uint32_t, std::vector<EventSummon>> eventSummons;   // "EVSC": event id -> what it summons
     std::unordered_map<uint32_t, ItemUse> itemUse;                    // "IUSE": item entry -> its use spell
     std::unordered_map<uint32_t, PetFamily> families;                 // "FAMI"
@@ -908,6 +911,7 @@ public:
     bool feedPet(Entity& owner, uint32_t itemEntry, uint32_t nowMs);   // SPELL_EFFECT_FEED_PET
     void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);
     Entity* summonCreature(uint32_t entry, float x, float y, float z, float o, uint32_t despawnMs, uint64_t summoner, uint32_t nowMs);
+    void selectLevel(Entity& e, const CreatureTemplate& t);   // WoWVita: Creature::SelectLevel
     // WoWVita: totems (offline_totem.cpp - CMaNGOS Spell::EffectSummonTotem, Totem, TotemAI, AreaAura)
     Entity* summonTotem(Entity& owner, const SpellX& s, int k, uint32_t nowMs);
     void unsummonTotem(Entity& totem);

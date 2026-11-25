@@ -430,6 +430,27 @@ int main(int argc, char** argv) {
         }
     }
 
+    // N. Creature::SelectLevel: a random level MinLevel..MaxLevel at each spawn, the health / armor of that level
+    {
+        const CreatureTemplate* kv = data.creature(6);   // Kobold Vermin, 1-2: 42 / 55 health (classlevelstats warrior)
+        CHECK(kv && kv->minLevel == 1 && kv->maxLevel == 2 && data.creatureLevels.count(6), "Kobold Vermin 1-2 with stats per level");
+        if (kv) {
+            int seen[3] = {0, 0, 0};
+            bool statsOk = true;
+            for (int i = 0; i < 40; ++i) {
+                Entity* e = w.summonCreature(6, -8900, -100, 82, 0, 1000, 0, now);
+                if (!e) continue;
+                if (e->level >= 1 && e->level <= 2) ++seen[e->level];
+                const uint32_t want = e->level == 1 ? 42u : 55u;
+                if (e->maxHp != want || e->hp != (int32_t)want) statsOk = false;
+                *e = Entity();
+            }
+            std::printf("kobold vermin levels: 1 x%d, 2 x%d\n", seen[1], seen[2]);
+            CHECK(seen[1] > 5 && seen[2] > 5 && seen[1] + seen[2] == 40, "both levels occur");
+            CHECK(statsOk, "health of its level (42 / 55)");
+        }
+    }
+
     std::printf("OFFLINE CREATURES: %d checks, %d failed -> %s\n", checks, failed, failed ? "FAIL" : "PASS");
     return failed ? 1 : 0;
 }

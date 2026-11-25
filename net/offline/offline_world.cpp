@@ -182,6 +182,29 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
     applyGround(*player_);
 }
 
+// WoWVita: CMaNGOS Creature::SelectLevel - a level between MinLevel and MaxLevel at every spawn and respawn, the
+// health, mana and armor of that level ("CLVL": creature_template_classlevelstats x the template's multipliers)
+void World::selectLevel(Entity& e, const CreatureTemplate& t) {
+    const uint16_t mn = std::max<uint16_t>(1, t.minLevel), mx = std::max<uint16_t>(mn, t.maxLevel);
+    auto it = data_ ? data_->creatureLevels.find(t.entry) : decltype(data_->creatureLevels.end()){};
+    const WorldData::CreatureLevels* cl = data_ && it != data_->creatureLevels.end() ? &it->second : nullptr;
+    uint16_t level = mn == mx ? mn : (uint16_t)rng_.range(mn, mx);
+    if (cl && !cl->levels.empty()) {
+        level = std::min<uint16_t>(level, (uint16_t)(cl->minLevel + cl->levels.size() - 1));
+        const WorldData::LevelStats& s = cl->levels[std::max<int>(0, level - cl->minLevel)];
+        e.maxHp = s.hp;
+        e.maxPower = e.powerType == 0 ? s.mana : t.power;
+        e.armor = s.armor;
+    } else {
+        e.maxHp = t.hp;
+        e.maxPower = t.power;
+        e.armor = t.armor;
+    }
+    e.level = (uint8_t)level;
+    e.hp = (int32_t)e.maxHp;
+    e.power = (int32_t)e.maxPower;
+}
+
 void World::spawnCreature(const Spawn& s, uint32_t nowMs, int index) {
     const CreatureTemplate* t = data_ ? data_->creature(s.entry) : nullptr;
     if (!t) return;
@@ -191,12 +214,8 @@ void World::spawnCreature(const Spawn& s, uint32_t nowMs, int index) {
     if (!e.used) return;
     e.objType = 3;
     e.entry = t->entry;
-    e.level = (uint8_t)std::max<uint16_t>(1, t->minLevel);
-    e.hp = (int32_t)t->hp;
-    e.maxHp = t->hp;
     e.powerType = t->powerType;
-    e.power = (int32_t)t->power;
-    e.maxPower = t->power;
+    selectLevel(e, *t);
     e.faction = t->faction;
     e.displayId = t->displayId;
     e.rank = t->rank;
@@ -209,7 +228,6 @@ void World::spawnCreature(const Spawn& s, uint32_t nowMs, int index) {
     e.dmgMin = t->dmgMin;
     e.dmgMax = t->dmgMax;
     e.attackMs = t->attackMs;
-    e.armor = t->armor;
     e.x = s.x; e.y = s.y; e.z = s.z; e.o = s.o;
     e.homeX = s.x; e.homeY = s.y; e.homeZ = s.z; e.homeO = s.o;
     e.respawnAtMs = 0;
@@ -233,12 +251,8 @@ Entity* World::summonCreature(uint32_t entry, float x, float y, float z, float o
     if (!e.used) return nullptr;
     e.objType = 3;
     e.entry = t->entry;
-    e.level = (uint8_t)std::max<uint16_t>(1, t->minLevel);
-    e.hp = (int32_t)t->hp;
-    e.maxHp = t->hp;
     e.powerType = t->powerType;
-    e.power = (int32_t)t->power;
-    e.maxPower = t->power;
+    selectLevel(e, *t);
     e.faction = t->faction;
     e.displayId = t->displayId;
     e.rank = t->rank;
@@ -251,7 +265,6 @@ Entity* World::summonCreature(uint32_t entry, float x, float y, float z, float o
     e.dmgMin = t->dmgMin;
     e.dmgMax = t->dmgMax;
     e.attackMs = t->attackMs;
-    e.armor = t->armor;
     e.x = x; e.y = y; e.z = z; e.o = o;
     e.homeX = x; e.homeY = y; e.homeZ = z; e.homeO = o;
     e.spellCount = std::min<uint8_t>(t->abilityCount, (uint8_t)e.spells.size());
@@ -991,6 +1004,8 @@ void World::onDeath(Entity& e, Entity& killer, uint32_t nowMs) {
 void World::respawn(Entity& e, uint32_t nowMs) {
     (void)nowMs;
     e.dead = false;
+    if (e.objType == 3 && !e.bot && data_)   // (Creature::Respawn -> UpdateEntry -> SelectLevel: maybe another level)
+        if (const CreatureTemplate* t = data_->creature(e.entry)) selectLevel(e, *t);
     e.hp = (int32_t)e.maxHp;
     e.power = (int32_t)e.maxPower;
     e.auraCount = 0;

@@ -589,6 +589,25 @@ bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
     return !b.bad;
 }
 
+bool readCreatureLevels(Bin& b, WorldData& w) {   // WoWVita "CLVL"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 100000) return false;
+    w.creatureLevels.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t entry = b.u32();
+        WorldData::CreatureLevels c;
+        c.minLevel = b.u16();
+        const uint8_t nl = b.u8();
+        for (uint8_t k = 0; k < nl && !b.bad; ++k) {
+            WorldData::LevelStats s;
+            s.hp = b.u32(); s.mana = b.u32(); s.armor = b.u32();
+            c.levels.push_back(s);
+        }
+        if (!b.bad) w.creatureLevels[entry] = std::move(c);
+    }
+    return !b.bad;
+}
+
 bool readStarts(Bin& b, WorldData& w) {   // WoWVita "STRT"
     const uint32_t n = b.u32();
     if (b.bad || n > 4096) return false;
@@ -1046,6 +1065,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("FOOD"): ok = readFoods(b, out); break;
             case fourcc("TOTM"): ok = readTotems(b, out); break;
             case fourcc("STRT"): ok = readStarts(b, out); break;
+            case fourcc("CLVL"): ok = readCreatureLevels(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

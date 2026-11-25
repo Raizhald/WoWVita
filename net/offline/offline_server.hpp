@@ -30,6 +30,7 @@ namespace offline {
 
 class OfflineSession {
 public:
+    void sendSelfFieldsPublic() { sendSelfFields(); }   // (tests)
     static uint32_t petNextXp(uint32_t level);     // ObjectMgr::GetXPForPetLevel
     using PacketSink = std::function<void(uint16_t opcode, const Bytes& data)>;
 
@@ -125,6 +126,8 @@ private:
     void sendPetSummonField();                                      // the player's UNIT_FIELD_SUMMON
     void sendCharge(const Entity& p, uint32_t nowMs);
     static constexpr uint32_t kGossipTrain = 4;   // "I would like to train."
+    static constexpr uint32_t kGossipUnlearn = 6; // WoWVita: "I wish to unlearn my talents." (GOSSIP_OPTION_UNLEARNTALENTS)
+    bool canResetTalentsAt(uint64_t npc) const;   // Creature::CanTrainAndResetTalentsOf
     void sendCreatureQuery(uint32_t entry);
     void sendPlayerName(uint64_t guid);
     void sendItemQuery(uint32_t entry);

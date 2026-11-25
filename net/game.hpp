@@ -1035,6 +1035,9 @@ public:
     int talentRank(const Talent& t) const;               // ranks learned (from the spell book)
     // CMSG_LEARN_TALENT for the next rank; false + a line when it cannot be learned (points, tier, prerequisite).
     bool learnTalent(uint32_t talentId, uint32_t nowMs);
+    // MSG_TALENT_WIPE_CONFIRM: a class trainer's "I wish to unlearn my talents." asks; the UI confirms (the cost) or not
+    struct TalentWipe { uint64_t npc = 0; uint32_t cost = 0; bool asked = false; } talentWipe;
+    void confirmTalentWipe(bool yes, uint32_t nowMs);
     uint32_t classId() const;                            // UNIT_BYTES_0 byte 1
     // ---- skills (stage 6.19): the skill page - weapon skills, professions, languages ... with their progress
     SkillTable skills;                                   // skills.txt

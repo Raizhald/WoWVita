@@ -696,6 +696,7 @@ void OfflineSession::sendSelfFields() {
     f.set(UF::PLAYER_NEXT_LEVEL_XP, p->nextLevelXp);
     f.set(UF::PLAYER_FIELD_COINAGE, p->money);
     f.set(UF::PLAYER_FLAGS, (ghost_ ? 0x10u : 0u) | (resting_ ? 0x20u : 0u));   // WoWVita: resting (an inn, a capital)
+    f.set(UF::PLAYER_CHARACTER_POINTS1, world_.talentPointsFree());   // WoWVita: free talent points
     f.set(UF::UNIT_FLAGS, (flight_.active ? 0x00100004u : 0u) | (ccStun_ ? 0x00040000u : 0u));   // WoWVita: TAXI_FLIGHT | DISABLE_MOVE, STUNNED
     f.set(UF::UNIT_MOUNTDISPLAYID, flight_.active ? flight_.mount : 0u);       // the gryphon
     f.set(UF::UNIT_BYTES_1, (eat_.active ? 1u : 0u) | ((uint32_t)p->form << 16));   // WoWVita: sitting while eating; the form
@@ -1080,7 +1081,7 @@ void OfflineSession::handleVendor(uint16_t op, const Bytes& data, uint32_t nowMs
             if (op != CMSG_LIST_INVENTORY && lifeHello(npc, near, nowMs)) return;   // WoWVita: a spirit healer
             if (op != CMSG_LIST_INVENTORY && taxiHello(npc, near, false, nowMs)) return;   // WoWVita: a flight master
             if (op != CMSG_LIST_INVENTORY && bankHello(npc, near, nowMs)) return;   // WoWVita: a banker
-            if (op != CMSG_LIST_INVENTORY && questMenu(v->entry, false).empty() && trainerHello(npc, nowMs)) return;   // WoWVita
+            if (op != CMSG_LIST_INVENTORY && questMenu(v->entry, false).empty() && !canResetTalentsAt(npc) && trainerHello(npc, nowMs)) return;   // WoWVita (a trainer of our class from level 10: its menu, "I wish to unlearn my talents.")
             // WoWVita: a quest giver shows its quests (and its goods as a gossip option)
             if (op != CMSG_LIST_INVENTORY && near && questHello(npc, op, isVendor)) return;
             if (!vendorFlag) {   // gossip / quests are not there offline yet: say so instead of silence
@@ -1400,6 +1401,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         f.set(UF::OBJECT_SCALE_X, 0x3F800000u);
         f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, p->hp));
         f.set(UF::UNIT_MAXHEALTH, p->maxHp);
+        f.set(UF::PLAYER_CHARACTER_POINTS1, world_.talentPointsFree());   // WoWVita: free talent points
         f.set(UF::UNIT_LEVEL, p->level);
         f.set(UF::UNIT_FACTIONTEMPLATE, p->faction);
         f.set(UF::UNIT_BYTES_0, (uint32_t)pr.race | ((uint32_t)pr.cls << 8) | ((uint32_t)pr.gender << 16) |

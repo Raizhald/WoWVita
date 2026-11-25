@@ -94,6 +94,7 @@ int main(int argc, char** argv) {
         }
         return best;
     };
+    run(1200);   // (the passive spells - The Human Spirit - are on: the health is set after them)
     p->maxHp = 100000; p->hp = 100000;
     for (uint32_t id : {783u, 7u, 5261u, 33u}) session.testMarkRewarded(id);   // (Northshire's chain up to 3903)
 

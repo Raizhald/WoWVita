@@ -209,7 +209,91 @@ int main(int argc, char** argv) {
         // Shield Block: a charge used by a blocked hit; Evasion-like dodge from an aura
         mob->hp = mob->maxHp;
         w.stopAttack(*p, now);
+        // ---- talents (Player::LearnTalent; the passive ranks as auras; spell modifiers 107 / 108): none before level
+        // 10, then level - 9; the tier rule; Improved Heroic Strike (SPELLMOD_COST -1 rage), Cruelty (+1 % crit)
+        CHECK(data.talents.size() > 300 && data.talentTabs.size() >= 27, "the pack's talents (%zu)", data.talents.size());
+        if (!gs.talents.loaded()) {   // (the client's talents.txt is the converter's; here the same rows from the pack)
+            for (const auto& [tab, cm] : data.talentTabs) { w3n::TalentTree tr; tr.id = tab; tr.classMask = cm; gs.talents.add(tr); }
+            for (const auto& t : data.talents) {
+                w3n::Talent ct; ct.id = t.id; ct.tree = t.tab; ct.row = t.row; ct.col = t.col; ct.reqTalent = t.reqTalent; ct.reqRank = t.reqRank;
+                for (size_t k = 0; k < t.ranks.size() && k < 5; ++k) ct.rankSpell[k] = t.ranks[k];
+                gs.talents.add(ct);
+            }
+        }
+        CHECK(gs.talentPoints() == 0 && w.talentPointsFree() == 0, "no points before level 10");
+        p->level = 20;
+        session.sendSelfFieldsPublic();
+        run(300);
+        CHECK(w.talentPointsFree() == 11 && gs.talentPoints() == 11, "11 points at level 20 (client %u)", gs.talentPoints());
+        CHECK(!gs.learnTalent(126, now) && w.talentPointsFree() == 11, "not the second row without 5 points in Arms");
+        const uint32_t hsCost0 = w.powerCostPublic(*p, 78);
+        CHECK(gs.learnTalent(124, now), "Improved Heroic Strike, rank 1");
+        run(400);
+        CHECK(w.talentPointsFree() == 10 && gs.talentPoints() == 10 && gs.knowsSpell(12282), "learnt: 10 points left, the client knows it");
+        CHECK(w.powerCostPublic(*p, 78) == hsCost0 - 1, "Heroic Strike costs a rage less (%u -> %u)", hsCost0, w.powerCostPublic(*p, 78));
+        CHECK(gs.learnTalent(124, now), "rank 2");
+        run(400);
+        CHECK(gs.knowsSpell(12663) && !gs.knowsSpell(12282) && w.powerCostPublic(*p, 78) == hsCost0 - 2, "rank 2 replaced rank 1 (cost %u)", w.powerCostPublic(*p, 78));
+        const int32_t crit0 = w.meleeCritPublic(*p);
+        CHECK(gs.learnTalent(157, now), "Cruelty");
+        run(1200);
+        CHECK(w.meleeCritPublic(*p) == crit0 + 100, "+1 %% melee crit (%d -> %d)", crit0, w.meleeCritPublic(*p));
+        bool hidden = true;   // (a passive's aura has no slot on the client)
+        for (uint8_t i = 0; i < p->auraCount; ++i) if (p->auras[i].spell == 12320) hidden = hidden && p->auras[i].passive && p->auras[i].slot < 0;
+        CHECK(hidden, "Cruelty is a passive aura, no buff icon");
+        // three more in Arms (Improved Rend x3) open its second row
+        for (int i = 0; i < 3; ++i) { gs.learnTalent(127, now); run(300); }
+        CHECK(gs.learnTalent(126, now), "the second row with 5 points in Arms");
+        run(300);
+        CHECK(w.talentPointsFree() == 4, "4 points left (%u)", w.talentPointsFree());
     }
+    session.leaveWorld();
+    play(warriorGuid);
+    run(1500);
+    p = w.player();
+    p->level = 20;
+    CHECK(w.talentPointsFree() == 4 && w.playerProfile().book.end() != std::find(w.playerProfile().book.begin(), w.playerProfile().book.end(), 12663u),
+          "the talents kept over a relog (%u free)", w.talentPointsFree());
+    {
+        bool cr = false;
+        for (uint8_t i = 0; i < p->auraCount; ++i) cr |= p->auras[i].spell == 12320 && p->auras[i].passive;
+        CHECK(cr, "Cruelty's aura back after the relog");
+    }
+    // the warrior trainer: "I wish to unlearn my talents." (MSG_TALENT_WIPE_CONFIRM): 1 gold the first time, the next 5
+    {
+        off::Entity* tr = nullptr;
+        for (int i = 0; i < off::kMaxEntities && !tr; ++i) {
+            off::Entity* e = w.byIndex(i);
+            auto ti = e && e->used ? data.trainers.find(e->entry) : data.trainers.end();
+            if (ti != data.trainers.end() && ti->second.cls == 1 && (e->npcFlags & 0x10)) tr = e;
+        }
+        CHECK(tr != nullptr, "a warrior trainer near");
+        if (tr) {
+            gs.mover.reset(tr->x + 2, tr->y, tr->z, 0, now);
+            w.setPosition(*p, tr->x + 2, tr->y, tr->z, 0);
+            run(500);
+            p->money = 25000;
+            gs.talkTo(tr->guid, now);
+            run(400);
+            int opt = -1;
+            for (size_t i = 0; i < gs.gossip.options.size(); ++i) if (gs.gossip.options[i].text == "I wish to unlearn my talents.") opt = (int)i;
+            CHECK(opt >= 0, "the trainer offers to unlearn the talents (%zu options)", gs.gossip.options.size());
+            if (opt >= 0) {
+                gs.selectGossip((size_t)opt, now);
+                run(400);
+                CHECK(gs.talentWipe.asked && gs.talentWipe.cost == 10000, "asked: 1 gold (%u)", gs.talentWipe.cost);
+                gs.talentWipe.asked = false;
+                gs.confirmTalentWipe(true, now);
+                run(1500);
+                bool cr = false;
+                for (uint8_t i = 0; i < p->auraCount; ++i) cr |= p->auras[i].spell == 12320;
+                CHECK(w.talentPointsFree() == 11 && p->money == 15000 && !cr && !gs.knowsSpell(12663) && gs.talentPoints() == 11,
+                      "all 11 points back, 1 gold paid, Cruelty gone (%u free, %u money)", w.talentPointsFree(), p->money);
+                CHECK(w.talentResetCost() == 50000, "the next reset: 5 gold (%u)", w.talentResetCost());
+            }
+        }
+    }
+    p->level = 1;
     session.leaveWorld();
 
     // ---- the mage
@@ -1008,11 +1092,13 @@ int main(int argc, char** argv) {
                 }
             }
             // Healing Stream (water): heals us every 2 s
-            p->hp = 1000;
+            w.recomputeGearPublic();   // (the real health again: the passives keep it so)
+            p->hp = (int32_t)p->maxHp / 3;
+            const int32_t hs0 = p->hp;
             p->gcdEndMs = 0;
             CHECK(w.tryCast(*p, 5394, p->guid, now), "Healing Stream Totem");
             run(4300);
-            CHECK(p->hp > 1000 && w.totemIn(2), "it heals us (%d)", p->hp);
+            CHECK(p->hp > hs0 && w.totemIn(2), "it heals us (%d -> %d)", hs0, p->hp);
             // ---- temporary weapon enchantments (Spell::EffectEnchantItemTmp, Player::ApplyEnchantment): the pack's
             // SpellItemEnchantment rows come from the converter ("@enchfx"); here they are set as the client has them
             {

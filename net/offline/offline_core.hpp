@@ -34,7 +34,7 @@ constexpr uint32_t kSimStepMs = 50;          // fixed simulation tick (20 Hz), i
 constexpr int kMaxEntities = 160;            // player + 4 bots + the creatures around the player (WoWVita: spawn grid)
 constexpr int kMaxEvents = 512;              // up to 8 catch-up steps may be buffered before dispatch
 constexpr int kMaxThreat = 12;
-constexpr int kMaxAuras = 24;              // WoWVita: was 8 (a player keeps several buffs, a stance, debuffs)
+constexpr int kMaxAuras = 40;              // WoWVita: was 8 (a player keeps several buffs, a stance, debuffs)
 constexpr int kMaxCooldowns = 8;
 constexpr int kMaxLoot = 4;
 constexpr int kMaxParty = 4;
@@ -396,6 +396,13 @@ struct WorldData {
     std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
     std::unordered_map<uint32_t, TotemTemplate> totems;               // "TOTM": creature entry -> the totem
     std::unordered_map<uint32_t, ItemEnchant> enchants;               // "ENCH": SpellItemEnchantment id -> it
+    std::unordered_map<uint32_t, uint64_t> affectMask;                // "AFFM": spell << 8 | effect -> spell_affect mask
+    struct ProcEvent { uint8_t school = 0; uint16_t family = 0; uint64_t mask[3] = {0, 0, 0}; uint32_t flags = 0, ex = 0, cooldownMs = 0; float ppm = 0, chance = 0; };
+    std::unordered_map<uint32_t, ProcEvent> procEvents;               // "PEVT": spell_proc_event
+    struct TalentInfo { uint32_t id = 0, tab = 0, reqTalent = 0; uint8_t row = 0, col = 0, reqRank = 0; std::vector<uint32_t> ranks; };
+    std::unordered_map<uint32_t, uint32_t> talentTabs;                // "TLNT": TalentTab id -> class mask
+    std::vector<TalentInfo> talents;                                  // "TLNT": Talent.dbc
+    const TalentInfo* talent(uint32_t id) const { for (const TalentInfo& t : talents) if (t.id == id) return &t; return nullptr; }
     struct TeleportPos { uint32_t map = 0; float x = 0, y = 0, z = 0, o = 0; };
     std::unordered_map<uint32_t, TeleportPos> teleports;              // "TPOS": spell -> spell_target_position
     std::unordered_map<uint32_t, float> enchantPpm;                   // "ENCH": spell_proc_item_enchant
@@ -463,6 +470,7 @@ struct Aura {
     uint8_t charges = 0;
     int8_t slot = -1;                  // UNIT_FIELD_AURA slot (0..31 buffs, 32..47 debuffs), kept while it lasts
     bool positive = false;
+    bool passive = false;              // WoWVita: a passive spell's (a talent, a racial): no slot, never runs out
 };
 
 struct Cooldown { uint32_t spell = 0, endMs = 0, lengthMs = 0; };
@@ -695,6 +703,7 @@ struct CharacterProfile {
     uint32_t ammoId = 0;                  // WoWVita: PLAYER_AMMO_ID, the arrows / bullets in the ammo slot ("AMO1")
     std::array<TempEnchant, 3> tempEnchant{};   // WoWVita: slots 15, 16, 17 ("TEN1")
     std::vector<std::pair<uint32_t, uint32_t>> petLearned;   // WoWVita: (pet entry, spell) a grimoire taught ("PLS1")
+    uint32_t talentResetCostLast = 0, talentResetTime = 0;   // WoWVita: m_resetTalentsCost / Time ("TRS1")
     // WoWVita: the hunter's pet ("HPT1"; CMaNGOS character_pet): what it was tamed from, its level, experience,
     // happiness, loyalty and health (0: dead)
     bool petHunter = false, petRenamed = false;
@@ -813,6 +822,8 @@ public:
     uint16_t maxDurability(uint32_t entry) const { const ItemExt* x = data_ ? data_->ext(entry) : nullptr; return x ? x->maxDurability : 0; }
     bool broken(uint32_t entry, uint16_t lost) const { const uint16_t m = maxDurability(entry); return m && lost >= m; }
     void recomputeGearPublic() { recomputeGear(); }
+    uint32_t powerCostPublic(const Entity& e, uint32_t spell) const { const SpellX* s = data_ ? data_->sx(spell) : nullptr; return s ? powerCostX(e, *s) : 0; }
+    int32_t meleeCritPublic(const Entity& e) const { return meleeCritX(e, nullptr); }
     // Puts backpack slot 'index' on (what was worn there goes to the backpack). 0 = done, else a reason for the
     // player: 1 cannot be worn, 2 too low level, 3 no room for the off-hand item. *slotsOut: the equipment slots
     // that changed (up to 2).
@@ -905,7 +916,8 @@ private:
     void targetsX(Entity& caster, const SpellX& s, int k, Entity* t, std::vector<Entity*>& out);
     int32_t auraSum(const Entity& e, uint8_t type, int32_t miscMask = -1) const;
     bool hasAuraType(const Entity& e, uint8_t type, int32_t miscMask = -1) const;
-    void procAuras(Entity& owner, Entity& other, uint32_t procFlag, uint32_t nowMs);
+    // procEx: PROC_EX_NORMAL_HIT 0x1 / CRITICAL_HIT 0x2 of what happened; procSpell: the ability that did it (none: a swing)
+    void procAuras(Entity& owner, Entity& other, uint32_t procFlag, uint32_t nowMs, uint32_t procEx = 0x1, const SpellX* procSpell = nullptr);
     bool scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t nowMs);
 public:
     void interruptAuras(Entity& e, uint32_t flags);
@@ -937,6 +949,14 @@ public:
     void tickEnchants(uint32_t elapsedMs);
     // WoWVita: Spell::EffectLearnPetSpell (a warlock's grimoire): the pet learns it, a lower rank goes (Pet::learnSpell)
     bool petLearn(Entity& pet, uint32_t spell);
+    // WoWVita: the passive spells of the book (talents, racials) as auras on the player (Player::learnSpell ->
+    // CastSpell of a passive; its stance-bound ones only in the stance); kept up every second
+    void applyPassives(Entity& player, uint32_t nowMs);
+    uint32_t talentPointsFree() const;   // level - 9 from level 10, less the ranks learnt (Player::CalculateTalentsPoints)
+    int talentRank(const WorldData::TalentInfo& t) const;   // 0 = none
+    uint8_t learnTalent(uint32_t talentId, uint32_t rankIndex, uint32_t nowMs);   // 0 = learnt, else why not
+    uint32_t talentResetCost() const;   // Player::resetTalentsCost: 1 g, 5 g, 10 g, then +5 g up to 50 g, -5 g a month
+    bool resetTalents(std::vector<uint32_t>& removed, uint32_t nowMs);   // Player::resetTalents (paid)
     bool sameSpellChain(uint32_t a, uint32_t b) const;
     // WoWVita: SPELL_EFFECT_TELEPORT_UNITS of the player: the session moves it (Player::TeleportTo)
     bool takeTeleport(float& x, float& y, float& z, float& o) {
@@ -964,6 +984,11 @@ public:
     static bool hasInArc(const Entity& from, const Entity& to, float arc);
     bool positiveX(const SpellX& s) const;
     uint32_t powerCostX(const Entity& e, const SpellX& s) const;
+    // WoWVita: Player::ApplySpellMod - the talents' SPELL_AURA_ADD_FLAT_MODIFIER (107) / ADD_PCT_MODIFIER (108) of the
+    // caster (a player) on a spell of its class: (base + flat) x (100 + pct) / 100
+    int32_t spellModX(const Entity& caster, const SpellX& s, uint8_t op, int32_t base) const;
+    int32_t spellCritX(const Entity& caster, const SpellX& s) const;   // in hundredths of a percent
+    int32_t meleeCritX(const Entity& attacker, const SpellX* s) const;
     void gainRage(Entity& e, int32_t damage, bool dealt);
     bool spellEngine(const Entity& e, uint32_t spell) const { return (e.self || e.ownerGuid) && data_ && data_->sx(spell); }   // (our pet too)
     void cancelAuraX(Entity& e, uint32_t spell);

@@ -325,7 +325,9 @@ bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
     const bool inn = npcE && (npcE->npcFlags & 0x80u);   // WoWVita: an innkeeper ("Make this inn your home.")
     const bool fm = npcE && (npcE->npcFlags & 0x8u) && taxiNodeFor(*npcE);   // WoWVita: a flight master with quests
     const bool trainer = npcE && (npcE->npcFlags & 0x10u) && data_->trainers.count(npcE->entry);   // WoWVita: a class trainer
-    if (menu.empty() && !inn) return false;   // nothing to do with quests: the caller opens the vendor (or says so)
+    // nothing to do with quests: the caller opens the vendor / trainer (or says so) - WoWVita: but a trainer of our class
+    // has "I wish to unlearn my talents." from level 10 on, so its menu
+    if (menu.empty() && !inn && !(trainer && canResetTalentsAt(npc))) return false;
     const auto gr = gv.go ? data_->greetings.end() : data_->greetings.find(gv.entry);
     if (!vendor && !inn && !fm && !trainer && op == CMSG_QUESTGIVER_HELLO) {
         // one quest and nothing else: straight to it, as the original does
@@ -349,8 +351,10 @@ bool OfflineSession::questHello(uint64_t npc, uint16_t op, bool vendor) {
     Writer w;
     w.u64(npc);
     w.u32(kGreetingTextId | (gv.entry & 0xFFFF));
-    w.u32((vendor ? 1u : 0u) + (inn ? 1u : 0u) + (fm ? 1u : 0u) + (trainer ? 1u : 0u));
+    const bool unlearn = trainer && canResetTalentsAt(npc);   // WoWVita: a trainer of our class, level 10 or more
+    w.u32((vendor ? 1u : 0u) + (inn ? 1u : 0u) + (fm ? 1u : 0u) + (trainer ? 1u : 0u) + (unlearn ? 1u : 0u));
     if (trainer) { w.u32(kGossipTrain); w.u8(3); w.u8(0); w.cstr("I would like to train."); }   // WoWVita
+    if (unlearn) { w.u32(kGossipUnlearn); w.u8(3); w.u8(0); w.cstr("I wish to unlearn my talents."); }
     if (fm) { w.u32(kGossipTaxi); w.u8(2); w.u8(0); w.cstr("Show me where I can fly."); }   // WoWVita: the flight master
     if (inn) { w.u32(kGossipBind); w.u8(5); w.u8(0); w.cstr("Make this inn your home."); }   // WoWVita: the binder option
     if (vendor) { w.u32(1); w.u8(1); w.u8(0); w.cstr("I want to browse your goods."); }   // option 1: the vendor
@@ -476,6 +480,13 @@ bool OfflineSession::handleQuest(uint16_t op, const Bytes& data, uint32_t nowMs)
             const Entity* e = gv.ok && !gv.go ? world_.entity(g) : nullptr;
             if (e && opt == 1 && (e->npcFlags & 4)) { send(SMSG_GOSSIP_COMPLETE); sendListInventory(g); }
             if (e && opt == kGossipTrain && (e->npcFlags & 0x10)) { send(SMSG_GOSSIP_COMPLETE); sendTrainerList(g, nowMs); }   // WoWVita
+            if (e && opt == kGossipUnlearn && canResetTalentsAt(g)) {   // Player::SendTalentWipeConfirm
+                send(SMSG_GOSSIP_COMPLETE);
+                Writer w;
+                w.u64(g);
+                w.u32(world_.talentResetCost());
+                send(0x2AA, w.b);   // MSG_TALENT_WIPE_CONFIRM
+            }
             return true;
         }
         case CMSG_QUESTGIVER_QUERY_QUEST: {

@@ -120,7 +120,7 @@ public:
         GossipQuest, VendorMode, VendorPick, VendorBuy, VendorSell, VendorSellJunk, VendorBuyback, VendorRepair, VendorClose,
         QuestPick, QuestAccept, QuestContinue, QuestComplete, QuestReward, QuestClose, QuestScroll,
         LogSelect, LogBack, LogAbandon, LogReputation,
-        TrainerPick, TrainerTrain, TrainerClose, TrainerFilter, BinderYes, BinderNo,
+        TrainerPick, TrainerTrain, TrainerClose, TrainerFilter, BinderYes, BinderNo, TalentWipe,
         ItemInfo, InfoBack, BuffPick, BuffCancel, InviteYes, InviteNo, OpenItem,
         // UI stages 1-6
         Pin, SubView, TargetUnit, CancelCast, ConfirmYes, ConfirmNo, TrackQuest, SpellPick,

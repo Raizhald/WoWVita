@@ -589,6 +589,52 @@ bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
     return !b.bad;
 }
 
+bool readTalents(Bin& b, WorldData& w) {   // WoWVita "TLNT"
+    const uint32_t nt = b.u32();
+    if (b.bad || nt > 1000) return false;
+    w.talentTabs.clear();
+    for (uint32_t i = 0; i < nt && !b.bad; ++i) { const uint32_t tab = b.u32(); w.talentTabs[tab] = b.u32(); }
+    const uint32_t n = b.u32();
+    if (b.bad || n > 5000) return false;
+    w.talents.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        WorldData::TalentInfo t;
+        t.id = b.u32(); t.tab = b.u32(); t.row = b.u8(); t.col = b.u8(); t.reqTalent = b.u32(); t.reqRank = b.u8();
+        const uint8_t nr = b.u8();
+        for (uint8_t k = 0; k < nr && !b.bad; ++k) t.ranks.push_back(b.u32());
+        if (!b.bad) w.talents.push_back(std::move(t));
+    }
+    return !b.bad;
+}
+
+bool readProcEvents(Bin& b, WorldData& w) {   // WoWVita "PEVT"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 20000) return false;
+    w.procEvents.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t sp = b.u32();
+        WorldData::ProcEvent e;
+        e.school = b.u8(); e.family = b.u16();
+        for (int k = 0; k < 3; ++k) { const uint64_t lo = b.u32(), hi = b.u32(); e.mask[k] = lo | (hi << 32); }
+        e.flags = b.u32(); e.ex = b.u32(); e.ppm = b.f32(); e.chance = b.f32(); e.cooldownMs = b.u32();
+        if (!b.bad) w.procEvents[sp] = e;
+    }
+    return !b.bad;
+}
+
+bool readAffect(Bin& b, WorldData& w) {   // WoWVita "AFFM"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 20000) return false;
+    w.affectMask.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t sp = b.u32();
+        const uint8_t eff = b.u8();
+        const uint64_t lo = b.u32(), hi = b.u32();
+        if (!b.bad) w.affectMask[(sp << 8) | eff] = lo | (hi << 32);
+    }
+    return !b.bad;
+}
+
 bool readTeleports(Bin& b, WorldData& w) {   // WoWVita "TPOS"
     const uint32_t n = b.u32();
     if (b.bad || n > 10000) return false;
@@ -1098,6 +1144,9 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("CLVL"): ok = readCreatureLevels(b, out); break;
             case fourcc("ENCH"): ok = readEnchants(b, out); break;
             case fourcc("TPOS"): ok = readTeleports(b, out); break;
+            case fourcc("TLNT"): ok = readTalents(b, out); break;
+            case fourcc("AFFM"): ok = readAffect(b, out); break;
+            case fourcc("PEVT"): ok = readProcEvents(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

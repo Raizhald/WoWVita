@@ -199,6 +199,8 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     payload.u32(0x314E4554u);   // "TEN1": the weapons' temporary enchantments (main hand, off hand, ranged)
     for (const CharacterProfile& c : d.roster)
         for (const TempEnchant& t : c.tempEnchant) { payload.u32(t.id); payload.u32(t.msLeft); payload.u32(t.item); }
+    payload.u32(0x31535254u);   // "TRS1": the talent resets (the last cost, when)
+    for (const CharacterProfile& c : d.roster) { payload.u32(c.talentResetCostLast); payload.u32(c.talentResetTime); }
     payload.u32(0x31534C50u);   // "PLS1": what the grimoires taught the pets (pet entry, spell)
     for (const CharacterProfile& c : d.roster) {
         payload.u8((uint8_t)std::min<size_t>(c.petLearned.size(), 64));
@@ -472,6 +474,15 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
         if (p.u32() == 0x314E4554u) {
             for (CharacterProfile& c : d.roster)
                 for (TempEnchant& t : c.tempEnchant) { t.id = p.u32(); t.msLeft = p.u32(); t.item = p.u32(); }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the talent resets
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31535254u) {
+            for (CharacterProfile& c : d.roster) { c.talentResetCostLast = p.u32(); c.talentResetTime = p.u32(); }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {
             p.pos = mark;

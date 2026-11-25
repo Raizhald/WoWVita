@@ -703,6 +703,11 @@ void GameUi::touch(w3n::GameSession& g, const Input& in, Output& out) {
 }
 
 GameUi::Output GameUi::update(w3n::GameSession& g, const Input& in, bool walking) {
+    if (g.talentWipe.asked) {   // WoWVita: a class trainer's "I wish to unlearn my talents." - the price, yes or no
+        g.talentWipe.asked = false;
+        confirm(std::string(tr("Unlearn all your talents for ", "Забыть все таланты за ")) + w3n::moneyText(g.talentWipe.cost) + "?",
+                Act::TalentWipe, 0);
+    }
     clicked_ = false;
     syncWatch(g, in);
     Output out = updateInner(g, in, walking);
@@ -1100,6 +1105,7 @@ void GameUi::doAction(w3n::GameSession& g, const Input& in, Act act, int arg, Ou
         case Act::TrainerClose: g.closeTrainer(); break;
         case Act::TrainerFilter: trainerAll_ = !trainerAll_; page_ = 0; break;
         case Act::BinderYes: g.acceptBinder(now); break;
+        case Act::TalentWipe: g.confirmTalentWipe(true, now); break;   // WoWVita: MSG_TALENT_WIPE_CONFIRM
         case Act::BinderNo: g.binderConfirm = 0; break;
         case Act::InfoBack: open_ = (infoReturn_ == Panel::ItemInfo || infoReturn_ == Panel::SpellInfo) ? Panel::Tabs : infoReturn_; break;
         case Act::BuffPick:

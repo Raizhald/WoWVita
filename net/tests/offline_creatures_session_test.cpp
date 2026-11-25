@@ -68,6 +68,7 @@ int main(int argc, char** argv) {
         std::printf("start outfit (race %d class %d):%s\n", pr.race, pr.cls, names.c_str());
         CHECK(data.outfits.empty() || worn >= 2, "the new character wears its start outfit (%d items)", worn);
     }
+    run(1200);   // (the passive spells - The Human Spirit - are on: the health is set after them)
     p->maxHp = 100000; p->hp = 100000;
     auto put = [&](float x, float y, float z) {
         gs.mover.reset(x, y, z, 0, now);

@@ -209,6 +209,15 @@ bool GameSession::learnTalent(uint32_t talentId, uint32_t nowMs) {
     return true;
 }
 
+void GameSession::confirmTalentWipe(bool yes, uint32_t nowMs) {
+    const uint64_t npc = talentWipe.npc;
+    talentWipe = TalentWipe();
+    if (!yes || !npc) return;
+    Writer w;
+    w.u64(npc);
+    send(0x2AA, w.b, nowMs);
+}
+
 // Bank, flight master, auctioneer and mailbox windows close 10 yd away (the original's "too far" closing).
 void GameSession::updateServices(uint32_t nowMs) {
     if (!bank.open && !taxi.open && !auction.open && !mail.open && !stable.open) return;
@@ -250,6 +259,17 @@ bool GameSession::handleServices(uint16_t op, const Bytes& data, uint32_t nowMs)
             std::string text = r.cstr();
             if (r.bad || text.empty()) return true;
             addLocal(text, nowMs);
+            return true;
+        }
+        case 0x2AA: {   // MSG_TALENT_WIPE_CONFIRM: the trainer and the cost (0, 0: no talents to unlearn)
+            const uint64_t npc = r.u64();
+            const uint32_t cost = r.u32();
+            if (r.bad) return true;
+            closeGossip();
+            if (!npc) { fail("You have no talents to unlearn.", nowMs); return true; }
+            talentWipe.npc = npc;
+            talentWipe.cost = cost;
+            talentWipe.asked = true;
             return true;
         }
         case SMSG_SHOW_BANK: {

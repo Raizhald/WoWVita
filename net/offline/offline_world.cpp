@@ -552,6 +552,15 @@ bool World::hasAura(const Entity& e, uint32_t spell) const {
 
 void World::addAura(Entity& e, const Aura& a0) {
     Aura a = a0;
+    if (a.passive) {   // WoWVita: a passive spell's aura - no client slot, no event; once a spell and effect
+        for (uint8_t i = 0; i < e.auraCount; ++i)
+            if (e.auras[i].spell == a.spell && e.auras[i].effIndex == a.effIndex && e.auras[i].passive) { e.auras[i] = a; return; }
+        if (e.auraCount >= kMaxAuras) return;
+        a.slot = -1;
+        a.endMs = 0;
+        e.auras[e.auraCount++] = a;
+        return;
+    }
     if (a.kind == (uint8_t)SpellKind::Buff && !a.type) a.positive = true;
     for (uint8_t i = 0; i < e.auraCount; ++i)
         if (e.auras[i].spell == a.spell && (e.auras[i].caster == a.caster || a.positive) && e.auras[i].effIndex == a.effIndex) {
@@ -560,7 +569,12 @@ void World::addAura(Entity& e, const Aura& a0) {
             emit(SimEvent::AuraApplied, e.guid, a.caster, a.spell, (int32_t)(a.endMs - now_), a.school, (uint8_t)std::max<int8_t>(0, a.slot));
             return;
         }
-    if (e.auraCount >= kMaxAuras) removeAura(e, 0);   // the oldest goes
+    if (e.auraCount >= kMaxAuras) {   // the oldest goes (WoWVita: not a passive one)
+        int oldest = -1;
+        for (uint8_t i = 0; i < e.auraCount && oldest < 0; ++i) if (!e.auras[i].passive) oldest = i;
+        if (oldest < 0) return;
+        removeAura(e, oldest);
+    }
     // WoWVita: a client slot of its own while it lasts (buffs 0..31, debuffs 32..47); the other effects of the same
     // spell share it (one icon)
     a.slot = -1;
@@ -607,7 +621,7 @@ void World::removeAura(Entity& e, int index) {
         if (gone.type == 26 && !stillType({26})) e.rootUntilMs = 0;
         if ((gone.type == 5 || gone.type == 7) && !stillType({5, 7})) { e.fearUntilMs = 0; if (e.self) e.stunnedUntilMs = 0; }
         if ((gone.type == 27 || gone.type == 60) && !stillType({27, 60})) e.silenceUntilMs = 0;
-        if (e.self && (gone.type == 29 || gone.type == 34 || gone.type == 142)) recomputeGear();
+        if (e.self && (gone.type == 29 || gone.type == 34 || gone.type == 142 || gone.type == 137)) recomputeGear();
     }
     bool still = false;   // WoWVita: the slot empties when the spell's last effect goes
     for (uint8_t i = 0; i < e.auraCount; ++i) still = still || (e.auras[i].slot == gone.slot && gone.slot >= 0);
@@ -920,7 +934,8 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
         static const int armour[] = {0, 2, 4, 5, 6, 7, 8, 9, 14, 16};
         wearSlot(armour[rng_.below(10)], 1);
     }
-    const bool crit = (int32_t)rng_.below(100) < kCritChancePct;
+    const bool crit = a.self && &a == player_ ? (int32_t)rng_.below(10000) < meleeCritX(a, nullptr)   // WoWVita: agility, talents
+                                              : (int32_t)rng_.below(100) < kCritChancePct;
     if (crit) dmg *= 2;
     applyDamage(a, b, dmg, 0, 0, nowMs);
     if (a.self) gainRage(a, dmg, true);   // WoWVita: as the original (Player::RewardRage)
@@ -933,7 +948,7 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
                 applyDamage(b, a, b.auras[i].amount, b.auras[i].spell, b.auras[i].school, nowMs);
                 if (!a.alive()) break;
             }
-    if (a.alive() && b.alive()) { procAuras(a, b, 0x4, nowMs); procAuras(b, a, 0x8, nowMs); }   // WoWVita: procs
+    if (a.alive() && b.alive()) { procAuras(a, b, 0x4, nowMs, crit ? 0x2 : 0x1); procAuras(b, a, 0x8, nowMs, crit ? 0x2 : 0x1); }   // WoWVita: procs
     // WoWVita: Player::CastItemCombatSpell - the weapon's enchantments of type 1 (Flametongue, poisons): per minute
     // (spell_proc_item_enchant), else the enchantment's chance, else the weapon's (speed x 1.8 %)
     if (a.self && &a == player_ && a.alive() && b.alive())
@@ -1325,6 +1340,16 @@ void World::recomputeGear() {
         e.baseMana = (uint32_t)b.mana;
         e.statStr = b.str + st[4]; e.statAgi = b.agi + st[3]; e.statSta = b.sta + st[7];
         e.statInt = b.inte + st[5]; e.statSpi = b.spi + st[6];
+        // WoWVita: SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE (137, misc the stat or -1 all: Divine Strength, Heart of the Wild)
+        for (uint8_t i = 0; i < e.auraCount; ++i) {
+            if (e.auras[i].type != 137) continue;
+            const int32_t m = e.auras[i].misc, pct = 100 + e.auras[i].amount;
+            if (m == 0 || m == -1) e.statStr = e.statStr * pct / 100;
+            if (m == 1 || m == -1) e.statAgi = e.statAgi * pct / 100;
+            if (m == 2 || m == -1) e.statSta = e.statSta * pct / 100;
+            if (m == 3 || m == -1) e.statInt = e.statInt * pct / 100;
+            if (m == 4 || m == -1) e.statSpi = e.statSpi * pct / 100;
+        }
         const int32_t hpSta = std::min(e.statSta, 20) + std::max(0, e.statSta - 20) * 10;
         const uint32_t oldMax = e.maxHp;
         e.maxHp = (uint32_t)std::max(1, b.hp + hpSta + st[1] + auraSum(e, 34));   // (+ SPELL_AURA_MOD_INCREASE_HEALTH)
@@ -1718,6 +1743,7 @@ void World::step(uint32_t nowMs) {
         for (Entity& e : pool_) tickEntity(e, now_, e.self);
         tickAreas(now_);   // WoWVita: Blizzard, Consecration
         tickEnchants(kSimStepMs);   // WoWVita: the weapons' temporary enchantments
+        if (player_ && tick_ % 20 == 0 && player_->alive()) applyPassives(*player_, now_);   // WoWVita: talents, racials
         updateThreatDecay(now_);
         ++steps;
     }

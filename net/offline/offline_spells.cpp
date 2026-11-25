@@ -22,6 +22,7 @@
 #include "offline_core.hpp"
 
 #include <algorithm>
+#include <ctime>
 #include <cmath>
 
 namespace w3n {
@@ -76,7 +77,62 @@ int32_t World::effValue(const Entity& c, const SpellX& s, int k, int combo) {
     else if (dice > 0) v += dice;
     else v += 1;   // (BaseDice 1, DieSides 0: the base and one)
     if (combo > 0 && e.perCombo != 0) v += (int32_t)(e.perCombo * (float)combo);
-    return v;
+    return spellModX(c, s, 8, v);   // SPELLMOD_ALL_EFFECTS (Unit::CalculateSpellEffectValue)
+}
+
+// Player::UpdateCritPercentage: 5 % + agility / the class's rate at the level + SPELL_AURA_MOD_CRIT_PERCENT (52)
+// (+ the ability's SPELLMOD_CRITICAL_CHANCE); a creature 5 %
+int32_t World::meleeCritX(const Entity& a, const SpellX* s) const {
+    if (!a.self || &a != player_) return 500;
+    static const float lv1[12] = {0, 3.9f, 4.6f, 3.5f, 2.2f, 11.0f, 0, 4.6f, 12.9f, 8.4f, 0, 4.6f};
+    static const float lv60[12] = {0, 20.0f, 20.0f, 53.0f, 29.0f, 20.0f, 0, 20.0f, 20.0f, 20.0f, 0, 20.0f};
+    const uint8_t cls = profiles_[0].cls < 12 ? profiles_[0].cls : 1;
+    const float L = (float)std::min<int>(a.level, 60);
+    const float rate = lv1[cls] * (60.0f - L) / 59.0f + lv60[cls] * (L - 1.0f) / 59.0f;
+    float pct = 5.0f + (rate > 0 ? (float)a.statAgi / rate : 0.0f) + (float)auraSum(a, 52);
+    int32_t v = (int32_t)(pct * 100.0f);
+    if (s) v = spellModX(a, *s, 7, v / 100) * 100 + v % 100;   // SPELLMOD_CRITICAL_CHANCE (whole percents)
+    return std::max(0, v);
+}
+
+// Player::UpdateSpellCritChance: GetSpellCritFromIntellect (base + intellect / (rate0 + rate1 x level)) +
+// SPELL_AURA_MOD_SPELL_CRIT_CHANCE (57) + _SCHOOL (71) + SPELLMOD_CRITICAL_CHANCE; a creature 5 %
+int32_t World::spellCritX(const Entity& c, const SpellX& s) const {
+    if (!c.self || &c != player_) return 500;
+    static const float base[12] = {0, 0, 3.70f, 0, 0, 2.97f, 0, 3.54f, 3.70f, 3.18f, 0, 3.33f};
+    static const float r0[12] = {0, 0, 14.77f, 0, 0, 10.03f, 0, 11.51f, 14.77f, 11.30f, 0, 12.41f};
+    static const float r1[12] = {0, 10, 0.65f, 10, 10, 0.82f, 0, 0.80f, 0.65f, 0.82f, 0, 0.79f};
+    const uint8_t cls = profiles_[0].cls < 12 ? profiles_[0].cls : 1;
+    const float ratio = r0[cls] + r1[cls] * (float)c.level;
+    float pct = base[cls] + (ratio > 0 ? (float)c.statInt / ratio : 0.0f) + (float)auraSum(c, 57) + (float)auraSum(c, 71, 1 << s.school);
+    int32_t v = (int32_t)(pct * 100.0f);
+    v = spellModX(c, s, 7, v / 100) * 100 + v % 100;
+    return std::max(0, v);
+}
+
+int32_t World::spellModX(const Entity& c, const SpellX& s, uint8_t op, int32_t base) const {
+    if (!c.self || !data_ || !s.family || &c != player_) return base;
+    static const uint8_t classFamily[12] = {0, 4, 10, 9, 8, 6, 0, 11, 3, 5, 0, 7};   // SpellFamilyName of each class
+    const uint8_t cls = profiles_[0].cls;
+    if (cls >= 12 || s.family != classFamily[cls]) return base;
+    if (s.attrEx3 & 0x20000000) return base;   // SPELL_ATTR_EX3_IGNORE_CASTER_MODIFIERS
+    int32_t flat = 0, pct = 100;
+    for (uint8_t i = 0; i < c.auraCount; ++i) {
+        const Aura& a = c.auras[i];
+        if ((a.type != 107 && a.type != 108) || a.misc != op) continue;
+        const SpellX* src = data_->sx(a.spell);
+        if (!src || src->family != s.family) continue;
+        auto am = data_->affectMask.find((a.spell << 8) | a.effIndex);
+        const uint64_t mask = am != data_->affectMask.end() ? am->second : (uint64_t)src->eff[a.effIndex].itemType;
+        if (!(mask & s.familyFlags)) continue;
+        if (a.type == 107) flat += a.amount;
+        else {
+            if (op == 10 && base >= 10000 && a.amount <= -100) continue;   // (not a 10 s cast made instant)
+            pct += a.amount;
+        }
+    }
+    if (!flat && pct == 100) return base;
+    return (int32_t)((int64_t)(base + flat) * std::max(0, pct) / 100);
 }
 
 uint32_t World::durationX(const Entity& c, const SpellX& s, int combo) const {
@@ -89,7 +145,7 @@ uint32_t World::durationX(const Entity& c, const SpellX& s, int combo) const {
         d += s.durPerLevel * over;
         if (s.durMax > 0) d = std::min(d, s.durMax);
     }
-    return (uint32_t)std::max(0, d);
+    return (uint32_t)std::max(0, spellModX(c, s, 1, d));   // SPELLMOD_DURATION
 }
 
 bool World::positiveX(const SpellX& s) const {
@@ -111,6 +167,7 @@ uint32_t World::powerCostX(const Entity& e, const SpellX& s) const {
     uint32_t cost = s.manaCost + s.manaPerLevel * (uint32_t)std::max<int>(0, (int)e.level - (int)s.spellLevel);
     // ManaCostPercentage: of the base (create) mana for a player (CMaNGOS Spell::CalculatePowerCost: GetCreateMana)
     if (s.manaPct) cost += (e.self && e.baseMana ? e.baseMana : (e.formPower ? e.savedMaxPower : e.maxPower)) * s.manaPct / 100;
+    cost = (uint32_t)std::max(0, spellModX(e, s, 14, (int32_t)cost));   // SPELLMOD_COST (in tenths of rage too)
     if (s.powerType == 1) cost = (cost + 5) / 10;   // rage: the database keeps tenths (Heroic Strike 150 = 15 rage)
     return cost;
 }
@@ -157,12 +214,35 @@ void World::interruptAuras(Entity& e, uint32_t flags) {
 }
 
 // PROC_FLAG_* (CMaNGOS SpellMgr.h): 0x4 dealt / 0x8 taken melee swing, 0x10 / 0x20 a melee ability
-void World::procAuras(Entity& o, Entity& other, uint32_t flag, uint32_t now) {
+void World::procAuras(Entity& o, Entity& other, uint32_t flag, uint32_t now, uint32_t procEx, const SpellX* procSpell) {
     if (!data_) return;
     for (int i = 0; i < o.auraCount && o.alive();) {
         Aura& a = o.auras[i];
         const SpellX* s = (a.type == 42 || a.type == 4 || a.charges) ? data_->sx(a.spell) : nullptr;
-        if (!s || !(s->procFlags & flag) || (s->procChance && s->procChance < 100 && (int)rng_.below(100) >= s->procChance)) { ++i; continue; }
+        if (!s) { ++i; continue; }
+        // WoWVita: spell_proc_event (SpellMgr::IsSpellProcEventCanTriggeredBy): its flags, hit or crit, the spells
+        // it is for, procs per minute or its own chance, a cooldown
+        auto pe = data_->procEvents.find(a.spell);
+        const WorldData::ProcEvent* ev = pe != data_->procEvents.end() ? &pe->second : nullptr;
+        const uint32_t flags = ev && ev->flags ? ev->flags : s->procFlags;
+        if (!(flags & flag)) { ++i; continue; }
+        if (ev) {
+            bool ok;
+            if (!ev->ex) ok = (procEx & 0x3) != 0;                     // (none set: any hit)
+            else ok = (ev->ex & 0x10000) || (ev->ex & procEx);         // PROC_EX_EX_TRIGGER_ALWAYS
+            if (ok && ev->family) ok = procSpell && procSpell->family == ev->family;
+            const uint64_t mask = ev->mask[a.effIndex < 3 ? a.effIndex : 0];
+            if (ok && mask) ok = procSpell && (procSpell->familyFlags & mask);
+            if (ok && ev->cooldownMs && cooldownLeft(o, 0x40000000u | a.spell, now)) ok = false;
+            if (!ok) { ++i; continue; }
+        }
+        float chance = (float)(s->procChance ? s->procChance : 100);
+        if (ev && ev->ppm > 0) chance = (float)o.attackMs * ev->ppm / 600.0f;
+        else if (ev && ev->chance > 0) chance = ev->chance;
+        if (chance < 100.0f && (float)rng_.below(10000) >= chance * 100.0f) { ++i; continue; }
+        if (ev && ev->cooldownMs) {
+            if (o.cooldownCount < kMaxCooldowns) o.cooldowns[o.cooldownCount++] = Cooldown{0x40000000u | a.spell, now + ev->cooldownMs, ev->cooldownMs};
+        }
         bool fired = false;
         if (a.type == 42 && s->eff[a.effIndex].trigger) {   // PROC_TRIGGER_SPELL (Lightning Shield, Frost Armor)
             castX(o, s->eff[a.effIndex].trigger, other.guid, now, true);
@@ -324,7 +404,7 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         t = &e;
     }
     if (need == 1 && !triggered) {
-        const float maxR = (s.rangeMax > 0 ? s.rangeMax : kReach) + t->boundingRadius + e.boundingRadius;
+        const float maxR = (s.rangeMax > 0 ? (float)spellModX(e, s, 5, (int32_t)s.rangeMax) : kReach) + t->boundingRadius + e.boundingRadius;   // SPELLMOD_RANGE
         const float d = dist(e, *t);
         if (d > maxR) return fail(89, t->guid);                            // SPELL_FAILED_OUT_OF_RANGE
         if (s.rangeMin > 0 && d < s.rangeMin) return fail(118, t->guid);    // SPELL_FAILED_TOO_CLOSE
@@ -358,18 +438,19 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (t && t != &e) selection_ = t->guid;
         return true;
     }
-    if (s.gcdMs && !triggered) e.gcdEndMs = now + s.gcdMs;
+    if (s.gcdMs && !triggered) e.gcdEndMs = now + (uint32_t)std::max(0, spellModX(e, s, 21, (int32_t)s.gcdMs));   // SPELLMOD_GLOBAL_COOLDOWN
+    const uint32_t castMs = s.castMs > 0 ? (uint32_t)std::max(0, spellModX(e, s, 10, (int32_t)s.castMs)) : 0;   // SPELLMOD_CASTING_TIME
     if (!triggered && !(s.attrEx & 0x20))   // (SPELL_ATTR_EX_ALLOW_WHILE_STEALTHED: Sprint, Vanish keep stealth)
         interruptAuras(e, 0x4 | (need == 1 ? 0x1000u : 0u));   // AURA_INTERRUPT_FLAG_ACTION (and ATTACKING)
     e.castTarget = t ? t->guid : e.guid;
     e.castTriggered = triggered;
-    if (s.castMs > 0 && !triggered) {
+    if (castMs > 0 && !triggered) {
         e.castSpell = id;
         e.castStartMs = now;
-        e.castEndMs = now + s.castMs;
+        e.castEndMs = now + castMs;
         e.castInterruptible = 1;
         e.channeling = false;
-        emit(SimEvent::CastStarted, e.guid, e.castTarget, id, (int32_t)s.castMs, s.school);
+        emit(SimEvent::CastStarted, e.guid, e.castTarget, id, (int32_t)castMs, s.school);
         return true;
     }
     if (s.channeled() && !triggered) {
@@ -432,8 +513,8 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
             if (e.cooldownCount < kMaxCooldowns) e.cooldowns[e.cooldownCount++] = Cooldown{key, now + ms, ms};
             else e.cooldowns[0] = Cooldown{key, now + ms, ms};
         };
-        cd(s.id, s.cooldownMs);
-        if (s.category) cd(kSlotCategoryBit | s.category, s.catCooldownMs);
+        cd(s.id, (uint32_t)std::max(0, spellModX(e, s, 11, (int32_t)s.cooldownMs)));   // SPELLMOD_COOLDOWN
+        if (s.category) cd(kSlotCategoryBit | s.category, (uint32_t)std::max(0, spellModX(e, s, 11, (int32_t)s.catCooldownMs)));
     }
     emit(SimEvent::CastFinished, e.guid, t->guid, s.id, 0, s.school);
     int combo = 0;
@@ -465,7 +546,7 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
         if ((int32_t)rng_.below(100) < 5) {   // (the melee swing's 5 % miss)
             emit(SimEvent::Damage, e.guid, t->guid, s.id, 0, 0, 1);   // a miss
         } else {
-            if ((int32_t)rng_.below(100) < 5) dmg *= 2;   // a crit
+            if ((int32_t)rng_.below(10000) < meleeCritX(e, &s)) dmg *= 2;   // a crit
             // a wand's school (Spell::Spell: CLASSMASK_WAND_USERS - priest, mage, warlock - shoot with
             // GetRangedDamageSchoolMask, the ranged weapon's damage type)
             uint8_t school = s.school;
@@ -483,10 +564,11 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
         int32_t dmg = rng_.range((int32_t)e.dmgMin, (int32_t)e.dmgMax) + weaponBonus;
         dmg = dmg * weaponPct / 100;
         dmg += auraSum(e, A_ATTACK_POWER) * (int32_t)e.attackMs / 14000;
-        if ((int32_t)rng_.below(100) < 5) dmg *= 2;   // a crit
+        const bool crit = (int32_t)rng_.below(10000) < meleeCritX(e, &s);
+        if (crit) dmg *= 2;   // a crit
         applyDamage(e, *t, std::max(1, dmg), s.id, s.school, now);
         gainRage(e, dmg, true);
-        if (t->alive()) { procAuras(e, *t, 0x10, now); procAuras(*t, e, 0x20, now); }   // a melee ability dealt / taken
+        if (t->alive()) { procAuras(e, *t, 0x10, now, crit ? 0x2 : 0x1, &s); procAuras(*t, e, 0x20, now, crit ? 0x2 : 0x1, &s); }   // a melee ability dealt / taken
         if (!e.victim) startAttack(e, t->guid, now);
     }
     if (usesCombo) { e.comboPoints = 0; e.comboTarget = 0; }
@@ -568,14 +650,16 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
                 // Eviscerate (CMaNGOS SpellEffects SchoolDMG): + attack power x combo points x 3 %
                 if (s.family == 8 && (s.familyFlags & 0x20000ull) && c.self && combo > 0)
                     dmg += (int32_t)((float)c.attackPower * (float)combo * 0.03f);
-                if ((int32_t)rng_.below(100) < 5) dmg = dmg * 3 / 2;   // a spell crit
+                dmg = spellModX(c, s, 0, dmg);   // SPELLMOD_DAMAGE
+                if ((int32_t)rng_.below(10000) < spellCritX(c, s)) dmg = dmg * (100 + spellModX(c, s, 15, 50)) / 100;   // a crit (+ SPELLMOD_CRIT_DAMAGE_BONUS)
                 applyDamage(c, *x, std::max(1, dmg), s.id, s.school, now);
             }
             break;
         case E_HEAL: case E_HEAL_MAX:
             for (Entity* x : ts) {
                 if (!x->alive()) continue;
-                const int32_t v = e.effect == E_HEAL_MAX ? (int32_t)x->maxHp : effValue(c, s, k, combo);
+                int32_t v = e.effect == E_HEAL_MAX ? (int32_t)x->maxHp : spellModX(c, s, 0, effValue(c, s, k, combo));
+                if (e.effect != E_HEAL_MAX && (int32_t)rng_.below(10000) < spellCritX(c, s)) v = v * (100 + spellModX(c, s, 15, 50)) / 100;
                 applyHeal(c, *x, std::max(1, v), s.id, now);
             }
             break;
@@ -699,7 +783,7 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
             for (Entity* x : ts) {
                 const bool friendT = !canAttack(c, *x);
                 for (int i = x->auraCount - 1; i >= 0; --i)
-                    if (x->auras[i].positive != friendT && x->auras[i].school != 0) { removeAura(*x, i); break; }
+                    if (x->auras[i].positive != friendT && x->auras[i].school != 0 && !x->auras[i].passive) { removeAura(*x, i); break; }
             }
             break;
         case 79:   // SPELL_EFFECT_SANCTUARY (Vanish): out of every creature's threat
@@ -757,6 +841,7 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
     a.positive = positive;
     a.kind = (uint8_t)(positive ? SpellKind::Buff : SpellKind::Debuff);
     a.amount = effValue(c, s, k, combo);
+    if (e.aura == A_PERIODIC_DAMAGE || e.aura == A_PERIODIC_LEECH || e.aura == A_PERIODIC_HEAL) a.amount = spellModX(c, s, 22, a.amount);   // SPELLMOD_DOT
     const uint32_t d = durationX(c, s, combo);
     // WoWVita: SPELL_AURA_MECHANIC_IMMUNITY (Vanish, Blink, Blessing of Freedom) keeps such auras off
     {
@@ -820,6 +905,140 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
 
 // ---------------------------------------------------------------- the class scripts CMaNGOS has for these
 // (Spells/Scripts/Scripting/ClassScripts): true when the spell was done here
+// ---------------------------------------------------------------- passives and talents
+namespace {
+// the aura types recomputeGear reads (stats, health, armour, attack power): a change of those wants it run again
+bool statAura(uint8_t t) { return t == 29 || t == 34 || t == 133 || t == 137 || t == 142 || t == 22 || t == 99 || t == 124; }
+}
+void World::applyPassives(Entity& p, uint32_t now) {
+    if (!data_ || !p.self || &p != player_) return;
+    const CharacterProfile& pr = profiles_[0];
+    bool gear = false;
+    for (uint32_t id : pr.book) {
+        const SpellX* s = data_->sx(id);
+        if (!s || !s->passive()) continue;
+        const bool formOk = !s->stances || (p.form && (s->stances & (1u << (p.form - 1))));
+        for (int k = 0; k < 3; ++k) {
+            const SpellEffectX& e = s->eff[k];
+            if ((e.effect != E_APPLY_AURA && e.effect != E_AREA_AURA) || !e.aura || e.aura == A_SHAPESHIFT) continue;
+            int have = -1;
+            for (uint8_t i = 0; i < p.auraCount; ++i)
+                if (p.auras[i].passive && p.auras[i].spell == id && p.auras[i].effIndex == k) { have = i; break; }
+            if (formOk && have < 0) {
+                Aura a;
+                a.spell = id; a.caster = p.guid; a.type = e.aura; a.effIndex = (uint8_t)k; a.misc = e.misc;
+                a.school = s->school; a.positive = true; a.passive = true; a.kind = (uint8_t)SpellKind::Buff;
+                a.amount = effValue(p, *s, k, 0);
+                a.amplitudeMs = e.amplitude > 0 ? (uint32_t)e.amplitude : 0;
+                a.nextTickMs = a.amplitudeMs ? now + a.amplitudeMs : 0;
+                a.charges = (uint8_t)std::min<uint32_t>(255, s->procCharges);
+                addAura(p, a);
+                gear = gear || statAura(e.aura);
+            } else if (!formOk && have >= 0) {
+                removeAura(p, have);
+                gear = gear || statAura(e.aura);
+            }
+        }
+    }
+    // (a passive no longer in the book - a talent's lower rank - goes)
+    for (int i = p.auraCount - 1; i >= 0; --i)
+        if (p.auras[i].passive && std::find(pr.book.begin(), pr.book.end(), p.auras[i].spell) == pr.book.end()) {
+            gear = gear || statAura(p.auras[i].type);
+            removeAura(p, i);
+        }
+    if (gear) recomputeGear();
+}
+
+int World::talentRank(const WorldData::TalentInfo& t) const {
+    const auto& book = profiles_[0].book;
+    for (int r = (int)t.ranks.size(); r >= 1; --r)
+        if (std::find(book.begin(), book.end(), t.ranks[(size_t)r - 1]) != book.end()) return r;
+    return 0;
+}
+
+uint32_t World::talentPointsFree() const {
+    if (!data_ || !player_) return 0;
+    const uint32_t total = player_->level >= 10 ? (uint32_t)player_->level - 9 : 0;
+    uint32_t spent = 0;
+    for (const WorldData::TalentInfo& t : data_->talents) spent += (uint32_t)talentRank(t);
+    return total > spent ? total - spent : 0;
+}
+
+// Player::LearnTalent: the class's tab, the next rank, a free point, the prerequisite's rank, 5 points a row in the tab
+uint8_t World::learnTalent(uint32_t talentId, uint32_t rankIndex, uint32_t now) {
+    if (!data_ || !player_) return 1;
+    const WorldData::TalentInfo* t = data_->talent(talentId);
+    if (!t) return 1;
+    auto tab = data_->talentTabs.find(t->tab);
+    if (tab == data_->talentTabs.end() || !(tab->second & (1u << (profiles_[0].cls - 1)))) return 2;
+    const int cur = talentRank(*t);
+    if ((int)rankIndex != cur || rankIndex >= t->ranks.size()) return 3;   // (only the next rank)
+    if (!talentPointsFree()) return 4;
+    if (t->reqTalent) {
+        const WorldData::TalentInfo* req = data_->talent(t->reqTalent);
+        if (req && talentRank(*req) < (int)t->reqRank + 1) return 5;
+    }
+    uint32_t spent = 0;
+    for (const WorldData::TalentInfo& o : data_->talents) if (o.tab == t->tab) spent += (uint32_t)talentRank(o);
+    if (spent < (uint32_t)t->row * 5) return 6;
+    const uint32_t spell = t->ranks[rankIndex];
+    if (!data_->sx(spell)) return 7;
+    auto& book = profiles_[0].book;
+    for (size_t r = 0; r < rankIndex; ++r)   // (the lower ranks go: Player::learnSpell of a talent's rank)
+        book.erase(std::remove(book.begin(), book.end(), t->ranks[r]), book.end());
+    book.push_back(spell);
+    // a talent that teaches a spell (Mortal Strike's rank learns 12294): SPELL_EFFECT_LEARN_SPELL
+    if (const SpellX* s = data_->sx(spell))
+        for (const SpellEffectX& e : s->eff)
+            if (e.effect == E_LEARN_SPELL && e.trigger && std::find(book.begin(), book.end(), e.trigger) == book.end())
+                emit(SimEvent::Message, player_->guid, player_->guid, e.trigger, 2);   // (the session teaches it)
+    applyPassives(*player_, now);
+    return 0;
+}
+
+uint32_t World::talentResetCost() const {
+    const CharacterProfile& p = profiles_[0];
+    const uint32_t gold = 10000, last = p.talentResetCostLast;
+    if (last < 1 * gold) return 1 * gold;
+    if (last < 5 * gold) return 5 * gold;
+    if (last < 10 * gold) return 10 * gold;
+    const uint32_t nowSec = (uint32_t)std::time(nullptr);
+    const uint32_t months = nowSec > p.talentResetTime ? (nowSec - p.talentResetTime) / (30u * 24u * 3600u) : 0;
+    if (months > 0) {
+        const int64_t c = (int64_t)last - (int64_t)5 * gold * months;
+        return (uint32_t)std::max<int64_t>(10 * gold, c);
+    }
+    return std::min<uint32_t>(50 * gold, last + 5 * gold);
+}
+
+bool World::resetTalents(std::vector<uint32_t>& removed, uint32_t now) {
+    if (!data_ || !player_) return false;
+    CharacterProfile& p = profiles_[0];
+    bool any = false;
+    for (const WorldData::TalentInfo& t : data_->talents) if (talentRank(t)) any = true;
+    if (!any) return false;
+    const uint32_t cost = talentResetCost();
+    if (player_->money < cost) return false;
+    for (const WorldData::TalentInfo& t : data_->talents) {
+        auto tab = data_->talentTabs.find(t.tab);
+        if (tab == data_->talentTabs.end() || !(tab->second & (1u << (p.cls - 1)))) continue;
+        for (uint32_t r : t.ranks) {
+            if (std::find(p.book.begin(), p.book.end(), r) == p.book.end()) continue;
+            p.book.erase(std::remove(p.book.begin(), p.book.end(), r), p.book.end());
+            removed.push_back(r);
+            for (int i = player_->auraCount - 1; i >= 0; --i)   // (an active talent's own auras too: Sweeping Strikes)
+                if (player_->auras[i].spell == r) removeAura(*player_, i);
+        }
+    }
+    player_->money -= cost;
+    p.money = player_->money;
+    p.talentResetCostLast = cost;
+    p.talentResetTime = (uint32_t)std::time(nullptr);
+    applyPassives(*player_, now);
+    recomputeGear();
+    return true;
+}
+
 // WoWVita: the temporary enchantment of an equipped weapon - only while that item is the one in the slot
 const ItemEnchant* World::tempEnchantOn(int slot) const {
     if (slot < 15 || slot > 17 || !data_) return nullptr;

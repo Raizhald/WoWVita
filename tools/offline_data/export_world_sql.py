@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL", "ENCH", "TPOS")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL", "ENCH", "TPOS", "TLNT", "AFFM", "PEVT")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -41,7 +41,7 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain", "playercreateinfo",
           "player_classlevelstats", "player_levelstats",
           "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats",
-          "dbscripts_on_event", "creature_template_spells", "spell_proc_item_enchant", "spell_target_position"}
+          "dbscripts_on_event", "creature_template_spells", "spell_proc_item_enchant", "spell_target_position", "spell_affect", "spell_proc_event"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -653,6 +653,25 @@ def full_spell(s, info):
 
 
 MAP_FOR_STARTS = [0]   # (the map being exported: main sets it)
+TALENTS_PATH = [None]  # (the converter's talents.txt: main sets it)
+
+
+def load_talents(path):
+    """The converter's talents.txt: 'B tab classMask order name', 'T id tab row col reqTalent reqRank rank1..5'."""
+    tabs, talents = {}, []
+    if not path:
+        return tabs, talents
+    with open_text(path) as f:
+        for line in f:
+            p = line.rstrip("\n").split("\t")
+            try:
+                if p[0] == "B":
+                    tabs[int(p[1])] = int(p[2])
+                elif p[0] == "T":
+                    talents.append([int(x) for x in p[1:7]] + [int(x) for x in p[7:12]])
+            except (IndexError, ValueError):
+                continue
+    return tabs, talents
 
 
 def class_spell_sections(tables, templates, used, item_needed, sec, report, info, extra_spells=(), families=({}, {})):
@@ -878,6 +897,25 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
         nb.u32(sp_); nb.f32(rate)
     sec["ENCH"] = nb.b
     report["counts_enchants"] = len(ench)
+    # ---- WoWVita "TLNT": the talents (TalentTab / Talent.dbc via the converter's talents.txt) - each tab's class, each
+    # talent's place, prerequisite and rank spells, which the book may hold
+    ttabs, tlist = load_talents(TALENTS_PATH[0])
+    lb2 = Bin()
+    lb2.u32(len(ttabs))
+    for tab, cm in sorted(ttabs.items()):
+        lb2.u32(tab); lb2.u32(cm)
+    tlist = [t for t in tlist if t[1] in ttabs]
+    lb2.u32(len(tlist))
+    for t in tlist:
+        lb2.u32(t[0]); lb2.u32(t[1]); lb2.u8(t[2]); lb2.u8(t[3]); lb2.u32(t[4]); lb2.u8(t[5])
+        ranks = [r_ for r_ in t[6:11] if r_]
+        lb2.u8(len(ranks))
+        for r_ in ranks:
+            lb2.u32(r_)
+            if r_ in spells:
+                want.add(r_)
+    sec["TLNT"] = lb2.b
+    report["counts_talents"] = len(tlist)
     # the passive boosts a form brings (CMaNGOS Aura::HandleShapeshiftBoosts)
     want.update(x for x in (3025, 5420, 5419, 5421, 1178, 9635, 21178, 21156, 7376, 7381, 24905) if x in spells)
     for _pass in range(2):   # (twice: a judgement found in a seal triggers spells too)
@@ -924,6 +962,26 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
         tb.u32(sp); tb.u32(m); tb.f32(x); tb.f32(y); tb.f32(z); tb.f32(o)
     sec["TPOS"] = tb.b
     report["counts_teleports"] = len(trows)
+    # ---- WoWVita "AFFM": spell_affect - the family mask a spell modifier's effect works on, where the DB sets it
+    # (else the spell's EffectItemType: SpellMgr::GetSpellAffectMask)
+    am = Bin()
+    arows = [r for r in tables.get("spell_affect", []) if int(num(g(r, "entry"))) in want]
+    am.u32(len(arows))
+    for r in arows:
+        am.u32(int(num(g(r, "entry")))); am.u8(int(num(g(r, "effectId")))); m_ = int(num(g(r, "SpellFamilyMask"))); am.u32(m_ & 0xFFFFFFFF); am.u32(m_ >> 32)
+    sec["AFFM"] = am.b
+    # ---- WoWVita "PEVT": spell_proc_event - what makes a proc aura fire (flags, hit / crit, the spells, chance, cooldown)
+    pb2 = Bin()
+    prows = [r for r in tables.get("spell_proc_event", []) if int(num(g(r, "entry"))) in want]
+    pb2.u32(len(prows))
+    for r in prows:
+        pb2.u32(int(num(g(r, "entry")))); pb2.u8(int(num(g(r, "SchoolMask")))); pb2.u16(int(num(g(r, "SpellFamilyName"))))
+        for k in range(3):
+            m_ = int(num(g(r, f"SpellFamilyMask{k}")))
+            pb2.u32(m_ & 0xFFFFFFFF); pb2.u32(m_ >> 32)
+        pb2.u32(int(num(g(r, "procFlags")))); pb2.u32(int(num(g(r, "procEx"))))
+        pb2.f32(num(g(r, "ppmRate"))); pb2.f32(num(g(r, "CustomChance"))); pb2.u32(int(num(g(r, "Cooldown"))))
+    sec["PEVT"] = pb2.b
     xb = Bin()
     ids = sorted(want & set(spells))
     xb.u32(len(ids))
@@ -1835,6 +1893,7 @@ def main():
     ap.add_argument("--spells", help="spells.txt written by the converter (cast times, ranges, durations of creature spells)")
     ap.add_argument("--glue", help="glue.txt written by the converter (the start outfits of new characters)")
     ap.add_argument("--skills", help="skills.txt written by the converter (WoWVita: the hunter pets' families, F / A lines)")
+    ap.add_argument("--talents", help="talents.txt written by the converter (WoWVita: the talent trees)")
     ap.add_argument("--map", type=int, default=0, help="0 Eastern Kingdoms (default), 1 Kalimdor")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-compress", action="store_true")
@@ -1851,6 +1910,7 @@ def main():
         print("\n".join(report["errors"]))
         return 1
     MAP_FOR_STARTS[0] = args.map
+    TALENTS_PATH[0] = args.talents
     sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells), glue_path=args.glue,
                 skills_path=args.skills)
     write_pack(args.out, sec, compress=not args.no_compress)

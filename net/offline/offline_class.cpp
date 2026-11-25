@@ -147,11 +147,53 @@ void OfflineSession::learn(uint32_t spell, uint32_t nowMs) {
     saveSoon_ = true;
 }
 
+// Creature::CanTrainAndResetTalentsOf: a class trainer of our class (TRAINER_TYPE_CLASS), and we are level 10 or more
+bool OfflineSession::canResetTalentsAt(uint64_t npc) const {
+    const Entity* e = world_.entity(npc);
+    const Entity* p = world_.player();
+    if (!e || !p || !data_ || !(e->npcFlags & 0x10) || p->level < 10) return false;
+    auto t = data_->trainers.find(e->entry);
+    return t != data_->trainers.end() && t->second.cls == world_.playerProfile().cls;
+}
+
 bool OfflineSession::handleClassSpells(uint16_t op, const Bytes& data, uint32_t nowMs) {
     Reader r(data);
     Entity* p = world_.player();
     if (!p) return false;
     switch (op) {
+        case 0x2AA: {   // MSG_TALENT_WIPE_CONFIRM: the trainer's guid (WorldSession::HandleTalentWipeConfirmOpcode)
+            const uint64_t g = r.u64();
+            if (r.bad || !canResetTalentsAt(g)) return true;
+            std::vector<uint32_t> gone;
+            if (!world_.resetTalents(gone, nowMs)) {   // (no talents, or not the money: "you have not any talent")
+                Writer w; w.u64(0); w.u32(0);
+                send(0x2AA, w.b);
+                return true;
+            }
+            for (uint32_t s : gone) { Writer w; w.u16((uint16_t)s); send(0x203, w.b); }   // SMSG_REMOVED_SPELL
+            sendSelfFields();
+            saveSoon_ = true;
+            return true;
+        }
+        case 0x251: {   // CMSG_LEARN_TALENT: talent id, the rank index to learn (WorldSession::HandleLearnTalentOpcode)
+            const uint32_t id = r.u32(), rank = r.u32();
+            if (r.bad) return true;
+            const WorldData::TalentInfo* t = data_ ? data_->talent(id) : nullptr;
+            const uint8_t why = world_.learnTalent(id, rank, nowMs);
+            if (why || !t) return true;   // (the client checks the same rules and says why)
+            for (uint32_t k = 0; k < rank && k < t->ranks.size(); ++k) {   // SMSG_REMOVED_SPELL of the lower ranks
+                Writer w;
+                w.u16((uint16_t)t->ranks[k]);
+                send(0x203, w.b);
+            }
+            Writer w;
+            w.u16((uint16_t)t->ranks[rank]);
+            w.u16(0);
+            send(SMSG_LEARNED_SPELL, w.b);
+            sendSelfFields();   // (PLAYER_CHARACTER_POINTS1, the stats a talent changed)
+            saveSoon_ = true;
+            return true;
+        }
         case CMSG_TRAINER_LIST: {
             const uint64_t npc = r.u64();
             if (!r.bad) sendTrainerList(npc, nowMs);

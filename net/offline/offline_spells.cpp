@@ -265,6 +265,23 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (s.powerType == 0xFE && e.hp <= (int32_t)cost) return fail(77);   // (health)
         for (const auto& [item, n] : s.reagents)
             if (countPlayerItem(item) < n) return fail(92);                 // SPELL_FAILED_REAGENTS
+        if (e.self && data_)   // WoWVita: a grimoire (SPELL_EFFECT_LEARN_SPELL at TARGET_UNIT_CASTER_PET: Spell::CheckCast)
+            for (int k = 0; k < 3; ++k)
+                if (s.eff[k].effect == E_LEARN_SPELL && s.eff[k].targetA == 5) {
+                    Entity* pt = pet();
+                    if (!pt || !pt->alive()) return fail(76);                       // SPELL_FAILED_NO_PET
+                    const SpellX* ls = data_->sx(s.eff[k].trigger);
+                    if (!ls) return fail(56);                                        // SPELL_FAILED_NOT_KNOWN
+                    if (ls->spellLevel > pt->level) return fail(43);                 // SPELL_FAILED_LOWLEVEL
+                    int active = 0;                                                  // CanTakeMoreActiveSpells: 4
+                    bool replaces = false;
+                    for (uint8_t i = 0; i < pt->spellCount; ++i) {
+                        const SpellX* ps = data_->sx(pt->spells[i]);
+                        if (ps && !ps->passive()) ++active;
+                        if (pt->spells[i] == ls->id || sameSpellChain(pt->spells[i], ls->id)) replaces = true;
+                    }
+                    if (!replaces && !ls->passive() && active >= 4) return fail(137);   // SPELL_FAILED_TOO_MANY_SKILLS
+                }
         if (e.self && data_)   // WoWVita: a teleport to a place of another map (Kalimdor: Orgrimmar, Darnassus...)
             for (int k = 0; k < 3; ++k)
                 if (s.eff[k].effect == E_TELEPORT && (s.eff[k].targetB == 17 || s.eff[k].targetA == 17)) {
@@ -664,6 +681,18 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
             if (c.self) callHunterPet(c, now, std::max(1, effValue(c, s, k, 0)));
             break;
         case E_LEARN_SPELL:   // SPELL_EFFECT_LEARN_SPELL: the session puts it in the book (SMSG_LEARNED_SPELL)
+            if (e.targetA == 5) {   // at the pet (a grimoire): Spell::EffectLearnPetSpell, kept for this demon (pet_spell)
+                Entity* pt = c.self ? pet() : nullptr;
+                if (pt && pt->alive() && e.trigger && petLearn(*pt, e.trigger)) {
+                    CharacterProfile& p = profiles_[0];
+                    auto& pl = p.petLearned;
+                    pl.erase(std::remove_if(pl.begin(), pl.end(), [&](const std::pair<uint32_t, uint32_t>& x) {
+                                 return x.first == pt->entry && sameSpellChain(x.second, e.trigger); }), pl.end());
+                    pl.emplace_back(pt->entry, e.trigger);
+                    emit(SimEvent::PetChanged, pt->guid, c.guid, 0, 2);   // (the session sends SMSG_PET_SPELLS again)
+                }
+                break;
+            }
             for (Entity* x : ts) if (x->self && e.trigger) emit(SimEvent::Message, x->guid, x->guid, e.trigger, 2);
             break;
         case E_DISPEL:   // one magic aura: a harmful one from a friend, a helpful one from an enemy

@@ -57,6 +57,8 @@ bool World::summonPet(Entity& owner, uint32_t entry, uint32_t spell, uint32_t no
     for (uint32_t s : t.spells)
         if (e.spellCount < e.spells.size() && data_->sx(s)) e.spells[e.spellCount++] = s;
     const CharacterProfile& pr = profiles_[0];
+    for (const auto& [pe, ls] : pr.petLearned)   // (pet_spell: what its grimoires taught, kept for this demon)
+        if (pe == entry) petLearn(e, ls);
     e.petAutocastOff = pr.petEntry == entry ? pr.petAutocastOff : 0;
     for (uint8_t i = 0; i < e.spellCount; ++i) {   // CMaNGOS IsAutocastable: not passive, not NO_AUTOCAST_AI
         const SpellX* s = data_->sx(e.spells[i]);
@@ -611,6 +613,32 @@ bool World::feedPet(Entity& owner, uint32_t item, uint32_t now) {
 //   - TotemAI::UpdateAI: an active totem casts at its victim, or the nearest enemy within the spell's range;
 //   - AreaAura (SPELL_EFFECT_APPLY_AREA_AURA_PARTY 35): the totem's aura reaches its owner (and the owner's pet) within
 //     the effect's radius, and leaves them when they step out of it.
+// the ranks of one pet spell (Firebolt 1..7, Torment 1..6): the same family, family flags and first effect
+bool World::sameSpellChain(uint32_t a, uint32_t b) const {
+    const SpellX* x = data_ ? data_->sx(a) : nullptr;
+    const SpellX* y = data_ ? data_->sx(b) : nullptr;
+    if (!x || !y) return false;
+    return x->family == y->family && x->familyFlags == y->familyFlags && x->family != 0 &&
+           x->eff[0].effect == y->eff[0].effect && x->eff[0].aura == y->eff[0].aura && x->eff[0].targetA == y->eff[0].targetA;
+}
+
+bool World::petLearn(Entity& pet, uint32_t spell) {
+    const SpellX* s = data_ ? data_->sx(spell) : nullptr;
+    if (!s) return false;
+    for (uint8_t i = 0; i < pet.spellCount; ++i) {
+        if (pet.spells[i] == spell) return true;
+        if (sameSpellChain(pet.spells[i], spell)) {   // the higher rank takes the lower one's place (and its autocast)
+            const SpellX* old = data_->sx(pet.spells[i]);
+            if (old && old->spellLevel > s->spellLevel) return true;
+            pet.spells[i] = spell;
+            return true;
+        }
+    }
+    if (pet.spellCount >= pet.spells.size()) return false;
+    pet.spells[pet.spellCount++] = spell;
+    return true;
+}
+
 Entity* World::totemIn(uint8_t slot) { return slot < 4 && totems_[slot] ? entity(totems_[slot]) : nullptr; }
 
 Entity* World::summonTotem(Entity& owner, const SpellX& s, int k, uint32_t now) {

@@ -199,6 +199,11 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     payload.u32(0x314E4554u);   // "TEN1": the weapons' temporary enchantments (main hand, off hand, ranged)
     for (const CharacterProfile& c : d.roster)
         for (const TempEnchant& t : c.tempEnchant) { payload.u32(t.id); payload.u32(t.msLeft); payload.u32(t.item); }
+    payload.u32(0x31534C50u);   // "PLS1": what the grimoires taught the pets (pet entry, spell)
+    for (const CharacterProfile& c : d.roster) {
+        payload.u8((uint8_t)std::min<size_t>(c.petLearned.size(), 64));
+        for (size_t i = 0; i < c.petLearned.size() && i < 64; ++i) { payload.u32(c.petLearned[i].first); payload.u32(c.petLearned[i].second); }
+    }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -467,6 +472,19 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
         if (p.u32() == 0x314E4554u) {
             for (CharacterProfile& c : d.roster)
                 for (TempEnchant& t : c.tempEnchant) { t.id = p.u32(); t.msLeft = p.u32(); t.item = p.u32(); }
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the pets' grimoire spells
+        const size_t mark = p.pos;
+        if (p.u32() == 0x31534C50u) {
+            for (CharacterProfile& c : d.roster) {
+                c.petLearned.clear();
+                const uint8_t n = p.u8();
+                for (uint8_t i = 0; i < n && !p.bad; ++i) { const uint32_t pe = p.u32(); c.petLearned.emplace_back(pe, p.u32()); }
+            }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {
             p.pos = mark;

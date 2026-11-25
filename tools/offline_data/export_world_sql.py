@@ -1137,12 +1137,15 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         item_use[src] = (sp, int(num(g(it, "spellcharges_1"))), int(num(g(it, "spellcooldown_1"))))
         for e_ in evs:
             script_events[e_] = [r for r in ev_rows.get(e_, []) if int(num(g(r, "command"))) == 10 and int(num(g(r, "datalong"))) in templates]
-    # (and the items whose use puts a temporary enchantment on a weapon: poisons, sharpening stones, weightstones, oils)
+    # (and the items whose use puts a temporary enchantment on a weapon: poisons, sharpening stones, weightstones, oils;
+    # and the warlocks' grimoires)
     for it_id, it in items_db.items():
         sp = int(num(g(it, "spellid_1")))
         if not sp or int(num(g(it, "spelltrigger_1"))) != 0 or sp not in spell_rows or it_id in item_use:
             continue
-        if any(int(num(g(spell_rows[sp], f"Effect{k}"))) == 54 for k in (1, 2, 3)):
+        if any(int(num(g(spell_rows[sp], f"Effect{k}"))) == 54 or   # (and a grimoire: a spell the pet learns)
+               (int(num(g(spell_rows[sp], f"Effect{k}"))) == 36 and int(num(g(spell_rows[sp], f"EffectImplicitTargetA{k}"))) == 5)
+               for k in (1, 2, 3)):
             item_use[it_id] = (sp, int(num(g(it, "spellcharges_1"))), int(num(g(it, "spellcooldown_1"))))
     used = sorted(set(used) | {int(num(g(r, "datalong"))) for rows in script_events.values() for r in rows})
     eb = Bin()

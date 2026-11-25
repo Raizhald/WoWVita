@@ -694,6 +694,7 @@ struct CharacterProfile {
     bool actionBarSet = false;
     uint32_t ammoId = 0;                  // WoWVita: PLAYER_AMMO_ID, the arrows / bullets in the ammo slot ("AMO1")
     std::array<TempEnchant, 3> tempEnchant{};   // WoWVita: slots 15, 16, 17 ("TEN1")
+    std::vector<std::pair<uint32_t, uint32_t>> petLearned;   // WoWVita: (pet entry, spell) a grimoire taught ("PLS1")
     // WoWVita: the hunter's pet ("HPT1"; CMaNGOS character_pet): what it was tamed from, its level, experience,
     // happiness, loyalty and health (0: dead)
     bool petHunter = false, petRenamed = false;
@@ -934,6 +935,9 @@ public:
     // CastItemCombatSpell, UpdateEnchantTime)
     const ItemEnchant* tempEnchantOn(int slot) const;
     void tickEnchants(uint32_t elapsedMs);
+    // WoWVita: Spell::EffectLearnPetSpell (a warlock's grimoire): the pet learns it, a lower rank goes (Pet::learnSpell)
+    bool petLearn(Entity& pet, uint32_t spell);
+    bool sameSpellChain(uint32_t a, uint32_t b) const;
     // WoWVita: SPELL_EFFECT_TELEPORT_UNITS of the player: the session moves it (Player::TeleportTo)
     bool takeTeleport(float& x, float& y, float& z, float& o) {
         if (!teleportPending_) return false;

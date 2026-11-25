@@ -679,13 +679,43 @@ int main(int argc, char** argv) {
             run(3000);
             CHECK(imp && std::hypot(imp->x - sx, imp->y - sy) < 1.5f && gs.pet.command == w3n::kPetStay, "it stays");
         }
-        // back at login
+        // back at login, with a Grimoire of Firebolt (Rank 2) in the bags
         const std::string name = w.pet() ? w.pet()->petName : "";
+        w.addItemToPlayer(16302, 1, now);
         session.leaveWorld();
         play(warlockGuid);
         run(1000);
         p = w.player();
         CHECK(w.pet() && w.pet()->petName == name && gs.pet.active, "the Imp '%s' comes back at login", name.c_str());
+        // the grimoire (Spell::EffectLearnPetSpell): too low a pet first (Firebolt 2 is level 8), then Firebolt 2 takes
+        // Firebolt 1's place on the pet bar, the book used up, kept for the Imp over a relog
+        if (off::Entity* im = w.pet()) {
+            w3n::InvItem gr;
+            for (const w3n::InvItem& it : gs.inventory()) if (it.entry == 16302 && !it.equipped()) gr = it;
+            CHECK(gr.entry == 16302 && data.itemUse.count(16302), "the grimoire in the bags, usable");
+            im->level = 4;
+            p->gcdEndMs = 0;
+            gs.useItem(gr, now);
+            run(500);
+            CHECK(im->spells[0] == 3110 && w.countPlayerItem(16302) == 1, "an Imp of level 4 cannot learn Firebolt 2");
+            im->level = 10;
+            p->gcdEndMs = 0;
+            gs.useItem(gr, now);
+            run(4000);
+            bool has2 = false, has1 = false;
+            for (uint8_t i = 0; i < im->spellCount; ++i) { has2 |= im->spells[i] == 7799; has1 |= im->spells[i] == 3110; }
+            CHECK(has2 && !has1 && w.countPlayerItem(16302) == 0, "Firebolt 2 learnt in Firebolt 1's place, the grimoire spent");
+            bool bar2 = false;
+            for (uint32_t b : gs.pet.bar) bar2 |= (b & 0xFFFFFF) == 7799;
+            CHECK(bar2, "the pet bar shows Firebolt 2");
+            session.leaveWorld();
+            play(warlockGuid);
+            run(1000);
+            p = w.player();
+            has2 = false;
+            if (off::Entity* im2 = w.pet()) for (uint8_t i = 0; i < im2->spellCount; ++i) has2 |= im2->spells[i] == 7799;
+            CHECK(has2, "the Imp still knows Firebolt 2 after a relog");
+        }
         gs.petDismiss(now);
         run(300);
         CHECK(!w.pet() && !gs.pet.active && gs.petGuid() == 0, "dismissed");

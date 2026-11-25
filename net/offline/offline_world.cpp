@@ -76,6 +76,7 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
     questLog_.clear();
     player_ = nullptr;
     petGuid_ = 0;   // WoWVita
+    for (uint64_t& g : totems_) g = 0;
     for (Entity*& b : bots_) b = nullptr;
     botsEnabled_ = botsEnabled;
     seed_ = seed ? seed : 1;
@@ -100,7 +101,7 @@ void World::reset(uint32_t nowMs, uint32_t seed, const CharacterProfile& player,
         e.playerLike = true;
         e.profileIndex = 0;
         e.level = (uint8_t)std::min<uint32_t>(profiles_[0].level, 60);
-        e.faction = 1;                              // human / Alliance player faction for the offline rules
+        e.faction = raceFaction(profiles_[0].race);   // WoWVita: ChrRaces.dbc FactionID (was always Stormwind's)
         e.displayId = 49;                           // human male; the server layer writes the real look fields
         e.hp = profiles_[0].hp;
         e.maxHp = profiles_[0].maxHp;
@@ -889,6 +890,7 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
     int32_t dmg = rng_.range((int32_t)a.dmgMin, (int32_t)a.dmgMax);
     if (const int32_t ap = auraSum(a, 99)) dmg += ap * (int32_t)a.attackMs / 14000;   // WoWVita: attack power auras
     if (hasAuraType(a, 67)) dmg = std::max(1, dmg / 2);                              // WoWVita: disarmed
+    if (const int32_t taken = auraSum(b, 125)) dmg = std::max(0, dmg + taken);   // SPELL_AURA_MOD_MELEE_DAMAGE_TAKEN (Stoneskin)
     if (a.petHunter) {   // WoWVita: Pet::GetConditionalTotalPhysicalDamageModifier - happy 125 %, unhappy 75 %
         if (a.petHappiness >= 666000) dmg = dmg * 5 / 4;
         else if (a.petHappiness < 333000) dmg = dmg * 3 / 4;
@@ -1553,6 +1555,7 @@ void World::selectCreatureTarget(Entity& e, uint32_t nowMs) {
 }
 
 void World::tickCreature(Entity& e, uint32_t nowMs) {
+    if (e.totem) { tickTotem(e, nowMs); return; }     // WoWVita: a totem (offline_pet.cpp)
     if (e.ownerGuid) { tickPet(e, nowMs); return; }   // WoWVita: a pet (offline_pet.cpp)
     if (e.summonerGuid && ((e.dead && e.respawnAtMs && nowMs >= e.respawnAtMs) || (!e.dead && e.despawnAtMs && nowMs >= e.despawnAtMs))) {
         emit(SimEvent::Vanish, e.guid, 0, 0, 0);   // WoWVita: a script summon's time is up / its corpse goes

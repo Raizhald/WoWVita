@@ -265,6 +265,9 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (s.powerType == 0xFE && e.hp <= (int32_t)cost) return fail(77);   // (health)
         for (const auto& [item, n] : s.reagents)
             if (countPlayerItem(item) < n) return fail(92);                 // SPELL_FAILED_REAGENTS
+        if (e.self)   // Spell::CheckItems: the totem items it needs, in the bags (Earth Totem, Fire Totem...)
+            for (uint32_t item : s.totem)
+                if (item && countPlayerItem(item) < 1) return fail(0x78);   // SPELL_FAILED_TOTEMS
         if (s.equipClass >= 0) {   // a weapon (2) or a shield (4 / 6) worn
             const CharacterProfile& p = profiles_[0];
             bool ok = false;
@@ -612,6 +615,9 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
             break;
         case 55:   // SPELL_EFFECT_TAME_CREATURE (13481 at the end of Tame Beast's channel)
             if (c.self && t && t != &c) tameCreature(c, *t, s.id, now);
+            break;
+        case 74: case 87: case 88: case 89: case 90:   // SPELL_EFFECT_SUMMON_TOTEM (_SLOT1..4): offline_pet.cpp
+            summonTotem(c, s, k, now);
             break;
         case 102:   // SPELL_EFFECT_DISMISS_PET: the hunter's pet goes, kept for Call Pet
             if (c.self && pet()) { dismissPet(false); profiles_[0].petOut = false; }

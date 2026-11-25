@@ -42,9 +42,14 @@ void OfflineSession::setupBook() {
     if (p.book.empty()) {   // a new character, or one of an older save: the race and class's own spells
         auto it = data_->createSpells.find((uint32_t)p.race | ((uint32_t)p.cls << 8));
         if (it != data_->createSpells.end()) p.book = it->second;
-        for (uint8_t i = 0; i < p.spellCount; ++i)
-            if (std::find(p.book.begin(), p.book.end(), p.spells[i]) == p.book.end()) p.book.push_back(p.spells[i]);
+        else   // (a pack without playercreateinfo_spell: the sample's few spells; with it, nothing else - a shaman knew
+               // the warrior's Heroic Strike before)
+            for (uint8_t i = 0; i < p.spellCount; ++i)
+                if (std::find(p.book.begin(), p.book.end(), p.spells[i]) == p.book.end()) p.book.push_back(p.spells[i]);
     }
+    // (older saves: a paladin, hunter, shaman, warlock or druid got the warrior's Heroic Strike, Battle Shout and Taunt)
+    if (p.cls != 1 && data_->createSpells.count((uint32_t)p.race | ((uint32_t)p.cls << 8)))
+        p.book.erase(std::remove_if(p.book.begin(), p.book.end(), [](uint32_t s) { return s == 78 || s == 6673 || s == 355; }), p.book.end());
 }
 
 void OfflineSession::startStance(uint32_t nowMs) {   // a warrior in Battle Stance (2457) unless in another one

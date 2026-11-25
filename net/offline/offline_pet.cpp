@@ -600,5 +600,136 @@ bool World::feedPet(Entity& owner, uint32_t item, uint32_t now) {
     return true;
 }
 
+// ================================================================ WoWVita: totems, after CMaNGOS
+//   - Spell::EffectSummonTotem (74, _SLOT1..4 87..90): one totem a slot (fire, earth, water, air), the old one goes;
+//     at the spot TARGET_LOCATION_CASTER_FRONT_RIGHT / BACK_RIGHT / BACK_LEFT / FRONT_LEFT (41..44) puts it, 2 yd off
+//     (Spell::SetTargetMap: "all shaman totems have 0 radius"); the owner's faction and level, the spell's duration,
+//     its damage as the totem's health, UNIT_CREATED_BY_SPELL;
+//   - Totem::SetTypeBySummonSpell: a totem whose spell has a cast time is TOTEM_ACTIVE (Searing Totem), else
+//     TOTEM_PASSIVE: Totem::Summon casts its spells on itself (Stoneskin, Healing Stream, Earthbind...);
+//   - Totem::Update: it goes when its time is up, when it or its owner dies; Totem::UnSummon takes its auras away;
+//   - TotemAI::UpdateAI: an active totem casts at its victim, or the nearest enemy within the spell's range;
+//   - AreaAura (SPELL_EFFECT_APPLY_AREA_AURA_PARTY 35): the totem's aura reaches its owner (and the owner's pet) within
+//     the effect's radius, and leaves them when they step out of it.
+Entity* World::totemIn(uint8_t slot) { return slot < 4 && totems_[slot] ? entity(totems_[slot]) : nullptr; }
+
+Entity* World::summonTotem(Entity& owner, const SpellX& s, int k, uint32_t now) {
+    if (!data_ || !owner.self) return nullptr;
+    const SpellEffectX& fx = s.eff[k];
+    auto it = data_->totems.find((uint32_t)fx.misc);
+    if (it == data_->totems.end()) return nullptr;
+    const TotemTemplate& tt = it->second;
+    const uint8_t slot = fx.effect >= 87 && fx.effect <= 90 ? (uint8_t)(fx.effect - 87) : 4;
+    if (Entity* old = totemIn(slot)) unsummonTotem(*old);
+    float angle = owner.o;
+    switch (fx.targetA) {
+        case 41: angle += 3.14159265f * 1.75f; break;   // TARGET_LOCATION_CASTER_FRONT_RIGHT
+        case 42: angle += 3.14159265f * 1.25f; break;   // BACK_RIGHT
+        case 43: angle += 3.14159265f * 0.75f; break;   // BACK_LEFT
+        case 44: angle += 3.14159265f * 0.25f; break;   // FRONT_LEFT
+        default: break;
+    }
+    const float r = fx.radius > 0 ? fx.radius : 2.0f;
+    const uint64_t guid = 0xF130000000000000ull | ((uint64_t)(tt.entry & 0xFFFFFF) << 24) | (uint64_t)(0xC00000u + (++summonCounter_ & 0x3FFFFF));
+    Entity& e = allocate(guid);
+    if (!e.used) return nullptr;
+    e.objType = 3;
+    e.entry = tt.entry;
+    e.ownerGuid = owner.guid;
+    e.totem = true;
+    e.totemSlot = slot;
+    e.createdBySpell = s.id;
+    e.faction = owner.faction;
+    e.level = owner.level;
+    e.displayId = tt.displayId;
+    e.scale = tt.scale;
+    e.speed = 0;
+    e.boundingRadius = 0.5f;
+    e.combatReach = 1.5f;
+    const int32_t dmg = effValue(owner, s, k, 0);   // (if not, the template's health)
+    e.maxHp = dmg > 0 ? (uint32_t)dmg : std::max<uint32_t>(1, tt.hp);
+    e.hp = (int32_t)e.maxHp;
+    e.powerType = 0; e.power = 0; e.maxPower = 0;
+    e.x = owner.x + std::cos(angle) * r;
+    e.y = owner.y + std::sin(angle) * r;
+    e.z = owner.z;
+    e.o = owner.o;
+    applyGround(e);
+    if (std::fabs(e.z - owner.z) > 5.0f) e.z = owner.z;   // (Totem::Create: at the caster's height when far off it)
+    e.homeX = e.x; e.homeY = e.y; e.homeZ = e.z; e.homeO = e.o;
+    const uint32_t d = durationX(owner, s);
+    e.despawnAtMs = d ? now + d : 0;
+    e.spellCount = 0;
+    for (uint32_t sp : tt.spells)
+        if (e.spellCount < e.spells.size() && data_->sx(sp)) e.spells[e.spellCount++] = sp;
+    const SpellX* first = e.spellCount ? data_->sx(e.spells[0]) : nullptr;
+    e.totemActive = first && first->castMs > 0;
+    if (slot < 4) totems_[slot] = guid;
+    emit(SimEvent::Appear, guid, 0, 0, 0);
+    if (!e.totemActive)   // TOTEM_PASSIVE: CastSpell(nullptr, spell, TRIGGERED_OLD_TRIGGERED)
+        for (uint8_t i = 0; i < e.spellCount; ++i) castX(e, e.spells[i], e.guid, now, true);
+    return &e;
+}
+
+void World::unsummonTotem(Entity& t) {
+    if (!t.used || !t.totem) return;
+    const uint64_t guid = t.guid;
+    for (Entity& o : pool_) {   // (its auras: on itself, its owner, the owner's pet)
+        if (!o.used) continue;
+        for (int i = o.auraCount - 1; i >= 0; --i)
+            if (o.auras[i].caster == guid) removeAura(o, i);
+        if (o.victim == guid) o.victim = o.target = 0;
+    }
+    for (uint64_t& g : totems_) if (g == guid) g = 0;
+    for (AreaFx& a : areas_) if (a.used && a.caster == guid) a.used = false;
+    emit(SimEvent::Vanish, guid, 0, 0, 0);
+    Entity* self = entity(guid);
+    if (self) *self = Entity();
+}
+
+void World::tickTotem(Entity& e, uint32_t now) {
+    Entity* owner = entity(e.ownerGuid);
+    if (!owner || !owner->alive() || e.dead || !e.alive() || (e.despawnAtMs && now >= e.despawnAtMs)) { unsummonTotem(e); return; }
+    e.victim = 0;   // (it never swings)
+    // AreaAura::Update (party): the owner and its pet, when within the radius
+    for (uint8_t i = 0; i < e.auraCount; ++i) {
+        const Aura a = e.auras[i];
+        if (a.caster != e.guid) continue;
+        const SpellX* s = data_ ? data_->sx(a.spell) : nullptr;
+        if (!s || s->eff[a.effIndex].effect != 35) continue;
+        const float radius = s->eff[a.effIndex].radius > 0 ? s->eff[a.effIndex].radius : 30.0f;
+        Entity* members[2] = {owner, pet()};
+        for (Entity* m : members) {
+            if (!m) continue;
+            int have = -1;
+            for (int j = 0; j < m->auraCount; ++j)
+                if (m->auras[j].spell == a.spell && m->auras[j].caster == e.guid && m->auras[j].effIndex == a.effIndex) { have = j; break; }
+            const bool in = m->alive() && distance(e, *m) <= radius;
+            if (in && have < 0) applyAuraX(e, *m, *s, a.effIndex, now, 0);
+            else if (!in && have >= 0) removeAura(*m, have);
+        }
+    }
+    if (!e.totemActive || e.castSpell || !e.spellCount) return;
+    // TotemAI::UpdateAI
+    const SpellX* s = data_->sx(e.spells[0]);
+    if (!s || cooldownLeft(e, s->id, now)) return;
+    const float range = s->rangeMax;
+    Entity* v = e.totemVictim ? entity(e.totemVictim) : nullptr;
+    if (!v || !v->alive() || !hostileTowards(e, *v) || distance(e, *v) > range || v->untargetable) {
+        v = nullptr;
+        float best = range;
+        for (Entity& o : pool_) {   // MaNGOS::NearestAttackableUnitInObjectRangeCheck
+            if (!o.used || !o.alive() || &o == &e || o.untargetable || !hostileTowards(e, o)) continue;
+            if (o.objType == 3 && o.aiState == 3) continue;   // (evading)
+            const float dd = distance(e, o);
+            if (dd < best) { best = dd; v = &o; }
+        }
+    }
+    e.totemVictim = v ? v->guid : 0;
+    if (!v) return;
+    e.o = std::atan2(v->y - e.y, v->x - e.x);
+    castX(e, s->id, v->guid, now, false);
+}
+
 }  // namespace offline
 }  // namespace w3n

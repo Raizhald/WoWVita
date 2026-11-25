@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -38,10 +38,10 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "creature_movement", "creature_movement_template", "creature_ai_scripts", "broadcast_text", "creature_ai_texts",
           "spawn_group", "spawn_group_spawn", "spawn_group_entry", "pool_creature", "pool_creature_template", "pool_template",
           "creature_linking", "creature_linking_template",
-          "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain",
+          "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain", "playercreateinfo",
           "player_classlevelstats", "player_levelstats",
           "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats",
-          "dbscripts_on_event"}
+          "dbscripts_on_event", "creature_template_spells"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -650,6 +650,9 @@ def full_spell(s, info):
     return b.b
 
 
+MAP_FOR_STARTS = [0]   # (the map being exported: main sets it)
+
+
 def class_spell_sections(tables, templates, used, item_needed, sec, report, info, extra_spells=(), families=({}, {})):
     """'SPX2' (every spell the classes can have, with what they trigger), 'TRNR' (the class trainers on the map:
     npc_trainer / npc_trainer_template - the teaching spell, the spell it teaches, cost, level, the rank before it),
@@ -810,6 +813,39 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
             pb.s(w)
     sec["PETS"] = pb.b
     report["counts_pets"] = dict(pets=len(pets), entries=pets)
+    # ---- WoWVita "TOTM": the totems the class spells summon (SPELL_EFFECT_SUMMON_TOTEM 74, _SLOT1..4 87..90): the
+    # creature (name, model, health - the summoning spell's damage overrides it), its spells (creature_template_spells
+    # setId 0: CMaNGOS LoadCreatureTemplateSpells, the legacy spell list entry * 100); the totem items they need
+    tspells = {}
+    for r in tables.get("creature_template_spells", []):
+        if int(num(g(r, "setId"))) == 0:
+            tspells[int(num(g(r, "entry")))] = [int(num(g(r, f"spell{i}"))) for i in range(1, 11) if int(num(g(r, f"spell{i}")))]
+    totem_entries = set()
+    for sp in list(want):
+        r = spells.get(sp)
+        if not r:
+            continue
+        for k in (1, 2, 3):
+            if int(num(g(r, f"Effect{k}"))) in (74, 87, 88, 89, 90) and int(num(g(r, f"EffectMiscValue{k}"))):
+                totem_entries.add(int(num(g(r, f"EffectMiscValue{k}"))))
+        for k in (1, 2):
+            it = int(num(g(r, f"Totem{k}")))
+            if it > 0:
+                item_needed.add(it)
+    ob = Bin()
+    totems = [e for e in sorted(totem_entries) if e in all_templates]
+    ob.u32(len(totems))
+    for e in totems:
+        t = all_templates[e]
+        display = next((int(num(g(t, f"ModelId{i}"))) for i in (1, 2, 3, 4) if int(num(g(t, f"ModelId{i}")))), 0)
+        ts = [x for x in tspells.get(e, []) if x in spells][:4]
+        want.update(ts)
+        ob.u32(e); ob.s(str(g(t, "Name"))[:60]); ob.u32(display); ob.u32(max(1, int(num(g(t, "MinLevelHealth")))))
+        ob.f32((num(g(t, "Scale", default=1.0)) or 1.0)); ob.u8(len(ts))
+        for x in ts:
+            ob.u32(x)
+    sec["TOTM"] = ob.b
+    report["counts_totems"] = dict(totems=len(totems))
     # the passive boosts a form brings (CMaNGOS Aura::HandleShapeshiftBoosts)
     want.update(x for x in (3025, 5420, 5419, 5421, 1178, 9635, 21178, 21156, 7376, 7381, 24905) if x in spells)
     for _pass in range(2):   # (twice: a judgement found in a seal triggers spells too)
@@ -868,6 +904,18 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
         for sp in lst:
             cb.u32(sp)
     sec["CRSP"] = cb.b
+    # ---- WoWVita "STRT": where each race and class starts (playercreateinfo) when it is on this map
+    starts = []
+    for r in tables.get("playercreateinfo", []):
+        if int(num(g(r, "map"))) == MAP_FOR_STARTS[0]:
+            starts.append((int(num(g(r, "race"))), int(num(g(r, "class"))), int(num(g(r, "zone"))),
+                           num(g(r, "position_x")), num(g(r, "position_y")), num(g(r, "position_z")), num(g(r, "orientation"))))
+    sb = Bin()
+    sb.u32(len(starts))
+    for race, cls, zone, x, y, z, o in sorted(starts):
+        sb.u8(race); sb.u8(cls); sb.u32(zone); sb.f32(x); sb.f32(y); sb.f32(z); sb.f32(o)
+    sec["STRT"] = sb.b
+    report["counts_starts"] = len(starts)
     report["counts_class_spells"] = dict(spells=len(ids), trainers=len(trainers),
                                          trainer_spells=sum(len(l) for _, _, l in trainers), create_lists=len(create),
                                          radius_known=bool(info.get("idx_radius")))
@@ -1456,23 +1504,28 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
             for k in (1, 2, 3):
                 if int(num(g(r, f"action{k}_type"))) == 2 and int(num(g(r, f"action{k}_param1"))):
                     factions_used.add(int(num(g(r, f"action{k}_param1"))))
-    # ---- hostility towards the player's faction template (1: Human; the companions use it too)
+    # ---- hostility towards the players' faction templates (ChrRaces FactionID: 1 Human, 2 Orc, 3 Dwarf, 4 Night Elf,
+    # 5 Undead, 6 Tauren, 115 Gnome, 116 Troll; the companions use the human's)
     host = []
     hostile_n = neutral_n = 0
-    me = factions.get(player_faction)
-    for f in sorted(factions_used):
-        if not f or f == player_faction:
+    for pf in (player_faction, 2, 3, 4, 5, 6, 115, 116):
+        me = factions.get(pf)
+        if not me:
             continue
-        ft = factions.get(f)
-        if not ft or not me:
-            report["warn"].append(f"faction template {f} not in factions.txt")
-            continue
-        if hostile_to(ft, me) or hostile_to(me, ft):
-            host.append((f, player_faction))
-            hostile_n += 1
-        elif not friendly_to(ft, me) and not friendly_to(me, ft):
-            host.append((f | 0x80000000, player_faction))
-            neutral_n += 1
+        for f in sorted(factions_used):
+            if not f or f == pf:
+                continue
+            ft = factions.get(f)
+            if not ft:
+                if pf == player_faction:
+                    report["warn"].append(f"faction template {f} not in factions.txt")
+                continue
+            if hostile_to(ft, me) or hostile_to(me, ft):
+                host.append((f, pf))
+                hostile_n += 1
+            elif not friendly_to(ft, me) and not friendly_to(me, ft):
+                host.append((f | 0x80000000, pf))
+                neutral_n += 1
 
     # ---- sections
     sec = {}
@@ -1705,6 +1758,7 @@ def main():
     if report["errors"]:
         print("\n".join(report["errors"]))
         return 1
+    MAP_FOR_STARTS[0] = args.map
     sec = build(tables, load_factions(args.factions), args.map, report, spell_info=load_spell_info(args.spells), glue_path=args.glue,
                 skills_path=args.skills)
     write_pack(args.out, sec, compress=not args.no_compress)

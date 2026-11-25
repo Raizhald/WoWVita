@@ -301,6 +301,20 @@ struct PetFamily {
 };
 // WoWVita "PETS": a summoned pet (CMaNGOS Pet::InitStatsForLevel for SUMMON_PET)
 struct PetLevel { uint16_t hp = 0, mana = 0, armor = 0, str = 0, agi = 0, sta = 0, inte = 0, spi = 0; float dmgMin = 1, dmgMax = 2; };
+// WoWVita "TOTM": a totem a class spell summons (creature_template + creature_template_spells setId 0)
+// ChrRaces.dbc FactionID: the faction template a race's players have
+inline uint32_t raceFaction(uint8_t race) {
+    switch (race) {
+        case 2: return 2; case 3: return 3; case 4: return 4; case 5: return 5; case 6: return 6;
+        case 7: return 115; case 8: return 116; default: return 1;
+    }
+}
+struct TotemTemplate {
+    uint32_t entry = 0, displayId = 0, hp = 1;
+    std::string name;
+    float scale = 1;
+    std::vector<uint32_t> spells;
+};
 struct PetTemplate {
     uint32_t entry = 0, displayId = 0;
     std::string name;
@@ -371,6 +385,9 @@ struct WorldData {
     std::unordered_map<uint32_t, SpellX> spellx;                      // "SPX2"
     std::unordered_map<uint32_t, PlayerLevelStats> playerStats;       // "PLST": race | class << 8 | level << 16
     std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
+    std::unordered_map<uint32_t, TotemTemplate> totems;               // "TOTM": creature entry -> the totem
+    struct StartPos { uint32_t zone = 0; float x = 0, y = 0, z = 0, o = 0; };
+    std::unordered_map<uint32_t, StartPos> starts;                    // "STRT": race | class << 8 -> playercreateinfo
     std::unordered_map<uint32_t, std::vector<EventSummon>> eventSummons;   // "EVSC": event id -> what it summons
     std::unordered_map<uint32_t, ItemUse> itemUse;                    // "IUSE": item entry -> its use spell
     std::unordered_map<uint32_t, PetFamily> families;                 // "FAMI"
@@ -560,6 +577,9 @@ struct Entity {
     uint8_t petAutocastOff = 0;                // its spells (bit = index) that it does not cast by itself
     bool petMelee = true;                      // (the Imp does not melee: PetAI m_meleeEnabled)
     bool petHunter = false;                    // WoWVita: a tamed beast (HUNTER_PET): focus, happiness, loyalty, experience
+    bool totem = false, totemActive = false;   // WoWVita: a shaman's totem (CMaNGOS Totem: TOTEM_PASSIVE / TOTEM_ACTIVE)
+    uint8_t totemSlot = 4;                     // TOTEM_SLOT_FIRE 0, EARTH 1, WATER 2, AIR 3, none 4
+    uint64_t totemVictim = 0;                  // TotemAI i_victimGuid
     bool petRenamed = false;
     uint32_t family = 0, petXp = 0, petLoyaltyXpNeed = 0, petHappyTickMs = 0, petLoyaltyTickMs = 0, petFocusTickMs = 0;
     int32_t petHappiness = 0, petLoyaltyPoints = 0;
@@ -888,6 +908,10 @@ public:
     bool feedPet(Entity& owner, uint32_t itemEntry, uint32_t nowMs);   // SPELL_EFFECT_FEED_PET
     void rewardSpell(Entity& p, uint32_t spell, uint32_t nowMs);
     Entity* summonCreature(uint32_t entry, float x, float y, float z, float o, uint32_t despawnMs, uint64_t summoner, uint32_t nowMs);
+    // WoWVita: totems (offline_totem.cpp - CMaNGOS Spell::EffectSummonTotem, Totem, TotemAI, AreaAura)
+    Entity* summonTotem(Entity& owner, const SpellX& s, int k, uint32_t nowMs);
+    void unsummonTotem(Entity& totem);
+    Entity* totemIn(uint8_t slot);
     bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach
     void setSelection(uint64_t g) { selection_ = g; }            // the player's target (CMSG_SET_SELECTION)
     void stopAutoRepeat(Entity& e);                                // CMSG_CANCEL_AUTO_REPEAT_SPELL / SMSG_CANCEL_AUTO_REPEAT
@@ -948,12 +972,14 @@ private:
     Entity* player_ = nullptr;
     Entity* bots_[kMaxParty] = {nullptr, nullptr, nullptr, nullptr};
     uint64_t petGuid_ = 0;     // WoWVita: our pet
+    uint64_t totems_[4] = {0, 0, 0, 0};   // WoWVita: Unit::m_TotemSlot
     uint32_t petCounter_ = 0;
     uint32_t summonCounter_ = 0;   // WoWVita: script summons' guids
     uint64_t selection_ = 0;       // WoWVita: the player's target
     void tickAutoRepeat(Entity& e, uint32_t nowMs);
     void takeAmmo(Entity& e);
     void tickPet(Entity& e, uint32_t nowMs);
+    void tickTotem(Entity& e, uint32_t nowMs);
     void applyPetLevel(Entity& e);
     void tickHunterPet(Entity& e, Entity& owner, uint32_t nowMs);
     void modifyLoyalty(Entity& e, int32_t add);

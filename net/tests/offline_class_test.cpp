@@ -828,6 +828,121 @@ int main(int argc, char** argv) {
     run(1000);
     CHECK(!w.pet(), "a dismissed one stays away at login");
     session.leaveWorld();
+    // ---- the shaman: totems (Spell::EffectSummonTotem, Totem, TotemAI, AreaAura): the totem item, a slot each, the old one
+    // replaced, the aura reaches the owner within its radius, Searing Totem attacks, Healing Stream heals, time / death
+    CHECK(session.deleteCharacter(warlockGuid) == w3n::CHAR_DELETE_SUCCESS, "the warlock leaves room");
+    w3n::CharCreateInfo sh; sh.name = "Thrall"; sh.race = 2; sh.cls = 7;
+    CHECK(session.createCharacter(sh) == w3n::CHAR_CREATE_SUCCESS, "an orc shaman");
+    uint64_t shamanGuid = 0;
+    for (const auto& c : session.characters()) if (c.name == "Thrall") shamanGuid = c.guid;
+    play(shamanGuid);
+    run(800);
+    p = w.player();
+    {
+        off::CharacterProfile& sp = w.playerProfile();
+        std::printf("shaman: book");
+        for (uint32_t b : sp.book) std::printf(" %u", b);
+        std::printf(" | totems %zu\n", data.totems.size());
+        CHECK(data.totems.count(5873) && data.totems.count(2523) && data.totems.at(5873).spells.size() == 1 &&
+              data.totems.at(5873).spells[0] == 8072, "the pack's totems (Stoneskin casts 8072)");
+        p->level = 20; p->maxHp = p->hp = 30000;
+        p->maxPower = p->power = 5000;
+        for (uint32_t b : {8071u, 2484u, 3599u, 5394u}) sp.book.push_back(b);
+        // (all of its kind around are out of the way: the totems' effects are watched on our own)
+        off::Entity* foe = nullptr;   // (kept for the Searing Totem: the nearest enemy)
+        {
+            float bd = 400;
+            for (int i = 0; i < off::kMaxEntities; ++i) {
+                off::Entity* e = w.byIndex(i);
+                if (!e || !e->used || e->objType != 3 || !e->alive() || e->npcFlags || e->ownerGuid || !w.canAttack(*p, *e)) continue;
+                const float d = std::hypot(e->x - p->x, e->y - p->y);
+                if (d < bd) { bd = d; foe = e; }
+            }
+            // (Deathknell's zombies and bats are yellow - faction 7 - and a totem attacks only enemies: this one turns red)
+            if (foe && !w.hostileTowards(*p, *foe)) foe->faction = 14;
+            CHECK(!foe || w.hostileTowards(*p, *foe), "an enemy (faction %u)", foe ? foe->faction : 0);
+        }
+        for (int i = 0; i < off::kMaxEntities; ++i) {
+            off::Entity* e = w.byIndex(i);
+            if (e && e->used && e->objType == 3 && e->alive() && !e->npcFlags && !e->ownerGuid && std::hypot(e->x - p->x, e->y - p->y) < 60) {
+                e->hp = 0; e->dead = true; e->respawnAtMs = now + 3600000;
+            }
+        }
+        p->gcdEndMs = 0;
+        CHECK(!w.tryCast(*p, 8071, p->guid, now) && !w.totemIn(1), "no Earth Totem in the bags: SPELL_FAILED_TOTEMS");
+        for (uint32_t it : {5175u, 5176u, 5177u}) {
+            off::BagItem& b = sp.bag[sp.bagCount];
+            b = off::BagItem(); b.entry = it; b.count = 1; b.slot = sp.bagCount; ++sp.bagCount;
+        }
+        p->gcdEndMs = 0;
+        CHECK(w.tryCast(*p, 8071, p->guid, now), "Stoneskin Totem");
+        run(300);
+        off::Entity* st = w.totemIn(1);
+        CHECK(st && st->entry == 5873 && st->ownerGuid == p->guid && st->totem && !st->totemActive && st->faction == p->faction,
+              "the earth slot holds it, ours");
+        if (st) {
+            const float d = std::hypot(st->x - p->x, st->y - p->y);
+            std::printf("stoneskin totem: hp %d/%u at %.2f yd, level %u\n", st->hp, st->maxHp, d, st->level);
+            CHECK(st->maxHp == 5 && d > 1.5f && d < 2.5f && st->level == p->level, "the spell's damage is its health (5), 2 yd off");
+            CHECK(gs.objects.find(st->guid) != nullptr, "the client sees the totem");
+            auto aura = [&](off::Entity& e, uint32_t spell) -> const off::Aura* {
+                for (uint8_t i = 0; i < e.auraCount; ++i) if (e.auras[i].spell == spell) return &e.auras[i];
+                return nullptr;
+            };
+            const off::Aura* a = aura(*p, 8072);
+            CHECK(a && a->amount == -4 && a->caster == st->guid && a->positive, "Stoneskin on us: melee damage taken -4 (%d)", a ? a->amount : 0);
+            // out of its 20 yd and back
+            const float ox = p->x, oy = p->y;
+            gs.mover.reset(ox + 25, oy, p->z, 0, now);
+            w.setPosition(*p, ox + 25, oy, p->z, 0);
+            run(300);
+            CHECK(!aura(*p, 8072), "out of its radius: gone");
+            gs.mover.reset(ox, oy, p->z, 0, now);
+            w.setPosition(*p, ox, oy, p->z, 0);
+            run(300);
+            CHECK(aura(*p, 8072) != nullptr, "back within it: again");
+            // a second earth totem replaces it
+            const uint64_t stGuid = st->guid;
+            p->gcdEndMs = 0;
+            CHECK(w.tryCast(*p, 2484, p->guid, now), "Earthbind Totem");
+            run(300);
+            off::Entity* eb = w.totemIn(1);
+            CHECK(eb && eb->entry == 2630 && !w.entity(stGuid) && !aura(*p, 8072), "Earthbind took the earth slot: Stoneskin and its aura gone");
+            CHECK(!gs.objects.find(stGuid), "the client lost the old totem");
+            // Searing Totem (fire, TOTEM_ACTIVE): Attack at the nearest enemy within its range
+            CHECK(foe != nullptr, "an enemy for the Searing Totem");
+            if (foe) {
+                foe->dead = false; foe->hp = (int32_t)(foe->maxHp = 5000); foe->respawnAtMs = 0;
+                w.setPosition(*foe, p->x + 12, p->y, p->z, 0);
+                foe->homeX = foe->x; foe->homeY = foe->y;
+                p->gcdEndMs = 0;
+                CHECK(w.tryCast(*p, 3599, p->guid, now), "Searing Totem");
+                run(300);
+                off::Entity* sr = w.totemIn(0);
+                CHECK(sr && sr->entry == 2523 && sr->totemActive, "the fire slot, an active totem");
+                run(6000);
+                std::printf("searing: foe hp %d/%u\n", foe->hp, foe->maxHp);
+                CHECK(foe->hp < (int32_t)foe->maxHp, "it burns the enemy");
+                foe->hp = 0; foe->dead = true; foe->respawnAtMs = now + 3600000;
+                if (sr) {
+                    const off::SpellX* sx = data.sx(3599);
+                    run(sx ? (uint32_t)std::max(0, sx->durBase) : 30000);
+                    CHECK(!w.totemIn(0), "its time is up (%d ms)", sx ? sx->durBase : 0);
+                }
+            }
+            // Healing Stream (water): heals us every 2 s
+            p->hp = 1000;
+            p->gcdEndMs = 0;
+            CHECK(w.tryCast(*p, 5394, p->guid, now), "Healing Stream Totem");
+            run(4300);
+            CHECK(p->hp > 1000 && w.totemIn(2), "it heals us (%d)", p->hp);
+            // the owner dies: its totems go
+            w.applyDamage(*p, *p, p->hp + 100, 0, 0, now);
+            run(300);
+            CHECK(!w.totemIn(1) && !w.totemIn(2), "dead: the totems are gone");
+        }
+    }
+    session.leaveWorld();
     off::OfflineSaveData sd;
     std::string serr;
     CHECK(off::loadOffline(savePath, sd, serr), "load: %s", serr.c_str());

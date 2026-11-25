@@ -236,7 +236,11 @@ void addCreatureCreate(UpdateBuilder& u, const Entity& ent) {
     f.set(UF::UNIT_BOUNDINGRADIUS, 0x3F000000u);
     f.set(UF::UNIT_COMBATREACH, 0x3FC00000u);
     if (e->dead) f.set(UF::UNIT_DYNAMIC_FLAGS, 1);
-    if (e->ownerGuid) {   // WoWVita: a pet (CMaNGOS Pet::CreateBaseAtCreature / InitStatsForLevel fields)
+    if (e->totem) {   // WoWVita: a totem (Spell::EffectSummonTotem: SetOwnerGuid, UNIT_CREATED_BY_SPELL)
+        f.set(12, (uint32_t)e->ownerGuid); f.set(13, (uint32_t)(e->ownerGuid >> 32));   // UNIT_FIELD_SUMMONEDBY
+        f.set(146, e->createdBySpell);
+        f.set(46, 0x8u);   // UNIT_FLAG_PLAYER_CONTROLLED (the caster's)
+    } else if (e->ownerGuid) {   // WoWVita: a pet (CMaNGOS Pet::CreateBaseAtCreature / InitStatsForLevel fields)
         f.set(12, (uint32_t)e->ownerGuid); f.set(13, (uint32_t)(e->ownerGuid >> 32));   // UNIT_FIELD_SUMMONEDBY
         f.set(14, (uint32_t)e->ownerGuid); f.set(15, (uint32_t)(e->ownerGuid >> 32));   // UNIT_FIELD_CREATEDBY
         f.set(UF::UNIT_FIELD_PETNUMBER, e->petNumber);
@@ -464,6 +468,22 @@ int OfflineSession::createCharacter(const CharCreateInfo& ci) {
     p.mapId = data_ ? data_->mapId : 0;
     p.zoneId = data_ ? data_->zoneId : 0;
     if (data_) { p.x = data_->spawnX; p.y = data_->spawnY; p.z = data_->spawnZ; p.o = data_->spawnO; }
+    if (data_ && !data_->starts.empty()) {
+        // WoWVita: Player::Create at the race's start (playercreateinfo), bound there (character_homebind). The races of
+        // Kalimdor (night elf, orc, troll, tauren) have no start on this map: the Horde's at the undead's, the Alliance's
+        // at the human's
+        auto it = data_->starts.find((uint32_t)ci.race | ((uint32_t)ci.cls << 8));
+        if (it == data_->starts.end()) {
+            const bool horde = ci.race == 2 || ci.race == 5 || ci.race == 6 || ci.race == 8;
+            for (const auto& [key, sp] : data_->starts)
+                if ((key & 0xFF) == (horde ? 5u : 1u) && (it == data_->starts.end() || key < it->first)) it = data_->starts.find(key);
+        }
+        if (it != data_->starts.end()) {
+            const WorldData::StartPos& sp = it->second;
+            p.x = sp.x; p.y = sp.y; p.z = sp.z; p.o = sp.o; p.zoneId = sp.zone;
+            p.homeSet = true; p.homeX = sp.x; p.homeY = sp.y; p.homeZ = sp.z; p.homeZone = sp.zone;
+        }
+    }
     giveStartOutfit(p);   // WoWVita: (the character list shows it dressed)
     save_.roster[(size_t)save_.rosterCount] = p;   // append: the roster never has gaps
     ++save_.rosterCount;
@@ -1374,7 +1394,7 @@ void OfflineSession::loginPackets(uint32_t nowMs) {
         f.set(UF::UNIT_HEALTH, (uint32_t)std::max<int32_t>(0, p->hp));
         f.set(UF::UNIT_MAXHEALTH, p->maxHp);
         f.set(UF::UNIT_LEVEL, p->level);
-        f.set(UF::UNIT_FACTIONTEMPLATE, 1);
+        f.set(UF::UNIT_FACTIONTEMPLATE, p->faction);
         f.set(UF::UNIT_BYTES_0, (uint32_t)pr.race | ((uint32_t)pr.cls << 8) | ((uint32_t)pr.gender << 16) |
                                       ((uint32_t)pr.powerType << 24));
         f.set(UF::UNIT_POWER1 + pr.powerType, wirePower(*p));

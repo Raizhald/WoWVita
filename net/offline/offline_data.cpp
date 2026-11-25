@@ -589,6 +589,33 @@ bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
     return !b.bad;
 }
 
+bool readStarts(Bin& b, WorldData& w) {   // WoWVita "STRT"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 4096) return false;
+    w.starts.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t race = b.u8(), cls = b.u8();
+        WorldData::StartPos s;
+        s.zone = b.u32(); s.x = b.f32(); s.y = b.f32(); s.z = b.f32(); s.o = b.f32();
+        w.starts[race | (cls << 8)] = s;
+    }
+    return !b.bad;
+}
+
+bool readTotems(Bin& b, WorldData& w) {   // WoWVita "TOTM"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 1000) return false;
+    w.totems.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        TotemTemplate t;
+        t.entry = b.u32(); t.name = b.str(); t.displayId = b.u32(); t.hp = b.u32(); t.scale = b.f32();
+        const uint8_t ns = b.u8();
+        for (uint8_t k = 0; k < ns && !b.bad; ++k) t.spells.push_back(b.u32());
+        if (!b.bad) w.totems[t.entry] = std::move(t);
+    }
+    return !b.bad;
+}
+
 bool readPets(Bin& b, WorldData& w) {   // WoWVita "PETS"
     const uint32_t n = b.u32();
     if (b.bad || n > 1000) return false;
@@ -1017,6 +1044,8 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("FAMI"): ok = readFamilies(b, out); break;
             case fourcc("TAME"): ok = readTameable(b, out); break;
             case fourcc("FOOD"): ok = readFoods(b, out); break;
+            case fourcc("TOTM"): ok = readTotems(b, out); break;
+            case fourcc("STRT"): ok = readStarts(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

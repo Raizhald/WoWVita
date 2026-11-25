@@ -396,6 +396,8 @@ struct WorldData {
     std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
     std::unordered_map<uint32_t, TotemTemplate> totems;               // "TOTM": creature entry -> the totem
     std::unordered_map<uint32_t, ItemEnchant> enchants;               // "ENCH": SpellItemEnchantment id -> it
+    struct TeleportPos { uint32_t map = 0; float x = 0, y = 0, z = 0, o = 0; };
+    std::unordered_map<uint32_t, TeleportPos> teleports;              // "TPOS": spell -> spell_target_position
     std::unordered_map<uint32_t, float> enchantPpm;                   // "ENCH": spell_proc_item_enchant
     struct StartPos { uint32_t zone = 0; float x = 0, y = 0, z = 0, o = 0; };
     std::unordered_map<uint32_t, StartPos> starts;                    // "STRT": race | class << 8 -> playercreateinfo
@@ -932,6 +934,13 @@ public:
     // CastItemCombatSpell, UpdateEnchantTime)
     const ItemEnchant* tempEnchantOn(int slot) const;
     void tickEnchants(uint32_t elapsedMs);
+    // WoWVita: SPELL_EFFECT_TELEPORT_UNITS of the player: the session moves it (Player::TeleportTo)
+    bool takeTeleport(float& x, float& y, float& z, float& o) {
+        if (!teleportPending_) return false;
+        teleportPending_ = false;
+        x = teleportX_; y = teleportY_; z = teleportZ_; o = teleportO_;
+        return true;
+    }
     Entity* totemIn(uint8_t slot);
     bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach
     void setSelection(uint64_t g) { selection_ = g; }            // the player's target (CMSG_SET_SELECTION)
@@ -994,6 +1003,8 @@ private:
     Entity* bots_[kMaxParty] = {nullptr, nullptr, nullptr, nullptr};
     uint64_t petGuid_ = 0;     // WoWVita: our pet
     uint64_t totems_[4] = {0, 0, 0, 0};   // WoWVita: Unit::m_TotemSlot
+    bool teleportPending_ = false;
+    float teleportX_ = 0, teleportY_ = 0, teleportZ_ = 0, teleportO_ = 0;
     uint32_t petCounter_ = 0;
     uint32_t summonCounter_ = 0;   // WoWVita: script summons' guids
     uint64_t selection_ = 0;       // WoWVita: the player's target

@@ -2348,6 +2348,10 @@ void OfflineSession::update(uint32_t nowMs) {
 
     world_.setData(data_);
     world_.step(nowMs);    ++stats.steps;
+    {   // WoWVita: a teleport spell's end (Teleport: Stormwind)
+        float tx, ty, tz, to;
+        if (world_.takeTeleport(tx, ty, tz, to)) { teleportPlayer(tx, ty, tz, to, nowMs); saveSoon_ = true; }
+    }
     dispatchEvents(nowMs);
     updateRest(nowMs);   // WoWVita: rested experience
     updateFlight(nowMs);   // WoWVita: on a gryphon

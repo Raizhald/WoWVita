@@ -265,6 +265,12 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (s.powerType == 0xFE && e.hp <= (int32_t)cost) return fail(77);   // (health)
         for (const auto& [item, n] : s.reagents)
             if (countPlayerItem(item) < n) return fail(92);                 // SPELL_FAILED_REAGENTS
+        if (e.self && data_)   // WoWVita: a teleport to a place of another map (Kalimdor: Orgrimmar, Darnassus...)
+            for (int k = 0; k < 3; ++k)
+                if (s.eff[k].effect == E_TELEPORT && (s.eff[k].targetB == 17 || s.eff[k].targetA == 17)) {
+                    auto tp = data_->teleports.find(s.id);
+                    if (tp == data_->teleports.end() || tp->second.map != data_->mapId) return fail(53);   // SPELL_FAILED_NOT_HERE
+                }
         if (e.self && data_)   // WoWVita: an enchantment the pack does not know (the converter's "@enchfx" missing):
             for (int k = 0; k < 3; ++k)   // nothing would happen - no stone or poison spent for nothing
                 if (s.eff[k].effect == 54 && !data_->enchants.count((uint32_t)s.eff[k].misc)) return fail(28);   // SPELL_FAILED_ERROR
@@ -443,7 +449,16 @@ bool World::finishX(Entity& e, const SpellX& s, uint64_t targetGuid, uint32_t no
             emit(SimEvent::Damage, e.guid, t->guid, s.id, 0, 0, 1);   // a miss
         } else {
             if ((int32_t)rng_.below(100) < 5) dmg *= 2;   // a crit
-            applyDamage(e, *t, std::max(1, dmg), s.id, s.school, now);
+            // a wand's school (Spell::Spell: CLASSMASK_WAND_USERS - priest, mage, warlock - shoot with
+            // GetRangedDamageSchoolMask, the ranged weapon's damage type)
+            uint8_t school = s.school;
+            if (e.self && data_) {
+                const uint8_t cls = profiles_[0].cls;
+                auto ws = data_->itemStats.find(profiles_[0].equipment[17]);
+                if ((cls == 5 || cls == 8 || cls == 9) && ws != data_->itemStats.end())
+                    for (const auto& [type, v] : ws->second) if (type == 200 && v > 0 && v < 7) school = (uint8_t)v;
+            }
+            applyDamage(e, *t, std::max(1, dmg), s.id, school, now);
         }
         weapon = false;
     }
@@ -618,6 +633,15 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
             break;
         case 55:   // SPELL_EFFECT_TAME_CREATURE (13481 at the end of Tame Beast's channel)
             if (c.self && t && t != &c) tameCreature(c, *t, s.id, now);
+            break;
+        case E_TELEPORT:   // SPELL_EFFECT_TELEPORT_UNITS to TARGET_LOCATION_DATABASE (spell_target_position)
+            if (c.self && &c == player_ && data_) {
+                auto tp = data_->teleports.find(s.id);
+                if (tp != data_->teleports.end() && tp->second.map == data_->mapId) {
+                    teleportPending_ = true;
+                    teleportX_ = tp->second.x; teleportY_ = tp->second.y; teleportZ_ = tp->second.z; teleportO_ = tp->second.o;
+                }
+            }
             break;
         case 54: {   // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY: on the item the cast is at (a poison, a stone), else the main hand
             if (!c.self || &c != player_) break;

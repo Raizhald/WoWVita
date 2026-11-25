@@ -589,6 +589,19 @@ bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
     return !b.bad;
 }
 
+bool readTeleports(Bin& b, WorldData& w) {   // WoWVita "TPOS"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 10000) return false;
+    w.teleports.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        const uint32_t sp = b.u32();
+        WorldData::TeleportPos t;
+        t.map = b.u32(); t.x = b.f32(); t.y = b.f32(); t.z = b.f32(); t.o = b.f32();
+        if (!b.bad) w.teleports[sp] = t;
+    }
+    return !b.bad;
+}
+
 bool readEnchants(Bin& b, WorldData& w) {   // WoWVita "ENCH"
     const uint32_t n = b.u32();
     if (b.bad || n > 20000) return false;
@@ -1084,6 +1097,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("STRT"): ok = readStarts(b, out); break;
             case fourcc("CLVL"): ok = readCreatureLevels(b, out); break;
             case fourcc("ENCH"): ok = readEnchants(b, out); break;
+            case fourcc("TPOS"): ok = readTeleports(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

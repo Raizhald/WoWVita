@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL", "ENCH")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL", "ENCH", "TPOS")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -41,7 +41,7 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain", "playercreateinfo",
           "player_classlevelstats", "player_levelstats",
           "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats",
-          "dbscripts_on_event", "creature_template_spells", "spell_proc_item_enchant"}
+          "dbscripts_on_event", "creature_template_spells", "spell_proc_item_enchant", "spell_target_position"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -908,6 +908,22 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
                 j = int(num(g(r, "EffectBasePoints3"))) + 1
                 if j > 1 and j in spells:
                     want.add(j)
+    # ---- WoWVita "TPOS": where the teleports go (SPELL_EFFECT_TELEPORT_UNITS to TARGET_LOCATION_DATABASE 17:
+    # spell_target_position - the mage's Teleport: Stormwind ...)
+    tpos = {int(num(g(r, "id"))): r for r in tables.get("spell_target_position", [])}
+    tb = Bin()
+    trows = []
+    for sp in sorted(want & set(spells)):
+        r = spells[sp]
+        if sp in tpos and any(int(num(g(r, f"Effect{k}"))) == 5 for k in (1, 2, 3)):
+            t = tpos[sp]
+            trows.append((sp, int(num(g(t, "target_map"))), num(g(t, "target_position_x")), num(g(t, "target_position_y")),
+                          num(g(t, "target_position_z")), num(g(t, "target_orientation"))))
+    tb.u32(len(trows))
+    for sp, m, x, y, z, o in trows:
+        tb.u32(sp); tb.u32(m); tb.f32(x); tb.f32(y); tb.f32(z); tb.f32(o)
+    sec["TPOS"] = tb.b
+    report["counts_teleports"] = len(trows)
     xb = Bin()
     ids = sorted(want & set(spells))
     xb.u32(len(ids))
@@ -1485,6 +1501,8 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         r = items_db.get(entry)
         st = [(int(num(g(r, f"stat_type{k}"))), int(num(g(r, f"stat_value{k}")))) for k in range(1, 11)]
         st = [x for x in st if x[1]]
+        if int(num(g(r, "class"))) == 2 and int(num(g(r, "dmg_type1"))):   # (a weapon's damage school - a wand's: type 200)
+            st.append((200, int(num(g(r, "dmg_type1")))))
         if st:
             ista.append((entry, st))
     isb = Bin()

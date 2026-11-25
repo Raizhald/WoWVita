@@ -310,6 +310,53 @@ int main(int argc, char** argv) {
         uint32_t t1 = now;
         while (now - t1 < 8000 && !w.hasAura(*t, 6136)) run(100);
         CHECK(w.hasAura(*t, 6136), "the attacker was chilled by Frost Armor");
+        w.stopAttack(*t, now);
+        t->victim = t->target = 0;
+        // Shoot (5019) with a wand: an auto-repeat ranged attack, no ammo, the wand's school (Lesser Magic Wand: arcane)
+        {
+            off::CharacterProfile& mp = w.playerProfile();
+            uint32_t wand = 0;   // (a wand the pack has: one sold or dropped on this map)
+            for (const off::ItemTemplate& it : data.items) if (it.cls == 2 && it.subclass == 19 && it.dmgMax > 0) { wand = it.entry; break; }
+            mp.equipment[17] = wand;
+            w.recomputeGearPublic();
+            CHECK(wand && p->rangedMs >= 1000 && p->rangedMax > 0, "a wand (%u) in the ranged slot (%u ms, %.0f-%.0f)", wand, p->rangedMs, p->rangedMin, p->rangedMax);
+            mp.book.push_back(5019);
+            stand(t, 15.0f);
+            t->hp = (int32_t)(t->maxHp = 5000);
+            while (t->auraCount) w.removeAuraSpell(*t, t->auras[0].spell);
+            gs.setTarget(t->guid, now);
+            w.setSelection(t->guid);
+            p->gcdEndMs = 0;
+            CHECK(w.tryCast(*p, 5019, t->guid, now), "Shoot");
+            run(5000);
+            CHECK(p->autoRepeatSpell == 5019 && t->hp < 5000, "the wand keeps shooting (%d lost)", 5000 - t->hp);
+            w.stopAutoRepeat(*p);
+            mp.equipment[17] = 0;
+            w.recomputeGearPublic();
+        }
+        // Teleport: Stormwind (3561: spell_target_position, 10 s, a Rune of Teleportation); Orgrimmar is not on this map
+        {
+            t->hp = 0; t->dead = true; t->respawnAtMs = now + 3600000;   // (out of combat first: NOT_IN_COMBAT)
+            run(6000);
+            off::CharacterProfile& mp = w.playerProfile();
+            p->level = 20;
+            mp.book.push_back(3561); mp.book.push_back(3567);
+            w.addItemToPlayer(17031, 2, now);
+            run(300);
+            p->gcdEndMs = 0; p->power = (int32_t)p->maxPower;
+            CHECK(!w.tryCast(*p, 3567, p->guid, now), "no Teleport: Orgrimmar here (Kalimdor)");
+            const auto tp = data.teleports.find(3561);
+            CHECK(tp != data.teleports.end() && tp->second.map == 0, "the pack knows where Teleport: Stormwind goes");
+            p->gcdEndMs = 0;
+            const uint32_t runes = w.countPlayerItem(17031);
+            CHECK(w.tryCast(*p, 3561, p->guid, now), "Teleport: Stormwind");
+            run(10600);
+            if (tp != data.teleports.end()) {
+                const float d = std::hypot(p->x - tp->second.x, p->y - tp->second.y);
+                std::printf("teleport: %.1f yd from Stormwind's spot\n", d);
+                CHECK(d < 2.0f && w.countPlayerItem(17031) == runes - 1, "in Stormwind, a rune spent");
+            }
+        }
     }
     session.leaveWorld();
 

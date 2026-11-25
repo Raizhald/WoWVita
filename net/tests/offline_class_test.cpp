@@ -936,10 +936,107 @@ int main(int argc, char** argv) {
             CHECK(w.tryCast(*p, 5394, p->guid, now), "Healing Stream Totem");
             run(4300);
             CHECK(p->hp > 1000 && w.totemIn(2), "it heals us (%d)", p->hp);
+            // ---- temporary weapon enchantments (Spell::EffectEnchantItemTmp, Player::ApplyEnchantment): the pack's
+            // SpellItemEnchantment rows come from the converter ("@enchfx"); here they are set as the client has them
+            {
+                auto setEnchant = [&](uint32_t id, uint8_t type, int32_t amount, uint32_t arg) {
+                    off::ItemEnchant en; en.id = id; en.type[0] = type; en.min[0] = en.max[0] = amount; en.arg[0] = arg;
+                    data.enchants[id] = en;
+                };
+                setEnchant(29, 2, 7, 0);       // Rockbiter 1 (damage)
+                setEnchant(5, 1, 50, 8026);    // Flametongue 1 (combat spell: Flametongue Weapon Proc; a 50 % chance here)
+                setEnchant(40, 2, 2, 0);       // Sharpened +2 (Rough Sharpening Stone)
+                setEnchant(19, 2, 2, 0);       // Weighted +2 (Rough Weightstone)
+                const off::CharacterProfile& pr0 = w.playerProfile();
+                CHECK(pr0.equipment[15] != 0, "the shaman holds a weapon (%u)", pr0.equipment[15]);
+                w.recomputeGearPublic();   // (the health set by hand above goes back to the real one)
+                p->hp = (int32_t)p->maxHp;
+                const uint32_t d0 = p->dmgMin, d1 = p->dmgMax;
+                sp.book.push_back(8017); sp.book.push_back(8024);
+                p->gcdEndMs = 0;
+                CHECK(w.tryCast(*p, 8017, p->guid, now), "Rockbiter Weapon");
+                run(300);
+                CHECK(p->dmgMin == d0 + 7 && p->dmgMax == d1 + 7, "+7 a swing (%u-%u -> %u-%u)", d0, d1, p->dmgMin, p->dmgMax);
+                CHECK(pr0.tempEnchant[0].id == 29 && pr0.tempEnchant[0].msLeft > 1790000 && pr0.tempEnchant[0].msLeft <= 1800000,
+                      "30 minutes on the main hand (%u ms)", pr0.tempEnchant[0].msLeft);
+                uint32_t seenId = 0;
+                for (const w3n::InvItem& it : gs.inventory()) if (it.bag == w3n::kBagSelf && it.slot == 15) seenId = it.enchant[1].id;
+                CHECK(seenId == 29, "the client sees it on the weapon (%u)", seenId);
+                // Flametongue replaces it; its proc burns on the swing
+                p->gcdEndMs = 0;
+                CHECK(w.tryCast(*p, 8024, p->guid, now), "Flametongue Weapon");
+                run(300);
+                CHECK(pr0.tempEnchant[0].id == 5 && p->dmgMin == d0, "Flametongue took the slot, Rockbiter's damage gone");
+                foe = nullptr;
+                for (int i = 0; i < off::kMaxEntities && !foe; ++i) {
+                    off::Entity* e = w.byIndex(i);
+                    if (e && e->used && e->objType == 3 && !e->npcFlags && !e->ownerGuid && !e->totem && w.canAttack(*p, *e)) foe = e;
+                }
+                if (foe) {
+                    foe->dead = false; foe->hp = (int32_t)(foe->maxHp = 100000); foe->respawnAtMs = 0;
+                    foe->faction = 14;
+                    w.setPosition(*foe, p->x + 2, p->y, p->z, 0);
+                    foe->homeX = foe->x; foe->homeY = foe->y; foe->homeZ = foe->z;
+                    foe->armor = 0; foe->victim = 0;
+                    p->dmgMin = p->dmgMax = 1;   // (a swing does 1, 2 as a crit: what is beyond that is the fire)
+                    const int32_t hp0 = foe->hp;
+                    w.startAttack(*p, foe->guid, now);
+                    run(30000);
+                    const int32_t lost = hp0 - foe->hp;
+                    const int swings = (int)(30000 / std::max<uint32_t>(1, p->attackMs));
+                    std::printf("flametongue: %d lost in 30 s, %d swings of 1-2 (weapon %u ms)\n", lost, swings, p->attackMs);
+                    if (data.sx(8026)) CHECK(lost > swings * 2 + 5, "Flametongue Attack burns beside the swings");
+                    else std::printf("(the pack has no Flametongue Weapon Proc: its converter's spells.txt has no @enchfx)\n");
+                    w.stopAttack(*p, now);
+                    foe->hp = 0; foe->dead = true; foe->respawnAtMs = now + 3600000;
+                }
+                // its time runs out
+                sp.tempEnchant[0].msLeft = 400;
+                run(600);
+                CHECK(!sp.tempEnchant[0].id && !w.tempEnchantOn(15), "the time is up: gone");
+                seenId = 0;
+                for (const w3n::InvItem& it : gs.inventory()) if (it.bag == w3n::kBagSelf && it.slot == 15) seenId = it.enchant[1].id;
+                CHECK(seenId == 0, "the client lost it");
+                // a Rough Sharpening Stone is for blades: not on the shaman's mace (SPELL_FAILED_EQUIPPED_ITEM_CLASS); a
+                // Rough Weightstone is (CMSG_USE_ITEM with the item as the target), kept over a relog
+                w.addItemToPlayer(2862, 1, now);
+                w.addItemToPlayer(3239, 1, now);
+                session.leaveWorld();
+                play(shamanGuid);
+                run(800);
+                p = w.player();
+                w3n::InvItem stone, weight, weapon;
+                for (const w3n::InvItem& it : gs.inventory()) {
+                    if (it.entry == 2862 && !it.equipped()) stone = it;
+                    if (it.entry == 3239 && !it.equipped()) weight = it;
+                    if (it.bag == w3n::kBagSelf && it.slot == 15) weapon = it;
+                }
+                CHECK(stone.entry && weight.entry && weapon.entry, "a stone and a weightstone in the bags, a weapon in the hand");
+                const uint32_t sd = p->dmgMin;
+                gs.useItemOnItem(stone, weapon.guid, now);
+                run(3500);
+                CHECK(!w.playerProfile().tempEnchant[0].id && p->dmgMin == sd, "no sharpening a mace");
+                gs.useItemOnItem(weight, weapon.guid, now);
+                run(3500);   // (3 s to weight it)
+                CHECK(w.playerProfile().tempEnchant[0].id == 19 && p->dmgMin == sd + 2, "Weighted +2 (%u -> %u)", sd, p->dmgMin);
+                int stones = 0, weights = 0;
+                for (const off::BagItem& bi : w.playerProfile().bag) { stones += bi.entry == 2862; weights += bi.entry == 3239; }
+                CHECK(stones == 1 && weights == 0, "the weightstone is used up, the stone kept");
+                session.leaveWorld();
+                play(shamanGuid);
+                run(800);
+                p = w.player();
+                CHECK(w.playerProfile().tempEnchant[0].id == 19 && w.tempEnchantOn(15), "the enchantment stays over a relog");
+                p->maxHp = p->hp = 30000;
+            }
             // the owner dies: its totems go
-            w.applyDamage(*p, *p, p->hp + 100, 0, 0, now);
+            p->gcdEndMs = 0;
+            w.tryCast(*p, 5394, p->guid, now);
             run(300);
-            CHECK(!w.totemIn(1) && !w.totemIn(2), "dead: the totems are gone");
+            CHECK(w.totemIn(2) != nullptr, "a totem again");
+            w.applyDamage(*p, *p, p->hp * 10, 0, 0, now);
+            run(300);
+            CHECK(!p->alive() && !w.totemIn(1) && !w.totemIn(2), "dead: the totems are gone");
         }
     }
     session.leaveWorld();

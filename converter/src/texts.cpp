@@ -138,6 +138,11 @@ bool exportEnchants(const DataDir& data, const std::string& path, bool verbose) 
         std::string name = firstLocale(t, r, nameCol, nameCol + 8);
         if (name.empty()) continue;
         out += "@enchant\t" + std::to_string(id) + "\t" + name + "\n";
+        // what it does (the offline world: Rockbiter, Flametongue, poisons...): "@enchfx id" + the 3 effects'
+        // type (1 combat spell, 2 damage, 3 equip spell, 4 resistance, 5 stat, 6 totem), min, max, arg (spell / stat)
+        out += "@enchfx\t" + std::to_string(id);
+        for (uint32_t c = 1; c <= 12; ++c) out += "\t" + std::to_string((int32_t)t.u32(r, c));
+        out += "\n";
         ++n;
     }
     // append to spells.txt (SpellNames::load reads both the names and the @enchant lines)

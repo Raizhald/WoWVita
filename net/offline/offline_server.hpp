@@ -293,6 +293,7 @@ private:
     uint8_t netCombo_ = 0;       // WoWVita: the combo points the client was last told
     uint32_t itemCastSpell_ = 0, itemCastEntry_ = 0;   // WoWVita: an item's use spell under way (used up when it goes off)
     uint8_t netForm_ = 0, netPowerType_ = 0xFF;   // ... the form and power type
+    uint32_t netEnchant_[3] = {};                  // WoWVita: the weapons' temporary enchantments the client knows
     uint32_t netPet_[6] = {};                      // ... the hunter pet's focus, happiness, loyalty, experience, level
     uint64_t netComboTarget_ = 0;
     float ccSpeed_ = 7.0f;

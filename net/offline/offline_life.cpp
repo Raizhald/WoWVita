@@ -229,6 +229,14 @@ bool OfflineSession::handleLife(uint16_t op, const Bytes& data, uint32_t nowMs) 
         case CMSG_USE_ITEM: {
             const uint8_t bag = r.u8(), slot = r.u8();
             r.u8();   // the item's spell slot
+            {   // WoWVita: SpellCastTargets - an equipped item as the target (the weapon a poison / stone goes on)
+                Reader t = r;
+                const uint16_t mask = t.bad ? 0 : t.u16();
+                if (!t.bad && (mask & (0x0002 | 0x0800 | 0x8000))) t.packedGuid();
+                const uint64_t ig = !t.bad && (mask & (0x0010 | 0x0100)) ? t.packedGuid() : 0;
+                const uint32_t low = (uint32_t)ig;
+                p->castItemSlot = !t.bad && (low & 0xFFFFF000u) == (0x40000000u | 0x1000u) ? (int8_t)(low & 0xFFFu) : (int8_t)-1;
+            }
             const int index = r.bad ? -1 : bagIndex(bag, slot);   // the backpack or a bag
             if (index < 0) return false;
             const CharacterProfile& pr = world_.playerProfile();

@@ -196,6 +196,9 @@ bool saveOffline(const char* path, const OfflineSaveData& d, std::string& err) {
     }
     payload.u32(0x314F4D41u);   // "AMO1": the ammo slot
     for (const CharacterProfile& c : d.roster) payload.u32(c.ammoId);
+    payload.u32(0x314E4554u);   // "TEN1": the weapons' temporary enchantments (main hand, off hand, ranged)
+    for (const CharacterProfile& c : d.roster)
+        for (const TempEnchant& t : c.tempEnchant) { payload.u32(t.id); payload.u32(t.msLeft); payload.u32(t.item); }
     Writer file;
     file.u32(kMagic);
     file.u16(kSaveVersion);
@@ -454,6 +457,16 @@ bool loadFile(const char* path, OfflineSaveData& out, std::string& err) {
         const size_t mark = p.pos;
         if (p.u32() == 0x314F4D41u) {
             for (CharacterProfile& c : d.roster) c.ammoId = p.u32();
+            if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
+        } else {
+            p.pos = mark;
+        }
+    }
+    if (!p.bad && p.left() >= 4) {   // WoWVita: the temporary enchantments
+        const size_t mark = p.pos;
+        if (p.u32() == 0x314E4554u) {
+            for (CharacterProfile& c : d.roster)
+                for (TempEnchant& t : c.tempEnchant) { t.id = p.u32(); t.msLeft = p.u32(); t.item = p.u32(); }
             if (d.rosterCount && d.roster[d.active].used) d.player = d.roster[d.active];
         } else {
             p.pos = mark;

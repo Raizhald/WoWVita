@@ -291,6 +291,15 @@ struct PlayerLevelStats { uint16_t hp = 0, mana = 0, str = 0, agi = 0, sta = 0, 
 struct EventSummon { uint32_t entry = 0, despawnMs = 0, delayMs = 0; float x = 0, y = 0, z = 0, o = 0; };
 // WoWVita "IUSE": an item whose use casts a spell (spelltrigger 0): charges < 0 are used up with the item
 struct ItemUse { uint32_t spell = 0; int32_t charges = 0; uint32_t cooldownMs = 0; };
+// WoWVita "ENCH": SpellItemEnchantment.dbc - type 1 combat spell, 2 damage, 3 equip spell, 4 resistance, 5 stat
+struct ItemEnchant {
+    uint32_t id = 0;
+    uint8_t type[3] = {0, 0, 0};
+    int32_t min[3] = {0, 0, 0}, max[3] = {0, 0, 0};
+    uint32_t arg[3] = {0, 0, 0};   // the spell, the school, the stat (ITEM_MOD_*)
+};
+// WoWVita: TEMP_ENCHANTMENT_SLOT of the main hand, off hand and ranged weapon ("TEN1"): what, how long, on which item
+struct TempEnchant { uint32_t id = 0, msLeft = 0, item = 0; };
 // WoWVita "FAMI": a hunter pet family (CreatureFamily.dbc via the converter's skills.txt)
 struct PetFamily {
     uint32_t id = 0, foodMask = 0;
@@ -386,6 +395,8 @@ struct WorldData {
     std::unordered_map<uint32_t, PlayerLevelStats> playerStats;       // "PLST": race | class << 8 | level << 16
     std::unordered_map<uint32_t, PetTemplate> pets;                   // "PETS": creature entry -> the pet
     std::unordered_map<uint32_t, TotemTemplate> totems;               // "TOTM": creature entry -> the totem
+    std::unordered_map<uint32_t, ItemEnchant> enchants;               // "ENCH": SpellItemEnchantment id -> it
+    std::unordered_map<uint32_t, float> enchantPpm;                   // "ENCH": spell_proc_item_enchant
     struct StartPos { uint32_t zone = 0; float x = 0, y = 0, z = 0, o = 0; };
     std::unordered_map<uint32_t, StartPos> starts;                    // "STRT": race | class << 8 -> playercreateinfo
     struct LevelStats { uint32_t hp = 1, mana = 0, armor = 0; };
@@ -603,6 +614,7 @@ struct Entity {
     bool castTriggered = false;
     float castDestX = 0, castDestY = 0, castDestZ = 0;
     bool castHasDest = false;
+    int8_t castItemSlot = -1;                  // WoWVita: the equipped item the cast is at (an enchantment)
     uint8_t castPushes = 0;                    // spell pushback taken in this cast (two at most)
 
     // Player-only profile pointer index (-1 = none).
@@ -679,6 +691,7 @@ struct CharacterProfile {
     std::array<uint32_t, 120> actionBar{};// WoWVita: the action buttons as the client set them ("SPB1" too)
     bool actionBarSet = false;
     uint32_t ammoId = 0;                  // WoWVita: PLAYER_AMMO_ID, the arrows / bullets in the ammo slot ("AMO1")
+    std::array<TempEnchant, 3> tempEnchant{};   // WoWVita: slots 15, 16, 17 ("TEN1")
     // WoWVita: the hunter's pet ("HPT1"; CMaNGOS character_pet): what it was tamed from, its level, experience,
     // happiness, loyalty and health (0: dead)
     bool petHunter = false, petRenamed = false;
@@ -915,6 +928,10 @@ public:
     // WoWVita: totems (offline_totem.cpp - CMaNGOS Spell::EffectSummonTotem, Totem, TotemAI, AreaAura)
     Entity* summonTotem(Entity& owner, const SpellX& s, int k, uint32_t nowMs);
     void unsummonTotem(Entity& totem);
+    // WoWVita: temporary weapon enchantments (offline_spells.cpp - Spell::EffectEnchantItemTmp, Player::ApplyEnchantment,
+    // CastItemCombatSpell, UpdateEnchantTime)
+    const ItemEnchant* tempEnchantOn(int slot) const;
+    void tickEnchants(uint32_t elapsedMs);
     Entity* totemIn(uint8_t slot);
     bool nearSpellFocus(const Entity& e, uint32_t focus) const;   // a GAMEOBJECT_TYPE_SPELL_FOCUS of that focus id in reach
     void setSelection(uint64_t g) { selection_ = g; }            // the player's target (CMSG_SET_SELECTION)

@@ -589,6 +589,23 @@ bool readItemUse(Bin& b, WorldData& w) {   // WoWVita "IUSE"
     return !b.bad;
 }
 
+bool readEnchants(Bin& b, WorldData& w) {   // WoWVita "ENCH"
+    const uint32_t n = b.u32();
+    if (b.bad || n > 20000) return false;
+    w.enchants.clear();
+    for (uint32_t i = 0; i < n && !b.bad; ++i) {
+        ItemEnchant e;
+        e.id = b.u32();
+        for (int k = 0; k < 3; ++k) { e.type[k] = b.u8(); e.min[k] = b.i32(); e.max[k] = b.i32(); e.arg[k] = b.u32(); }
+        if (!b.bad) w.enchants[e.id] = e;
+    }
+    const uint32_t np = b.u32();
+    if (b.bad || np > 20000) return false;
+    w.enchantPpm.clear();
+    for (uint32_t i = 0; i < np && !b.bad; ++i) { const uint32_t sp = b.u32(); w.enchantPpm[sp] = b.f32(); }
+    return !b.bad;
+}
+
 bool readCreatureLevels(Bin& b, WorldData& w) {   // WoWVita "CLVL"
     const uint32_t n = b.u32();
     if (b.bad || n > 100000) return false;
@@ -1066,6 +1083,7 @@ bool loadWorldDataBuffer(const uint8_t* data, size_t size, WorldData& out, std::
             case fourcc("TOTM"): ok = readTotems(b, out); break;
             case fourcc("STRT"): ok = readStarts(b, out); break;
             case fourcc("CLVL"): ok = readCreatureLevels(b, out); break;
+            case fourcc("ENCH"): ok = readEnchants(b, out); break;
             case fourcc("LINK"): ok = readLinks(b, out); break;
             default: break;   // forward compatibility: unknown sections are skipped
         }

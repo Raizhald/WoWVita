@@ -265,6 +265,9 @@ bool World::castX(Entity& e, uint32_t id, uint64_t targetGuid, uint32_t now, boo
         if (s.powerType == 0xFE && e.hp <= (int32_t)cost) return fail(77);   // (health)
         for (const auto& [item, n] : s.reagents)
             if (countPlayerItem(item) < n) return fail(92);                 // SPELL_FAILED_REAGENTS
+        if (e.self && data_)   // WoWVita: an enchantment the pack does not know (the converter's "@enchfx" missing):
+            for (int k = 0; k < 3; ++k)   // nothing would happen - no stone or poison spent for nothing
+                if (s.eff[k].effect == 54 && !data_->enchants.count((uint32_t)s.eff[k].misc)) return fail(28);   // SPELL_FAILED_ERROR
         if (e.self)   // Spell::CheckItems: the totem items it needs, in the bags (Earth Totem, Fire Totem...)
             for (uint32_t item : s.totem)
                 if (item && countPlayerItem(item) < 1) return fail(0x78);   // SPELL_FAILED_TOTEMS
@@ -616,6 +619,17 @@ void World::applyEffectX(Entity& c, const SpellX& s, int k, Entity* t, uint32_t 
         case 55:   // SPELL_EFFECT_TAME_CREATURE (13481 at the end of Tame Beast's channel)
             if (c.self && t && t != &c) tameCreature(c, *t, s.id, now);
             break;
+        case 54: {   // SPELL_EFFECT_ENCHANT_ITEM_TEMPORARY: on the item the cast is at (a poison, a stone), else the main hand
+            if (!c.self || &c != player_) break;
+            CharacterProfile& p = profiles_[0];
+            const int slot = c.castItemSlot >= 15 && c.castItemSlot <= 17 ? c.castItemSlot : 15;
+            if (!p.equipment[(size_t)slot] || !data_ || !data_->enchants.count((uint32_t)e.misc)) break;
+            const int32_t secs = effValue(c, s, k, 0);   // (its damage: the seconds it lasts, else an hour)
+            p.tempEnchant[(size_t)(slot - 15)] = TempEnchant{(uint32_t)e.misc, (uint32_t)(secs > 0 ? secs : 3600) * 1000u,
+                                                            p.equipment[(size_t)slot]};
+            recomputeGear();
+            break;
+        }
         case 74: case 87: case 88: case 89: case 90:   // SPELL_EFFECT_SUMMON_TOTEM (_SLOT1..4): offline_pet.cpp
             summonTotem(c, s, k, now);
             break;
@@ -753,7 +767,40 @@ void World::applyAuraX(Entity& c, Entity& t, const SpellX& s, int k, uint32_t no
 
 // ---------------------------------------------------------------- the class scripts CMaNGOS has for these
 // (Spells/Scripts/Scripting/ClassScripts): true when the spell was done here
+// WoWVita: the temporary enchantment of an equipped weapon - only while that item is the one in the slot
+const ItemEnchant* World::tempEnchantOn(int slot) const {
+    if (slot < 15 || slot > 17 || !data_) return nullptr;
+    const CharacterProfile& p = profiles_[0];
+    const TempEnchant& t = p.tempEnchant[(size_t)(slot - 15)];
+    if (!t.id || !t.msLeft || t.item != p.equipment[(size_t)slot]) return nullptr;
+    auto it = data_->enchants.find(t.id);
+    return it == data_->enchants.end() ? nullptr : &it->second;
+}
+
+// Player::UpdateEnchantTime: the time runs while the character is in the world; at its end the enchantment goes
+void World::tickEnchants(uint32_t elapsedMs) {
+    if (!player_) return;
+    CharacterProfile& p = profiles_[0];
+    bool changed = false;
+    for (size_t i = 0; i < 3; ++i) {
+        TempEnchant& t = p.tempEnchant[i];
+        if (!t.id) continue;
+        if (t.item != p.equipment[15 + i]) continue;   // (the item is not worn: its time stands)
+        if (t.msLeft <= elapsedMs) { t = TempEnchant(); changed = true; }
+        else t.msLeft -= elapsedMs;
+    }
+    if (changed) recomputeGear();
+}
+
 bool World::scriptX(Entity& c, const SpellX& s, Entity* t, uint32_t now) {
+    // Flametongue Weapon Proc (CMaNGOS Spell::EffectDummy, shaman 0x200000): damage x 0.01 x the weapon's speed as
+    // Flametongue Attack (10444)
+    if (s.family == 11 && (s.familyFlags & 0x200000ull) && s.eff[0].effect == 3 && t && t != &c) {
+        const float speed = (float)c.attackMs / 1000.0f;
+        const int32_t dmg = std::max(1, (int32_t)((float)effValue(c, s, 0) * 0.01f * speed));
+        applyDamage(c, *t, dmg, 10444, 2, now);
+        return true;
+    }
     // Execute (5308 and ranks): effect 0 + the rage left x DmgMultiplier (CMaNGOS rage in tenths), all rage gone
     if (s.family == 4 && (s.familyFlags & 0x20000000ull) && t && t != &c) {
         const int32_t dmg = effValue(c, s, 0) + (int32_t)((float)(c.power * 10) * s.eff[0].dmgMult);

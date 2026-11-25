@@ -765,6 +765,13 @@ void OfflineSession::sendInventory() {
             it.set(UF::ITEM_FIELD_MAXDURABILITY, m);
             it.set(UF::ITEM_FIELD_DURABILITY, (uint32_t)(m - std::min<uint16_t>(m, pr.equipLost[(size_t)slot])));
         }
+        if (slot >= 15 && slot <= 17 && world_.tempEnchantOn(slot)) {   // WoWVita: its temporary enchantment
+            const TempEnchant& te = pr.tempEnchant[(size_t)(slot - 15)];
+            it.set((uint16_t)(UF::ITEM_FIELD_ENCHANTMENT + 3), te.id);
+            it.set((uint16_t)(UF::ITEM_FIELD_ENCHANTMENT + 4), te.msLeft);
+            self.set((uint16_t)(UF::PLAYER_VISIBLE_ITEM_1_0 + UF::PLAYER_VISIBLE_ITEM_STRIDE * slot + 2), te.id);
+            netEnchant_[slot - 15] = te.id;
+        }
         addCreateItem(u, g, it);
     }
     // WoWVita: the bags (slots 19..22) are containers; their slots hold the items after the backpack's 16
@@ -1575,6 +1582,10 @@ void OfflineSession::handleCast(const Bytes& data, uint32_t nowMs) {
     // No unit target in the packet means: self / no explicit target. Ground-target spells are not
     // supported yet, so resolving to self is the correct, safe default.
     if (!target) target = p->guid;
+    {   // WoWVita: an equipped item as the target (a weapon to enchant)
+        const uint32_t low = (uint32_t)itemGuid;
+        p->castItemSlot = (low & 0xFFFFF000u) == (0x40000000u | 0x1000u) ? (int8_t)(low & 0xFFFu) : (int8_t)-1;
+    }
     world_.tryCast(*p, spell, target, nowMs);
 }
 
@@ -2103,6 +2114,31 @@ void OfflineSession::syncControl(uint32_t nowMs) {   // WoWVita
         netForm_ = p->form;
         netPowerType_ = p->powerType;
         sendSelfFields();
+    }
+    // WoWVita: a weapon's temporary enchantment put on / gone (Item::SetEnchantment: ITEM_FIELD_ENCHANTMENT of
+    // TEMP_ENCHANTMENT_SLOT, the visible item's glow, SMSG_ITEM_ENCHANT_TIME_UPDATE)
+    for (int i = 0; i < 3; ++i) {
+        const int slot = 15 + i;
+        const CharacterProfile& pr = world_.playerProfile();
+        const uint32_t id = world_.tempEnchantOn(slot) ? pr.tempEnchant[(size_t)i].id : 0;
+        if (id == netEnchant_[i]) continue;
+        netEnchant_[i] = id;
+        if (!pr.equipment[(size_t)slot]) continue;
+        const uint64_t g = itemGuidFor(true, slot);
+        FieldSet it;
+        it.set((uint16_t)(UF::ITEM_FIELD_ENCHANTMENT + 3), id);
+        it.set((uint16_t)(UF::ITEM_FIELD_ENCHANTMENT + 4), id ? pr.tempEnchant[(size_t)i].msLeft : 0);
+        FieldSet self;
+        self.set((uint16_t)(UF::PLAYER_VISIBLE_ITEM_1_0 + UF::PLAYER_VISIBLE_ITEM_STRIDE * slot + 2), id);
+        UpdateBuilder u;
+        addValues(u, g, it);
+        addValues(u, p->guid, self);
+        sendUpdateObject(u.finish());
+        if (id) {
+            Writer w;
+            w.u64(g); w.u32(1); w.u32(pr.tempEnchant[(size_t)i].msLeft / 1000); w.u64(p->guid);
+            send(0x1EB, w.b);   // SMSG_ITEM_ENCHANT_TIME_UPDATE
+        }
     }
     // WoWVita: the hunter's pet: focus, happiness, loyalty, experience, level as they change
     if (const Entity* hp = world_.pet(); hp && hp->petHunter) {

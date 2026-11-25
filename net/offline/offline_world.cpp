@@ -934,6 +934,21 @@ void World::resolveSwing(Entity& a, Entity& b, uint32_t nowMs) {
                 if (!a.alive()) break;
             }
     if (a.alive() && b.alive()) { procAuras(a, b, 0x4, nowMs); procAuras(b, a, 0x8, nowMs); }   // WoWVita: procs
+    // WoWVita: Player::CastItemCombatSpell - the weapon's enchantments of type 1 (Flametongue, poisons): per minute
+    // (spell_proc_item_enchant), else the enchantment's chance, else the weapon's (speed x 1.8 %)
+    if (a.self && &a == player_ && a.alive() && b.alive())
+        if (const ItemEnchant* en = tempEnchantOn(15))
+            for (int k = 0; k < 3; ++k) {
+                if (en->type[k] != 1 || !en->arg[k] || !data_->sx(en->arg[k])) continue;
+                auto pp = data_->enchantPpm.find(en->arg[k]);
+                const float chance = pp != data_->enchantPpm.end() ? (float)a.attackMs * pp->second / 600.0f
+                                     : en->min[k] ? (float)en->min[k] : (float)a.attackMs * 1.8f / 1000.0f;
+                if ((float)rng_.below(10000) < chance * 100.0f) {
+                    const SpellX* ps = data_->sx(en->arg[k]);
+                    castX(a, en->arg[k], positiveX(*ps) ? a.guid : b.guid, nowMs, true);
+                }
+                if (!b.alive()) break;
+            }
     if (crit) {
         // Mark the last damage event as a critical for the HUD.
         for (int i = eventCount_ - 1; i >= 0; --i)
@@ -1304,6 +1319,9 @@ void World::recomputeGear() {
             if (is == data_->itemStats.end()) continue;
             for (const auto& [type, v] : is->second) if (type < 8) st[type] += v;
         }
+        for (int s = 15; s <= 17; ++s)   // WoWVita: ITEM_ENCHANTMENT_TYPE_STAT of a temporary enchantment
+            if (const ItemEnchant* en = tempEnchantOn(s))
+                for (int k = 0; k < 3; ++k) if (en->type[k] == 5 && en->arg[k] < 8) st[en->arg[k]] += en->min[k];
         e.baseMana = (uint32_t)b.mana;
         e.statStr = b.str + st[4]; e.statAgi = b.agi + st[3]; e.statSta = b.sta + st[7];
         e.statInt = b.inte + st[5]; e.statSpi = b.spi + st[6];
@@ -1356,6 +1374,14 @@ void World::recomputeGear() {
         e.attackPower = std::max(0, e.attackPower);
         const uint32_t bonus = (uint32_t)(e.attackPower * (int32_t)e.attackMs / 14000);
         e.dmgMin += bonus; e.dmgMax += bonus;
+        // WoWVita: ITEM_ENCHANTMENT_TYPE_DAMAGE (Rockbiter, sharpening stones): flat on the weapon's swing
+        // (Player::SetEnchantmentModifier -> UpdateDamagePhysical total_value)
+        if (e.form == 0) {
+            if (const ItemEnchant* en = tempEnchantOn(15))
+                for (int k = 0; k < 3; ++k) if (en->type[k] == 2) { e.dmgMin += (uint32_t)std::max(0, en->min[k]); e.dmgMax += (uint32_t)std::max(0, en->min[k]); }
+            if (const ItemEnchant* en = tempEnchantOn(17))
+                for (int k = 0; k < 3; ++k) if (en->type[k] == 2) { e.rangedMin += (float)en->min[k]; e.rangedMax += (float)en->min[k]; }
+        }
         profiles_[0].maxHp = e.maxHp; profiles_[0].maxPower = e.maxPower;
     }
 }
@@ -1691,6 +1717,7 @@ void World::step(uint32_t nowMs) {
         // Deterministic pool order: index order.
         for (Entity& e : pool_) tickEntity(e, now_, e.self);
         tickAreas(now_);   // WoWVita: Blizzard, Consecration
+        tickEnchants(kSimStepMs);   // WoWVita: the weapons' temporary enchantments
         updateThreatDecay(now_);
         ++steps;
     }

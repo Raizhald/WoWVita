@@ -27,7 +27,7 @@ import export_offline_data as _eod  # noqa: E402
 from export_offline_data import (Bin, build_sample, read_pack, split_sql_values,  # noqa: E402
                                  validate_sections, write_pack, write_report)
 
-_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL")   # WoWVita's vendor section (older readers skip unknown tags)
+_eod.TAGS = tuple(_eod.TAGS) + ("VEND", "QST2", "QLOT", "GOSS", "GOBJ", "GOSP", "GLOT", "GRAV", "TAVN", "ITX1", "EXPL", "QTRG", "MOVE", "CRAI", "AITX", "SPFX", "POOL", "LINK", "OUTF", "SPX2", "TRNR", "CRSP", "PLST", "ISTA", "QSPL", "PETS", "EVSC", "IUSE", "FAMI", "TAME", "FOOD", "TOTM", "STRT", "CLVL", "ENCH")   # WoWVita's vendor section (older readers skip unknown tags)
 
 WANTED = {"creature_template", "creature", "creature_loot_template", "reference_loot_template",
           "item_template", "creature_model_info", "creature_spawn_entry", "npc_vendor", "npc_vendor_template",
@@ -41,7 +41,7 @@ WANTED = {"creature_template", "creature", "creature_loot_template", "reference_
           "npc_trainer", "npc_trainer_template", "playercreateinfo_spell", "spell_chain", "playercreateinfo",
           "player_classlevelstats", "player_levelstats",
           "pet_levelstats", "petcreateinfo_spell", "pet_name_generation", "creature_template_classlevelstats",
-          "dbscripts_on_event", "creature_template_spells"}
+          "dbscripts_on_event", "creature_template_spells", "spell_proc_item_enchant"}
 
 # game object types the offline world shows: 1 button, 2 quest giver, 3 chest (and herbs / ore), 5 generic,
 # 8 spell focus (campfires, anvils), 9 text, 10 goober (quest objects), 19 mailbox. Doors, traps, transports stay out.
@@ -276,6 +276,8 @@ def load_spell_info(path):
                                                                       int(p[5]) if len(p) > 5 else int(p[3]))
                 elif p[0] == "@idx" and p[1] == "radius":
                     info.setdefault("idx_radius", {})[int(p[2])] = float(p[3])
+                elif p[0] == "@enchfx":   # SpellItemEnchantment.dbc: type[3], amount min[3], max[3], spell / stat[3]
+                    info.setdefault("enchfx", {})[int(p[1])] = [int(x) for x in p[2:14]]
                 elif p[0] == "@idx" and p[1] == "range":
                     info["idx_range"][int(p[2])] = (float(p[3]), float(p[4]))
             except (IndexError, ValueError):
@@ -846,6 +848,36 @@ def class_spell_sections(tables, templates, used, item_needed, sec, report, info
             ob.u32(x)
     sec["TOTM"] = ob.b
     report["counts_totems"] = dict(totems=len(totems))
+    # ---- WoWVita "ENCH": the item enchantments the spells put on (53 permanent, 54 temporary: Rockbiter, poisons,
+    # sharpening stones) - SpellItemEnchantment.dbc through the converter's "@enchfx" lines - and their proc spells;
+    # spell_proc_item_enchant's procs per minute
+    enchfx = info.get("enchfx", {})
+    ench = {}
+    for sp in list(want):
+        r = spells.get(sp)
+        if not r:
+            continue
+        for k in (1, 2, 3):
+            if int(num(g(r, f"Effect{k}"))) in (53, 54):
+                eid = int(num(g(r, f"EffectMiscValue{k}")))
+                if eid in enchfx:
+                    ench[eid] = enchfx[eid]
+    for v in ench.values():
+        for i in range(3):
+            if v[i] in (1, 3, 7) and v[9 + i] in spells:   # combat spell, equip spell, use spell
+                want.add(v[9 + i])
+    ppm = {int(num(g(r, "entry"))): num(g(r, "ppmRate")) for r in tables.get("spell_proc_item_enchant", [])}
+    nb = Bin()
+    nb.u32(len(ench))
+    for eid, v in sorted(ench.items()):
+        nb.u32(eid)
+        for i in range(3):
+            nb.u8(max(0, min(255, v[i]))); nb.i32(v[3 + i]); nb.i32(v[6 + i]); nb.u32(max(0, v[9 + i]))
+    nb.u32(len(ppm))
+    for sp_, rate in sorted(ppm.items()):
+        nb.u32(sp_); nb.f32(rate)
+    sec["ENCH"] = nb.b
+    report["counts_enchants"] = len(ench)
     # the passive boosts a form brings (CMaNGOS Aura::HandleShapeshiftBoosts)
     want.update(x for x in (3025, 5420, 5419, 5421, 1178, 9635, 21178, 21156, 7376, 7381, 24905) if x in spells)
     for _pass in range(2):   # (twice: a judgement found in a seal triggers spells too)
@@ -1089,6 +1121,13 @@ def build(tables, factions, map_id, report, player_faction=1, spell_info=None, g
         item_use[src] = (sp, int(num(g(it, "spellcharges_1"))), int(num(g(it, "spellcooldown_1"))))
         for e_ in evs:
             script_events[e_] = [r for r in ev_rows.get(e_, []) if int(num(g(r, "command"))) == 10 and int(num(g(r, "datalong"))) in templates]
+    # (and the items whose use puts a temporary enchantment on a weapon: poisons, sharpening stones, weightstones, oils)
+    for it_id, it in items_db.items():
+        sp = int(num(g(it, "spellid_1")))
+        if not sp or int(num(g(it, "spelltrigger_1"))) != 0 or sp not in spell_rows or it_id in item_use:
+            continue
+        if any(int(num(g(spell_rows[sp], f"Effect{k}"))) == 54 for k in (1, 2, 3)):
+            item_use[it_id] = (sp, int(num(g(it, "spellcharges_1"))), int(num(g(it, "spellcooldown_1"))))
     used = sorted(set(used) | {int(num(g(r, "datalong"))) for rows in script_events.values() for r in rows})
     eb = Bin()
     eb.u32(len(script_events))
